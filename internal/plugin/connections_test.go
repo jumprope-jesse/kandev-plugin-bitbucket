@@ -454,6 +454,32 @@ func TestWorkflows_ConnectionGetNeverReflectsOAuthSecrets(t *testing.T) {
 	require.NotContains(t, payload, "oauth_token_url")
 }
 
+func TestWorkflows_UnconfiguredWorkspaceReturnsEmptyBrowseSurfaces(t *testing.T) {
+	host := newConnectionHost()
+	resolver, err := NewConnectionResolver(host)
+	require.NoError(t, err)
+	workflows, err := NewWorkflows(host, resolver)
+	require.NoError(t, err)
+
+	tests := []struct {
+		action string
+		want   string
+	}{
+		{action: "repositories.list", want: `{"repositories":[]}`},
+		{action: "pullrequests.queue", want: `{"pull_requests":[]}`},
+	}
+	for _, test := range tests {
+		t.Run(test.action, func(t *testing.T) {
+			response, actionErr := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+				ActionKey: test.action,
+				Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+			})
+			require.NoError(t, actionErr)
+			require.JSONEq(t, test.want, string(response.Body))
+		})
+	}
+}
+
 func TestWorkflows_ConnectionDisconnectRevokesEveryCredential(t *testing.T) {
 	host := newConnectionHost()
 	resolver, err := NewConnectionResolver(host)

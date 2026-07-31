@@ -149,6 +149,13 @@ func (w *Workflows) HandleAction(ctx context.Context, request *pluginsdk.PluginA
 		if err := decodeAction(request.Body, &input); err != nil {
 			return nil, err
 		}
+		unconfigured, err := w.workspaceIsUnconfigured(ctx, request.Context.WorkspaceID)
+		if err != nil {
+			return nil, err
+		}
+		if unconfigured {
+			return actionResponse(map[string]any{"repositories": []any{}})
+		}
 		provider, err := w.provider(ctx, request.Context.WorkspaceID)
 		if err != nil {
 			return nil, err
@@ -228,6 +235,13 @@ func (w *Workflows) HandleAction(ctx context.Context, request *pluginsdk.PluginA
 		var input queuePullRequestsInput
 		if err := decodeAction(request.Body, &input); err != nil {
 			return nil, err
+		}
+		unconfigured, err := w.workspaceIsUnconfigured(ctx, request.Context.WorkspaceID)
+		if err != nil {
+			return nil, err
+		}
+		if unconfigured {
+			return actionResponse(map[string]any{"pull_requests": []any{}})
 		}
 		provider, err := w.provider(ctx, request.Context.WorkspaceID)
 		if err != nil {
@@ -603,6 +617,21 @@ func (w *Workflows) provider(ctx context.Context, workspaceID string) (domain.Pr
 		return nil, fmt.Errorf("resolve Bitbucket connection: %w", err)
 	}
 	return provider, nil
+}
+
+func (w *Workflows) workspaceIsUnconfigured(ctx context.Context, workspaceID string) (bool, error) {
+	if workspaceID == "" {
+		return false, fmt.Errorf("verified workspace context is required")
+	}
+	connections, ok := w.resolver.(ConnectionSettingsStore)
+	if !ok {
+		return false, nil
+	}
+	_, found, err := connections.Load(ctx, workspaceID)
+	if err != nil {
+		return false, fmt.Errorf("load Bitbucket connection: %w", err)
+	}
+	return !found, nil
 }
 
 func (w *Workflows) repository(ctx context.Context, workspaceID string, remote watches.RemoteRepository) (domain.Provider, domain.Repository, error) {
