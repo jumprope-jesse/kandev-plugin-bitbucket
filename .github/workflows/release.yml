@@ -1,0 +1,64 @@
+# Create a GitHub Release from every version tag. The package's internal
+# checksums.txt is extracted and uploaded alongside the 5-platform tarball.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # create the GitHub Release and upload assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out plugin
+        uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - name: Check out kandev SDK
+        uses: actions/checkout@v4
+        with:
+          repository: kdlbs/kandev
+          path: kandev
+          sparse-checkout: apps/backend
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: plugin/go.mod
+          cache-dependency-path: plugin/go.sum
+
+      - name: Verify release version
+        working-directory: plugin
+        run: |
+          version="$(sed -nE 's/^version: "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' manifest.yaml)"
+          test "$GITHUB_REF_NAME" = "v$version"
+
+      - name: Verify
+        working-directory: plugin
+        run: |
+          test -z "$(gofmt -l .)" || { echo "gofmt needed:"; gofmt -l .; exit 1; }
+          make vet
+          make test
+
+      - name: Package (all platforms)
+        working-directory: plugin
+        run: make package
+
+      - name: Extract package checksums
+        working-directory: plugin
+        run: |
+          pkg="$(ls kandev-plugin-*-*.tar.gz)"
+          tar -xzf "$pkg" checksums.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            plugin/kandev-plugin-template-*.tar.gz
+            plugin/checksums.txt
+          generate_release_notes: true
