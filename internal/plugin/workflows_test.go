@@ -42,11 +42,27 @@ func TestWorkflows_QueueAndComposerAuthorizeLivePullRequest(t *testing.T) {
 	search, err := workflows.SearchEntityReferences(context.Background(), &pluginsdk.SearchEntityReferencesRequest{Source: "bitbucket", WorkspaceID: "workspace-1", Query: "fix", Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, search.Candidates, 1)
+	candidate := search.Candidates[0]
+	hostReference := map[string]any{
+		"id": candidate.ProviderLocalID, "key": candidate.ProviderLocalID,
+		"title": candidate.Title, "url": candidate.URL,
+	}
 	authorized, err := workflows.AuthorizeEntityReference(context.Background(), &pluginsdk.AuthorizeEntityReferenceRequest{
-		Source: "bitbucket", WorkspaceID: "workspace-1", Purpose: "submission", Reference: search.Candidates[0].Attributes,
+		Source: "bitbucket", WorkspaceID: "workspace-1", Purpose: "submission", Reference: hostReference,
 	})
 	require.NoError(t, err)
 	require.True(t, authorized.Allowed)
+
+	authorized, err = workflows.AuthorizeEntityReference(context.Background(), &pluginsdk.AuthorizeEntityReferenceRequest{
+		Source: "bitbucket", WorkspaceID: "workspace-1", Purpose: "submission", Reference: candidate.Attributes,
+	})
+	require.NoError(t, err)
+	require.True(t, authorized.Allowed)
+
+	mismatchedCanonical := map[string]any{"id": "workspace/repo#99", "key": "workspace/repo#42"}
+	authorized, err = workflows.AuthorizeEntityReference(context.Background(), &pluginsdk.AuthorizeEntityReferenceRequest{Source: "bitbucket", WorkspaceID: "workspace-1", Purpose: "submission", Reference: mismatchedCanonical})
+	require.NoError(t, err)
+	require.False(t, authorized.Allowed)
 
 	tampered := map[string]any{"key": "workspace/repo#99", "repository": map[string]any{"namespace": "workspace", "slug": "repo"}, "number": 99}
 	authorized, err = workflows.AuthorizeEntityReference(context.Background(), &pluginsdk.AuthorizeEntityReferenceRequest{Source: "bitbucket", WorkspaceID: "workspace-1", Purpose: "submission", Reference: tampered})

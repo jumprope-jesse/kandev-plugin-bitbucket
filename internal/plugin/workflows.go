@@ -1152,10 +1152,26 @@ func (s providerCredentialSource) ResolveGitCredential(ctx context.Context, scop
 }
 
 func referenceIdentity(reference map[string]any) (domain.Repository, int, string, bool) {
-	key, keyOK := reference["key"].(string)
-	numberValue, numberOK := positiveNumber(reference["number"])
-	repositoryMap, repositoryOK := reference["repository"].(map[string]any)
-	if !keyOK || !numberOK || !repositoryOK || numberValue <= 0 {
+	key, ok := canonicalReferenceKey(reference)
+	if !ok {
+		return domain.Repository{}, 0, "", false
+	}
+	repository, number, ok := parsePullRequestKey(key)
+	if !ok {
+		return domain.Repository{}, 0, "", false
+	}
+
+	repositoryValue, hasRepository := reference["repository"]
+	numberValue, hasNumber := reference["number"]
+	if !hasRepository && !hasNumber {
+		return repository, number, key, true
+	}
+	if !hasRepository || !hasNumber {
+		return domain.Repository{}, 0, "", false
+	}
+	repositoryMap, repositoryOK := repositoryValue.(map[string]any)
+	structuredNumber, numberOK := positiveNumber(numberValue)
+	if !repositoryOK || !numberOK {
 		return domain.Repository{}, 0, "", false
 	}
 	namespace, namespaceOK := repositoryMap["namespace"].(string)
@@ -1163,7 +1179,24 @@ func referenceIdentity(reference map[string]any) (domain.Repository, int, string
 	if !namespaceOK || !slugOK {
 		return domain.Repository{}, 0, "", false
 	}
-	return domain.Repository{Namespace: namespace, Slug: slug}, int(numberValue), key, true
+	if namespace != repository.Namespace || slug != repository.Slug || structuredNumber != number {
+		return domain.Repository{}, 0, "", false
+	}
+	return repository, number, key, true
+}
+
+func canonicalReferenceKey(reference map[string]any) (string, bool) {
+	key, hasKey := reference["key"].(string)
+	id, hasID := reference["id"].(string)
+	key = strings.TrimSpace(key)
+	id = strings.TrimSpace(id)
+	if hasKey && hasID && key != id {
+		return "", false
+	}
+	if key != "" {
+		return key, true
+	}
+	return id, id != ""
 }
 
 func positiveNumber(value any) (int, bool) {
