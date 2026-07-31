@@ -36,6 +36,17 @@ jobs:
           go-version-file: plugin/go.mod
           cache-dependency-path: plugin/go.sum
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: plugin/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: plugin
+        run: npm ci
+
       - name: Check module files are tidy
         working-directory: plugin
         run: |
@@ -54,3 +65,20 @@ jobs:
       - name: Test
         working-directory: plugin
         run: make test
+
+      - name: Package current host artifact
+        working-directory: plugin
+        run: make package-host verify-package-host
+
+      # This is intentionally required rather than skipped: a green CI run
+      # without a disposable host would not prove that the package can install
+      # and load. Fork pull requests cannot receive repository secrets, so
+      # they retain the build/package checks while only trusted same-repository
+      # changes can use the disposable host. The tag release gate is never
+      # conditional and always runs this check before publishing.
+      - name: Exercise the packaged plugin in Kandev
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        working-directory: plugin
+        env:
+          KANDEV_PLUGIN_E2E_URL: ${{ secrets.KANDEV_PLUGIN_E2E_URL }}
+        run: make e2e

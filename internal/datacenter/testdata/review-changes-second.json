@@ -1,0 +1,20 @@
+{
+  "isLastPage": true,
+  "values": [
+    {
+      "type": "ADD",
+      "path": {"toString": "new.go"},
+      "hunks": [
+        {
+          "sourceLine": 0,
+          "sourceSpan": 0,
+          "destinationLine": 1,
+          "destinationSpan": 1,
+          "segments": [
+            {"type": "ADDED", "lines": [{"line": "new()"}]}
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "pagelen": 2,
+  "values": [
+    {
+      "name": "Widgets",
+      "full_name": "acme/widgets",
+      "slug": "widgets",
+      "mainbranch": {"name": "main"},
+      "links": {
+        "clone": [
+          {"name": "https", "href": "https://bitbucket.org/acme/widgets.git"},
+          {"name": "ssh", "href": "git@bitbucket.org:acme/widgets.git"}
+        ]
+      }
+    }
+  ],
+  "next": "/2.0/repositories/acme?after=cursor-2"
+}

@@ -1,0 +1,13 @@
+diff --git a/race.go b/race.go
+index 1111111..2222222 100644
+--- a/race.go
++++ b/race.go
+@@ -1 +1 @@
+-unsafe()
++safe()
+diff --git a/README.md b/README.md
+new file mode 100644
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1 @@
++safe usage

@@ -1,0 +1,23 @@
+{
+  "isLastPage": false,
+  "nextPageStart": 1,
+  "values": [
+    {
+      "type": "MODIFY",
+      "srcPath": {"toString": "race.go"},
+      "path": {"toString": "race.go"},
+      "hunks": [
+        {
+          "sourceLine": 1,
+          "sourceSpan": 1,
+          "destinationLine": 1,
+          "destinationSpan": 1,
+          "segments": [
+            {"type": "REMOVED", "lines": [{"line": "unsafe()"}]},
+            {"type": "ADDED", "lines": [{"line": "safe()"}]}
+          ]
+        }
+      ]
+    }
+  ]
+}

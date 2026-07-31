@@ -1,0 +1,130 @@
+package plugin
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"kandev-plugin-bitbucket/internal/domain"
+	"kandev-plugin-bitbucket/internal/watches"
+
+	"github.com/kandev/kandev/pkg/pluginsdk"
+)
+
+// createPullRequestFromTask derives all repository authority from the
+// host-verified task and repository records. Browser input may only override
+// non-authoritative PR presentation fields.
+func (w *Workflows) createPullRequestFromTask(ctx context.Context, action pluginsdk.VerifiedActionContext, input taskCreatePullRequestInput) (domain.Provider, domain.Repository, string, string, string, string, error) {
+	task, err := w.host.Tasks().Get(ctx, action.TaskID)
+	if err != nil || task == nil || task.ID != action.TaskID || task.WorkspaceID != action.WorkspaceID {
+		return nil, domain.Repository{}, "", "", "", "", fmt.Errorf("verified task is unavailable")
+	}
+	repositories, err := taskBitbucketRepositories(ctx, w.host, *task)
+	if err != nil {
+		return nil, domain.Repository{}, "", "", "", "", err
+	}
+	if len(repositories) != 1 {
+		return nil, domain.Repository{}, "", "", "", "", fmt.Errorf("task must have exactly one Bitbucket repository with a checkout branch")
+	}
+	candidate := repositories[0]
+	remote := watches.RemoteRepository{
+		ProviderID: "bitbucket", ProviderHost: candidate.repository.ProviderHost,
+		OwnerOrProject: candidate.repository.OwnerOrProject, ProviderRepositoryID: candidate.repository.ProviderRepositoryID,
+		Name: candidate.repository.Name, CloneURL: candidate.repository.RemoteURL,
+		DefaultBranch: stringValue(candidate.repository.DefaultBranch), BaseBranch: candidate.taskRepository.BaseBranch,
+		HeadBranch: candidate.taskRepository.CheckoutBranch,
+	}
+	repository, err := domainRepository(remote)
+	if err != nil {
+		return nil, domain.Repository{}, "", "", "", "", fmt.Errorf("task Bitbucket repository is invalid")
+	}
+	provider, err := w.provider(ctx, action.WorkspaceID)
+	if err != nil {
+		return nil, domain.Repository{}, "", "", "", "", err
+	}
+	destination := strings.TrimSpace(input.Destination)
+	if destination == "" {
+		destination = strings.TrimSpace(candidate.taskRepository.BaseBranch)
+	}
+	if destination == "" {
+		destination = stringValue(candidate.repository.DefaultBranch)
+	}
+	source := branchName(candidate.taskRepository.CheckoutBranch)
+	destination = branchName(destination)
+	if source == "" || destination == "" {
+		return nil, domain.Repository{}, "", "", "", "", fmt.Errorf("task checkout and destination branches are required")
+	}
+	title := strings.TrimSpace(input.Title)
+	if title == "" {
+		title = strings.TrimSpace(task.Title)
+	}
+	if title == "" {
+		return nil, domain.Repository{}, "", "", "", "", fmt.Errorf("pull request title is required")
+	}
+	description := input.Description
+	if description == "" {
+		description = task.Description
+	}
+	return provider, repository, source, destination, title, description, nil
+}
+
+type taskRepositoryCandidate struct {
+	taskRepository pluginsdk.TaskRepository
+	repository     pluginsdk.Repository
+}
+
+func taskBitbucketRepositories(ctx context.Context, host pluginsdk.Host, task pluginsdk.Task) ([]taskRepositoryCandidate, error) {
+	if len(task.Repositories) == 0 {
+		return nil, fmt.Errorf("task has no repository checkout")
+	}
+	repositoryIDs := make(map[string]pluginsdk.TaskRepository, len(task.Repositories))
+	for _, taskRepository := range task.Repositories {
+		if taskRepository.RepositoryID == "" || strings.TrimSpace(taskRepository.CheckoutBranch) == "" {
+			continue
+		}
+		if _, found := repositoryIDs[taskRepository.RepositoryID]; found {
+			return nil, fmt.Errorf("task repository checkout is ambiguous")
+		}
+		repositoryIDs[taskRepository.RepositoryID] = taskRepository
+	}
+	if len(repositoryIDs) == 0 {
+		return nil, fmt.Errorf("task has no repository checkout branch")
+	}
+	result := make([]taskRepositoryCandidate, 0, len(repositoryIDs))
+	page := pluginsdk.Page{Limit: 100}
+	for {
+		repositories, info, err := host.Repositories().List(ctx, task.WorkspaceID, page)
+		if err != nil {
+			return nil, fmt.Errorf("load task repositories: %w", err)
+		}
+		for _, repository := range repositories {
+			taskRepository, wanted := repositoryIDs[repository.ID]
+			if !wanted {
+				continue
+			}
+			if repository.SourceType != "provider" || repository.ProviderID != "bitbucket" {
+				continue
+			}
+			if repository.ProviderHost == "" || repository.OwnerOrProject == "" || repository.ProviderRepositoryID == "" || repository.Name == "" || repository.RemoteURL == "" {
+				return nil, fmt.Errorf("task Bitbucket repository origin is incomplete")
+			}
+			result = append(result, taskRepositoryCandidate{taskRepository: taskRepository, repository: repository})
+		}
+		if info == nil || !info.HasMore || info.NextCursor == "" {
+			break
+		}
+		page.Cursor = info.NextCursor
+	}
+	return result, nil
+}
+
+func branchName(value string) string {
+	return strings.TrimPrefix(strings.TrimSpace(value), "refs/heads/")
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}

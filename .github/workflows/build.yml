@@ -34,10 +34,21 @@ jobs:
           go-version-file: plugin/go.mod
           cache-dependency-path: plugin/go.sum
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: plugin/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: plugin
+        run: npm ci
+
       - name: Build host binary
         working-directory: plugin
         run: make build
 
       - name: Package all supported platforms
         working-directory: plugin
-        run: make package
+        run: make package verify-package

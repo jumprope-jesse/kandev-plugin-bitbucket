@@ -1,17 +1,19 @@
-.PHONY: build run test fmt vet package package-host clean
+.PHONY: build build-ui run test test-ui fmt vet package package-host verify-package verify-package-host e2e clean
 
-# When you rename the plugin, update BIN and VERSION to match manifest.yaml's
-# id and version (PKG_OUT is derived from them).
-BIN := bin/kandev-plugin-template
+# Keep these values synchronized with manifest.yaml.
+BIN := bin/kandev-plugin-bitbucket
 VERSION := 0.1.0
 STAGE := .build/stage
-PKG_OUT := kandev-plugin-template-$(VERSION).tar.gz
+PKG_OUT := kandev-plugin-bitbucket-$(VERSION).tar.gz
 
 ## Build the plugin binary for the host platform (development use). kandev
 ## itself always installs from `make package`/`package-host` output, not this.
-build:
+build: build-ui
 	mkdir -p bin
 	go build -o $(BIN) ./server/...
+
+build-ui:
+	npm run build:ui
 
 ## Build + run. Mainly for -race / manual smoke checks: kandev normally spawns
 ## this binary itself via the go-plugin handshake, so a manually-started
@@ -19,25 +21,29 @@ build:
 run: build
 	./$(BIN)
 
-test:
-	go test ./server/...
+test: test-ui
+	go test ./...
+
+test-ui:
+	npm test
 
 fmt:
 	gofmt -l .
 
 vet:
-	go vet ./server/...
+	go vet ./...
 
 ## Cross-compile server/plugin-<goos>-<goarch>[.exe] for every platform in
 ## manifest.yaml's runtime.executables, stage manifest.yaml + ui/ alongside
 ## them, and pack the tree into $(PKG_OUT) with
 ## github.com/kandev/kandev/cmd/plugin-pack (resolved via the `replace` in
 ## go.mod). Install the tarball via Settings > Plugins or curl -F package=@...
-package:
+package: build-ui
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)/server
 	cp manifest.yaml $(STAGE)/manifest.yaml
-	cp -r ui $(STAGE)/ui
+	mkdir -p $(STAGE)/ui
+	cp ui/bundle.js ui/plugin.css $(STAGE)/ui/
 	GOOS=linux   GOARCH=amd64 go build -o $(STAGE)/server/plugin-linux-amd64       ./server
 	GOOS=linux   GOARCH=arm64 go build -o $(STAGE)/server/plugin-linux-arm64       ./server
 	GOOS=darwin  GOARCH=amd64 go build -o $(STAGE)/server/plugin-darwin-amd64      ./server
@@ -49,15 +55,44 @@ package:
 
 ## Package for the host platform only — faster local iteration than the full
 ## 5-platform `make package` (matches plugin-pack's -platform-only).
-package-host:
+package-host: build-ui
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)/server
 	cp manifest.yaml $(STAGE)/manifest.yaml
-	cp -r ui $(STAGE)/ui
+	mkdir -p $(STAGE)/ui
+	cp ui/bundle.js ui/plugin.css $(STAGE)/ui/
 	go build -o $(STAGE)/server/plugin-$$(go env GOOS)-$$(go env GOARCH)$$(go env GOEXE) ./server
 	go run github.com/kandev/kandev/cmd/plugin-pack -dir $(STAGE) -out $(PKG_OUT) -platform-only
 	rm -rf $(STAGE)
 	@echo "Wrote $(PKG_OUT)"
 
+## Verify the generated archive, not only the staged source tree. The host
+## installer performs the same checksum check; this gate also proves every
+## executable the selected package form promises is actually present.
+define verify_package_archive
+VERIFY_DIR="$$(mktemp -d)"; \
+trap 'rm -rf "$$VERIFY_DIR"' EXIT; \
+test -f "$(PKG_OUT)" || { echo "package not found: $(PKG_OUT)"; exit 1; }; \
+tar -xzf "$(PKG_OUT)" -C "$$VERIFY_DIR"; \
+test -f "$$VERIFY_DIR/manifest.yaml"; \
+test -f "$$VERIFY_DIR/ui/bundle.js"; \
+test -f "$$VERIFY_DIR/ui/plugin.css"; \
+test -f "$$VERIFY_DIR/checksums.txt"; \
+(cd "$$VERIFY_DIR" && sha256sum -c checksums.txt); \
+$(1)
+endef
+
+verify-package:
+	@$(call verify_package_archive,for executable in server/plugin-linux-amd64 server/plugin-linux-arm64 server/plugin-darwin-amd64 server/plugin-darwin-arm64 server/plugin-windows-amd64.exe; do test -f "$$VERIFY_DIR/$$executable" || { echo "package missing $$executable"; exit 1; }; done)
+
+verify-package-host:
+	@$(call verify_package_archive,test -f "$$VERIFY_DIR/server/plugin-$$(go env GOOS)-$$(go env GOARCH)$$(go env GOEXE)" || { echo "package missing host executable"; exit 1; })
+
+## The contract runner uploads the freshly packaged archive to a fresh
+## disposable compatible host. It fails before Playwright starts when the host
+## URL is absent or the artifact cannot be installed and activated.
+e2e: package-host verify-package-host
+	KANDEV_PLUGIN_E2E_PACKAGE="$(abspath $(PKG_OUT))" npm run e2e:contract
+
 clean:
-	rm -rf bin $(STAGE) kandev-plugin-template-*.tar.gz
+	rm -rf bin $(STAGE) .build kandev-plugin-bitbucket-*.tar.gz

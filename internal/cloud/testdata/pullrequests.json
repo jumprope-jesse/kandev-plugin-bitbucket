@@ -1,0 +1,13 @@
+{
+  "values": [
+    {
+      "id":42,
+      "title":"Fix race",
+      "description":"Safe now",
+      "state":"OPEN",
+      "links":{"html":{"href":"https://bitbucket.org/acme/widgets/pull-requests/42"}},
+      "source":{"branch":{"name":"feature/race"},"commit":{"hash":"source-hash"},"repository":{"slug":"forked-widgets","workspace":{"slug":"forker"}}},
+      "destination":{"branch":{"name":"main"},"commit":{"hash":"dest-hash"},"repository":{"mainbranch":{"name":"main"}}}
+    }
+  ]
+}

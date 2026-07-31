@@ -1,0 +1,393 @@
+package watches
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestRun_CreatesOneOwnedTaskAfterPersistingReservation(t *testing.T) {
+	repository := &memoryRepository{snapshots: map[string]Snapshot{
+		"workspace-1": {Watches: map[string]Watch{
+			"watch-1": {ID: "watch-1", WorkspaceID: "workspace-1", Status: StatusRunning},
+		}},
+	}}
+	tasks := &recordingTasks{beforeCreate: func() bool {
+		watch := repository.snapshots["workspace-1"].Watches["watch-1"]
+		reservation, found := watch.Reservations["repo-1#42"]
+		return found && reservation.State == ReservationCreating && reservation.Token != ""
+	}}
+	service, err := NewService(Options{
+		Repository: repository,
+		Provider:   staticProvider{items: []PullRequest{{Key: "repo-1#42", RepositoryID: "repo-1", Number: 42, Title: "Fix race"}}, nextCursor: "next"},
+		Tasks:      tasks,
+		Now:        func() time.Time { return time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC) },
+		Token:      func() (string, error) { return "reservation-token", nil },
+	})
+	require.NoError(t, err)
+
+	result, err := service.Run(context.Background(), "workspace-1", "watch-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Created)
+	require.Equal(t, 1, tasks.createCalls)
+	require.True(t, tasks.reservationWasPersisted)
+
+	watch := repository.snapshots["workspace-1"].Watches["watch-1"]
+	require.Equal(t, "next", watch.Cursor)
+	require.Equal(t, "task-1", watch.Links["repo-1#42"].TaskID)
+	require.True(t, watch.Links["repo-1#42"].Owned)
+	require.Equal(t, ReservationCreated, watch.Reservations["repo-1#42"].State)
+}
+
+func TestRun_ResumesPersistedProviderCursorAfterServiceRestart(t *testing.T) {
+	firstPage := make([]PullRequest, 0, 100)
+	for number := 1; number <= 100; number++ {
+		firstPage = append(firstPage, PullRequest{Key: fmt.Sprintf("repo-1#%d", number), RepositoryID: "repo-1", Number: int64(number)})
+	}
+	repository := &memoryRepository{snapshots: map[string]Snapshot{"workspace-1": {Watches: map[string]Watch{
+		"watch-1": {ID: "watch-1", WorkspaceID: "workspace-1", Status: StatusRunning},
+	}}}}
+	provider := &cursorProvider{pages: map[string]cursorPage{
+		"":                {items: firstPage, next: "provider-page-2"},
+		"provider-page-2": {items: []PullRequest{{Key: "repo-1#101", RepositoryID: "repo-1", Number: 101}}},
+	}}
+	tasks := &recordingTasks{}
+	service, err := NewService(Options{Repository: repository, Provider: provider, Tasks: tasks})
+	require.NoError(t, err)
+
+	first, err := service.Run(context.Background(), "workspace-1", "watch-1")
+	require.NoError(t, err)
+	require.Equal(t, 100, first.Created)
+	require.Equal(t, "provider-page-2", repository.snapshots["workspace-1"].Watches["watch-1"].Cursor)
+
+	// A fresh Service simulates a plugin process restart. The durable snapshot
+	// must resume at the provider cursor instead of re-polling the first page.
+	restarted, err := NewService(Options{Repository: repository, Provider: provider, Tasks: tasks})
+	require.NoError(t, err)
+	second, err := restarted.Run(context.Background(), "workspace-1", "watch-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, second.Created)
+	require.Equal(t, "", repository.snapshots["workspace-1"].Watches["watch-1"].Cursor)
+	require.Equal(t, []string{"", "provider-page-2"}, provider.cursors)
+	require.Equal(t, 101, tasks.createCalls)
+}
+
+func TestRun_ReconcilesCreatingReservationWithoutDuplicateTask(t *testing.T) {
+	repository := &memoryRepository{snapshots: map[string]Snapshot{
+		"workspace-1": {Watches: map[string]Watch{
+			"watch-1": {
+				ID:          "watch-1",
+				WorkspaceID: "workspace-1",
+				Status:      StatusRunning,
+				Reservations: map[string]Reservation{
+					"repo-1#42": {Token: "durable-reservation", State: ReservationCreating},
+				},
+			},
+		}},
+	}}
+	tasks := &recordingTasks{findTaskID: "created-before-crash"}
+	service, err := NewService(Options{
+		Repository: repository,
+		Provider:   staticProvider{items: []PullRequest{{Key: "repo-1#42", RepositoryID: "repo-1", Number: 42}}},
+		Tasks:      tasks,
+	})
+	require.NoError(t, err)
+
+	result, err := service.Run(context.Background(), "workspace-1", "watch-1")
+	require.NoError(t, err)
+	require.Zero(t, result.Created)
+	require.Equal(t, 1, result.Skipped)
+	require.Equal(t, 0, tasks.createCalls)
+
+	watch := repository.snapshots["workspace-1"].Watches["watch-1"]
+	require.Equal(t, "created-before-crash", watch.Links["repo-1#42"].TaskID)
+	require.Equal(t, ReservationCreated, watch.Reservations["repo-1#42"].State)
+}
+
+func TestRecover_FinalizesCreatingReservationAfterRestart(t *testing.T) {
+	repository := &memoryRepository{snapshots: map[string]Snapshot{
+		"workspace-1": {Watches: map[string]Watch{
+			"watch-1": {
+				ID: "watch-1", WorkspaceID: "workspace-1", Status: StatusRunning,
+				Reservations: map[string]Reservation{
+					"repo-1#42": {Token: "created-before-restart", State: ReservationCreating},
+				},
+			},
+		}},
+	}}
+	tasks := &recordingTasks{findTaskID: "task-created-before-restart"}
+	service, err := NewService(Options{Repository: repository, Provider: staticProvider{}, Tasks: tasks})
+	require.NoError(t, err)
+
+	recovered, err := service.Recover(context.Background(), "workspace-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, recovered)
+	require.Zero(t, tasks.createCalls)
+
+	watch := repository.snapshots["workspace-1"].Watches["watch-1"]
+	require.Equal(t, "task-created-before-restart", watch.Links["repo-1#42"].TaskID)
+	require.Equal(t, ReservationCreated, watch.Reservations["repo-1#42"].State)
+}
+
+func TestRun_RetainsCreatingReservationWhenTaskCreationFails(t *testing.T) {
+	repository := &memoryRepository{snapshots: map[string]Snapshot{
+		"workspace-1": {Watches: map[string]Watch{
+			"watch-1": {ID: "watch-1", WorkspaceID: "workspace-1", Status: StatusRunning},
+		}},
+	}}
+	tasks := &recordingTasks{createErr: errors.New("host unavailable")}
+	service, err := NewService(Options{
+		Repository: repository, Provider: staticProvider{items: []PullRequest{{Key: "repo-1#42", RepositoryID: "repo-1", Number: 42}}}, Tasks: tasks,
+		Token: func() (string, error) { return "durable-token", nil },
+	})
+	require.NoError(t, err)
+
+	_, err = service.Run(context.Background(), "workspace-1", "watch-1")
+	require.Error(t, err)
+	watch := repository.snapshots["workspace-1"].Watches["watch-1"]
+	reservation := watch.Reservations["repo-1#42"]
+	require.Equal(t, ReservationCreating, reservation.State)
+	require.Equal(t, "durable-token", reservation.Token)
+	require.NotContains(t, watch.Links, "repo-1#42")
+}
+
+func TestRun_ConcurrentPollsCreateAtMostOneTask(t *testing.T) {
+	repository := &memoryRepository{snapshots: map[string]Snapshot{
+		"workspace-1": {Watches: map[string]Watch{
+			"watch-1": {ID: "watch-1", WorkspaceID: "workspace-1", Status: StatusRunning},
+		}},
+	}}
+	provider := blockingProvider{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		item:    PullRequest{Key: "repo-1#42", RepositoryID: "repo-1", Number: 42},
+	}
+	tasks := &recordingTasks{}
+	service, err := NewService(Options{Repository: repository, Provider: &provider, Tasks: tasks})
+	require.NoError(t, err)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, runErr := service.Run(context.Background(), "workspace-1", "watch-1")
+		firstDone <- runErr
+	}()
+	<-provider.started
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, runErr := service.Run(context.Background(), "workspace-1", "watch-1")
+		secondDone <- runErr
+	}()
+	close(provider.release)
+	require.NoError(t, <-firstDone)
+	require.NoError(t, <-secondDone)
+	require.Equal(t, 1, tasks.createCalls)
+}
+
+func TestReset_PreviewsAndDeletesOnlyWatchOwnedTaskTrees(t *testing.T) {
+	repository := &memoryRepository{snapshots: map[string]Snapshot{
+		"workspace-1": {Watches: map[string]Watch{
+			"watch-1": {
+				ID:          "watch-1",
+				WorkspaceID: "workspace-1",
+				Status:      StatusRunning,
+				Links: map[string]TaskLink{
+					"repo-1#owned":  {PullRequestKey: "repo-1#owned", TaskID: "owned-root", Owned: true},
+					"repo-1#manual": {PullRequestKey: "repo-1#manual", TaskID: "manual-task", Owned: false},
+				},
+				Reservations: map[string]Reservation{
+					"repo-1#owned":  {Token: "owned", State: ReservationCreated, TaskID: "owned-root"},
+					"repo-1#manual": {Token: "manual", State: ReservationCreated, TaskID: "manual-task"},
+				},
+			},
+		}},
+	}}
+	tasks := &recordingTasks{previewTree: []string{"owned-root", "owned-child"}, deletedTree: []string{"owned-root", "owned-child"}}
+	service, err := NewService(Options{Repository: repository, Provider: staticProvider{}, Tasks: tasks})
+	require.NoError(t, err)
+
+	preview, err := service.PreviewReset(context.Background(), "workspace-1", "watch-1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"owned-root", "owned-child"}, preview.TaskIDs)
+	require.Equal(t, []string{"owned-root"}, tasks.previewed)
+
+	result, err := service.Reset(context.Background(), "workspace-1", "watch-1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"owned-root", "owned-child"}, result.DeletedTaskIDs)
+	require.Equal(t, []string{"owned-root"}, tasks.deleted)
+
+	watch := repository.snapshots["workspace-1"].Watches["watch-1"]
+	_, ownedLinkRemains := watch.Links["repo-1#owned"]
+	require.False(t, ownedLinkRemains)
+	require.Equal(t, "manual-task", watch.Links["repo-1#manual"].TaskID)
+	require.NotContains(t, watch.Reservations, "repo-1#owned")
+	require.Contains(t, watch.Reservations, "repo-1#manual")
+}
+
+func TestWatchControls_PersistFiltersPresetsStatusAndSafeDelete(t *testing.T) {
+	repository := &memoryRepository{snapshots: map[string]Snapshot{"workspace-1": {}}}
+	provider := &countingProvider{}
+	tasks := &recordingTasks{previewTree: []string{"owned-root"}, deletedTree: []string{"owned-root"}}
+	events := &recordingEvents{}
+	service, err := NewService(Options{Repository: repository, Provider: provider, Tasks: tasks, Events: events})
+	require.NoError(t, err)
+
+	created, err := service.Create(context.Background(), Watch{ID: "watch-1", WorkspaceID: "workspace-1"})
+	require.NoError(t, err)
+	require.Equal(t, StatusRunning, created.Status)
+	updated, err := service.SetFilter(context.Background(), "workspace-1", "watch-1", Filter{RepositoryIDs: []string{"repo-1"}, States: []string{"open"}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"repo-1"}, updated.Filter.RepositoryIDs)
+	updated, err = service.SavePreset(context.Background(), "workspace-1", "watch-1", Preset{ID: "open", Name: "Open PRs", Filter: updated.Filter})
+	require.NoError(t, err)
+	require.Equal(t, "Open PRs", updated.Presets["open"].Name)
+
+	_, err = service.Pause(context.Background(), "workspace-1", "watch-1")
+	require.NoError(t, err)
+	_, err = service.Run(context.Background(), "workspace-1", "watch-1")
+	require.ErrorIs(t, err, ErrWatchPaused)
+	require.Zero(t, provider.calls)
+	_, err = service.Resume(context.Background(), "workspace-1", "watch-1")
+	require.NoError(t, err)
+
+	watch := repository.snapshots["workspace-1"].Watches["watch-1"]
+	watch.Links["owned"] = TaskLink{PullRequestKey: "owned", TaskID: "owned-root", Owned: true}
+	watch.Links["manual"] = TaskLink{PullRequestKey: "manual", TaskID: "manual-task", Owned: false}
+	repository.snapshots["workspace-1"] = Snapshot{Watches: map[string]Watch{"watch-1": watch}}
+
+	preview, err := service.PreviewDelete(context.Background(), "workspace-1", "watch-1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"owned-root"}, preview.TaskIDs)
+	result, err := service.Delete(context.Background(), "workspace-1", "watch-1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"owned-root"}, result.DeletedTaskIDs)
+	require.Equal(t, []string{"owned-root"}, tasks.deleted)
+	_, err = service.Get(context.Background(), "workspace-1", "watch-1")
+	require.ErrorIs(t, err, ErrWatchNotFound)
+	require.NotContains(t, events.names, "plugin.kandev-plugin-bitbucket.watch.deleted")
+	require.Contains(t, events.names, "watch.deleted")
+}
+
+func TestReset_RespectsCancelledActionContext(t *testing.T) {
+	repository := &memoryRepository{snapshots: map[string]Snapshot{"workspace-1": {Watches: map[string]Watch{
+		"watch-1": {ID: "watch-1", WorkspaceID: "workspace-1", Links: map[string]TaskLink{"owned": {PullRequestKey: "owned", TaskID: "owned-root", Owned: true}}},
+	}}}}
+	tasks := &recordingTasks{deletedTree: []string{"owned-root"}}
+	service, err := NewService(Options{Repository: repository, Provider: staticProvider{}, Tasks: tasks})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = service.Reset(ctx, "workspace-1", "watch-1")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, tasks.deleted)
+}
+
+type memoryRepository struct{ snapshots map[string]Snapshot }
+
+func (r *memoryRepository) Load(_ context.Context, workspaceID string) (Snapshot, error) {
+	return r.snapshots[workspaceID], nil
+}
+
+func (r *memoryRepository) Save(_ context.Context, workspaceID string, snapshot Snapshot) error {
+	r.snapshots[workspaceID] = snapshot
+	return nil
+}
+
+type staticProvider struct {
+	items      []PullRequest
+	nextCursor string
+}
+
+type cursorPage struct {
+	items []PullRequest
+	next  string
+}
+
+type cursorProvider struct {
+	pages   map[string]cursorPage
+	cursors []string
+}
+
+func (p *cursorProvider) ListPullRequests(_ context.Context, watch Watch) ([]PullRequest, string, error) {
+	p.cursors = append(p.cursors, watch.Cursor)
+	page, found := p.pages[watch.Cursor]
+	if !found {
+		return nil, "", fmt.Errorf("unexpected cursor %q", watch.Cursor)
+	}
+	return page.items, page.next, nil
+}
+
+func (p staticProvider) ListPullRequests(context.Context, Watch) ([]PullRequest, string, error) {
+	return p.items, p.nextCursor, nil
+}
+
+type recordingTasks struct {
+	beforeCreate            func() bool
+	createCalls             int
+	reservationWasPersisted bool
+	findTaskID              string
+	previewTree             []string
+	deletedTree             []string
+	previewed               []string
+	deleted                 []string
+	createErr               error
+}
+
+func (t *recordingTasks) FindByReservation(context.Context, string, string) (string, bool, error) {
+	return t.findTaskID, t.findTaskID != "", nil
+}
+
+func (t *recordingTasks) Create(_ context.Context, _ Creation) (string, error) {
+	t.createCalls++
+	if t.beforeCreate != nil {
+		t.reservationWasPersisted = t.beforeCreate()
+	}
+	if t.createErr != nil {
+		return "", t.createErr
+	}
+	return "task-1", nil
+}
+
+func (t *recordingTasks) PreviewOwned(_ context.Context, taskID string) ([]string, error) {
+	t.previewed = append(t.previewed, taskID)
+	return t.previewTree, nil
+}
+
+func (t *recordingTasks) DeleteOwned(_ context.Context, taskID string) ([]string, error) {
+	t.deleted = append(t.deleted, taskID)
+	return t.deletedTree, nil
+}
+
+type blockingProvider struct {
+	started chan struct{}
+	release chan struct{}
+	item    PullRequest
+	once    sync.Once
+}
+
+func (p *blockingProvider) ListPullRequests(context.Context, Watch) ([]PullRequest, string, error) {
+	p.once.Do(func() {
+		close(p.started)
+	})
+	<-p.release
+	return []PullRequest{p.item}, "", nil
+}
+
+type countingProvider struct{ calls int }
+
+func (p *countingProvider) ListPullRequests(context.Context, Watch) ([]PullRequest, string, error) {
+	p.calls++
+	return nil, "", nil
+}
+
+type recordingEvents struct{ names []string }
+
+func (e *recordingEvents) Emit(_ context.Context, name string, _ map[string]any) error {
+	e.names = append(e.names, name)
+	return nil
+}

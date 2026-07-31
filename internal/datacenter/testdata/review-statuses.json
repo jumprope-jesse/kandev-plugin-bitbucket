@@ -1,0 +1,7 @@
+{
+  "isLastPage": false,
+  "nextPageStart": 1,
+  "values": [
+    {"key": "build-7", "name": "CI", "state": "SUCCESSFUL", "url": "https://ci.example.test/build/7"}
+  ]
+}

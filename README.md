@@ -1,180 +1,114 @@
-# kandev-plugin-template
+# kandev-plugin-bitbucket
 
-A starter template for building a [kandev](https://github.com/kdlbs/kandev)
-**native-UI plugin** — its own git repo, packaged into a versioned tarball and
-installed against a running kandev instance. Click **“Use this template”** on
-GitHub (or copy this repo) to bootstrap your own plugin.
+The Bitbucket runtime plugin for Kandev. It connects one Kandev workspace to
+Bitbucket Cloud or Bitbucket Data Center and adds native repository discovery,
+pull-request/task links, review surfaces, task actions, and pull-request
+watches.
 
-It is a small, complete, working example of everything a kandev plugin can do,
-wired together so you can delete what you don't need rather than assemble it
-from scratch:
+This repository produces a Kandev plugin package; it is not a standalone web
+service or an integration built into the Kandev host.
 
-- **Native nav item + route** — `ui/bundle.js` adds a sidebar entry that opens
-  `/template`, a page rendered natively inside the kandev SPA (not an iframe)
-  using the host's own React instance.
-- **Chat toolbar action** — a component registered into the `chat-input-actions`
-  slot renders an icon button in the chat composer toolbar, with the current
-  `{ sessionId, taskId, taskTitle }` as `slotProps`.
-- **Live WS-driven counter** — a `registerWsHandler("task.created", ...)`
-  handler updates module state that the page re-renders from, live, with no
-  reload.
-- **Backend event handling with Host state** — `OnEvent` counts `task.created`
-  deliveries in a persistent counter via the `Host.GetState`/`SetState` round
-  trip, so restarts don't reset it.
-- **Backend webhook** — `HandleWebhook` answers the `ping` webhook kandev
-  proxies to the plugin, building its reply from the operator settings.
-- **Operator settings (`config_schema`)** — a `greeting` string and a secret
-  `api_token`, rendered as a form at **Settings > Plugins > Template Plugin**
-  and read by the plugin process via `host.GetConfig(ctx)`. Secret fields are
-  vault-stored and masked everywhere outside the plugin process.
+## Capabilities
 
-## Make it yours
+- Bitbucket Cloud: API-token or OAuth 2.0 connections.
+- Bitbucket Data Center: personal, project, repository, or OAuth credentials.
+- Native Kandev repository provider, task-menu actions, and review panel.
+- Authenticated manifest-declared actions for connection management,
+  repositories, pull requests, reviews, task links, and watches.
+- Workspace-scoped connection state and encrypted plugin-owned secrets.
+- Transient, provider-scoped Git credential resolution with a non-secret
+  binding revision so rotated or disconnected credentials fail closed.
+- A dynamic `#` pull-request reference source, reauthorized against the live
+  provider before Kandev accepts it in a prompt.
 
-The plugin **id** appears in four places that must stay in sync. Rename all of
-them from `kandev-plugin-template` to your own id (e.g. `kandev-plugin-acme`):
+The plugin requests `api_read` for Kandev task/workspace/workflow/agent-profile
+and repository data, and `api_write: ["tasks"]` for its task workflow. Review
+the manifest before installing: plugin code is privileged inside a Kandev
+installation and capabilities are API permission gates, not a sandbox.
 
-1. `manifest.yaml` — `id`, plus `display_name` / `description` / `author`.
-2. `go.mod` — the `module` line.
-3. `Makefile` — `BIN` and `PKG_OUT` (and `VERSION` to match the manifest).
-4. `ui/bundle.js` — the id passed to `window.registerKandevPlugin(...)`.
+## Requirements
 
-Then trim the scaffolding: drop the webhook / event / config blocks in
-`manifest.yaml` you don't use, delete the matching handlers in
-`server/plugin.go`, and keep only the `registry.register*` calls in
-`ui/bundle.js` your plugin actually contributes. Update `server/plugin_test.go`
-to cover what remains.
+- A Kandev host that includes the declared-action, provider-registration,
+  reference-authorization, credential-broker, and live `api_write` contracts.
+  This plugin intentionally does **not** set `min_kandev_version` until that
+  compatible Kandev release has merged and shipped.
+- Go version from `go.mod` and Node 24 for the UI toolchain.
+- A sibling Kandev checkout while developing, because the SDK is resolved with
+  the local `replace` directive:
 
-## How a plugin runs (gRPC subprocess, not HTTP)
+  ```text
+  parent-directory/
+  ├── kandev/                         # apps/backend Go module
+  └── kandev-plugin-bitbucket/        # this repository
+  ```
 
-kandev spawns the platform-matching binary from `runtime.executables` in
-`manifest.yaml` as a subprocess and talks to it over a private gRPC connection
-([hashicorp/go-plugin](https://github.com/hashicorp/go-plugin)) — there is no
-HTTP listen address, no shared secret, and no manual wiring: `pluginsdk.Serve`
-in `server/main.go` owns the entire transport. You implement three RPCs and
-get a `Host` handle back:
-
-```go
-type Plugin interface {
-    OnEvent(ctx context.Context, e *Event) error
-    HandleWebhook(ctx context.Context, req *WebhookRequest) (*WebhookResponse, error)
-}
-```
-
-`server/plugin.go`'s `templatePlugin` embeds `pluginsdk.UnimplementedPlugin`
-(a no-op default for both RPCs, plus `Host()`/`SetHost()` accessors) and
-overrides what it needs. `server/main.go` is just
-`pluginsdk.Serve(&templatePlugin{})`.
-
-## Developing against the SDK
-
-`pkg/pluginsdk` is not published as its own module yet, so `go.mod` here uses a
-local `replace`:
-
-```
-replace github.com/kandev/kandev => ../kandev/apps/backend
-```
-
-This assumes your plugin repo is checked out as a **sibling** of the `kandev`
-monorepo:
-
-```
-some-dir/
-├── kandev/                   # https://github.com/kdlbs/kandev, Go module at apps/backend/
-└── kandev-plugin-template/   # this repo
-```
-
-Note the module root is `kandev/apps/backend`, not the repo root — `kandev` is
-a monorepo and the Go backend (including `pkg/pluginsdk`) lives one level down.
-Adjust the `replace` path if your layout differs. Once `pkg/pluginsdk` ships as
-a standalone, versioned module, this repo will drop the `replace` and pin a
-real version instead.
-
-## Layout
-
-```
-manifest.yaml          # plugin manifest — id, capabilities, runtime.executables, ui.bundle, config_schema
-server/
-  main.go              # pluginsdk.Serve wiring — no flags, no HTTP, no secrets
-  plugin.go            # templatePlugin: OnEvent / InvokeTool / HandleWebhook
-  plugin_test.go       # tests against a fake Host, no subprocess spawn needed
-ui/
-  bundle.js            # hand-written, no-build ES module — the plugin's frontend half
-```
-
-`ui/bundle.js` is hand-written, dependency-free ES module JavaScript. There is
-no build step: it ships byte-for-byte inside the package tar.gz, and kandev
-serves it directly. Edit the file and repackage — nothing else to run.
-
-## Build and test
+## Build and verify
 
 ```sh
-make build   # go build -o bin/... ./server/...
-make test    # go test ./server/...
-make vet     # go vet ./server/...
+npm ci
+make fmt
+make vet
+make test
+make build
+make package-host
+make verify-package-host
+make package
+make verify-package
 ```
 
-> Note: bare `go build ./server/...` (no `-o`) fails with `build output
-> "server" already exists and is a directory` — Go's default output name for a
-> lone main package is the last path element ("server"), which collides with
-> the `server/` source directory. Always pass `-o`, run `go build .` from
-> inside `server/`, or use `make build`. `go vet`/`go test` are unaffected.
+`make package-host` creates a package for the current host platform; `make
+package` cross-compiles every executable declared in `manifest.yaml`. Both
+produce `kandev-plugin-bitbucket-<version>.tar.gz` and generate its internal
+`checksums.txt`. Do not author that file by hand.
 
-## Package it
+`make e2e` is deliberately fail-fast: it requires
+`KANDEV_PLUGIN_E2E_URL` to name a fresh, disposable compatible Kandev host that
+accepts test package uploads. The runner installs and activates the freshly
+built host package, then checks the native desktop and mobile plugin surfaces.
+It does not skip when that setup is absent, because a skipped test would not
+prove the packaged artifact can load.
 
-```sh
-make package        # cross-compiles linux/darwin (amd64+arm64) + windows/amd64,
-                    # then packs manifest + ui/ + binaries into a versioned .tar.gz
+## Install and configure
 
-make package-host   # host platform only — faster local iteration
-```
+Use **Settings > Plugins** in a compatible Kandev host to upload the generated
+tarball, then enable **Bitbucket**. Open the Bitbucket navigation entry and
+configure it for the active Kandev workspace:
 
-Both stage `manifest.yaml` + `ui/` alongside the freshly built
-`server/plugin-<goos>-<goarch>[.exe]` binaries, then pack the tree with
-`github.com/kandev/kandev/cmd/plugin-pack` (resolved through this repo's
-`replace` directive), which computes `checksums.txt` and writes the tarball.
+- For Cloud, provide the Bitbucket workspace slug or ID plus either an
+  Atlassian-account email/API token or an OAuth consumer registration.
+- A scoped Cloud API token needs `read:user:bitbucket`,
+  `read:repository:bitbucket`, `write:repository:bitbucket`,
+  `read:pullrequest:bitbucket`, and `write:pullrequest:bitbucket` for the full
+  workflow. OAuth consumers need Account read plus Repository and Pull request
+  read/write permissions.
+- For Data Center, provide the full HTTPS base URL, then use the narrowest
+  supported personal, project, repository, or OAuth credential.
+- Data Center OAuth requires `REPO_READ` and `REPO_WRITE`; PAT and scoped-token
+  identities need equivalent repository read/write authority for the full
+  workflow.
+- For OAuth, copy the callback URL shown by the plugin into the Bitbucket OAuth
+  consumer before starting the browser flow.
 
-## Install it against a running kandev
+Connection settings are workspace-specific. Tokens, OAuth refresh tokens, and
+client secrets are held as plugin secrets; they are never shown after save.
+Disconnecting removes the workspace connection and its stored plugin
+credentials. The public Kandev guide covers the detailed setup, security model,
+and task Git limitations in [Integrations](https://kandev.dev/docs/integrations).
 
-Either through the UI (**Settings > Plugins > Install plugin**, URL or file
-upload), or directly:
+## Package and release policy
 
-```sh
-curl -F package=@kandev-plugin-template-0.1.0.tar.gz \
-  http://localhost:<kandev-port>/api/plugins/install
-```
+Pull-request CI validates formatting, Go tests/vet, UI typecheck/build/tests,
+archive contents, and generated checksums. Same-repository pull requests also
+run the disposable-host packaged-plugin contract; forks cannot receive that
+host secret and retain the non-secret checks instead. The tag release workflow
+always runs the packaged-plugin contract before it uploads
+`<id>-<version>.tar.gz` on a matching `v<version>` tag.
 
-kandev verifies `checksums.txt`, validates the manifest, extracts the package,
-spawns the host-matching binary, and — once the go-plugin handshake completes —
-marks the plugin active. Sideloaded plugins register **disabled/unverified**;
-enable yours in **Settings > Plugins** (the `plugins` feature flag must be on).
-Reinstalling the same version returns 409 — bump `version` in `manifest.yaml`.
-
-## Publish a release
-
-Pull requests run `.github/workflows/ci.yml` (tidy, format, vet, and test) and
-`.github/workflows/build.yml` (host build plus a five-platform package). Push a
-tag that matches the manifest version to run `.github/workflows/release.yml`:
-it repeats verification, cross-compiles all platforms, packs the tarball, and
-creates a GitHub Release with the two assets the kandev
-[marketplace](https://github.com/kdlbs/kandev/blob/main/docs/public/plugins-marketplace.md)
-install pipeline expects:
-
-- `<id>-<version>.tar.gz` — the plugin package (with its own internal
-  `checksums.txt` verified on install), and
-- `checksums.txt` — the package's internal file checksums, extracted from the
-  tarball for inspection and marketplace tooling.
-
-```sh
-# bump VERSION in Makefile + version in manifest.yaml first, then:
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-The workflow checks out the kandev monorepo as a sibling so the `replace`
-directive resolves (see "Developing against the SDK"); pin a kandev ref in the
-workflow if you need reproducible SDK versions.
+Do not tag, publish a GitHub Release, add a marketplace registry entry, or set
+`min_kandev_version` yet. Those are external compatibility steps that must wait
+for the compatible Kandev host change to merge and release. This repository
+does not infer that version.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). This template is meant to be copied and made your
-own; your resulting plugin can carry whatever license you choose.
+MIT. See [LICENSE](LICENSE).

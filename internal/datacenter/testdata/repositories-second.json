@@ -1,0 +1,12 @@
+{
+  "size": 1,
+  "limit": 2,
+  "isLastPage": true,
+  "values": [
+    {
+      "slug": "dashboard",
+      "project": {"key": "ENG"},
+      "links": {"clone": [{"name": "https", "href": "https://dc.example.test/bitbucket/scm/ENG/dashboard.git"}]}
+    }
+  ]
+}
