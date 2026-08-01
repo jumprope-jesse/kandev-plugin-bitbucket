@@ -68,6 +68,47 @@ built host package, then checks the native desktop and mobile plugin surfaces.
 It does not skip when that setup is absent, because a skipped test would not
 prove the packaged artifact can load.
 
+### Configured live acceptance
+
+`make e2e-live` installs the package into the same kind of disposable Kandev
+host, saves one real Bitbucket connection through the authenticated plugin
+action, and exercises health, repository discovery, branches, pull-request
+inspection, and full review loading. It is opt-in and fail-fast; normal tests
+never contact Bitbucket. Run it once for Cloud and once for Data Center.
+
+Provide these non-secret coordinates and secret values through the task or CI
+environment—never commit them and never paste tokens into logs:
+
+```text
+KANDEV_PLUGIN_E2E_URL                         disposable compatible Kandev host
+KANDEV_BITBUCKET_LIVE_PRODUCT                cloud | data_center
+KANDEV_BITBUCKET_LIVE_AUTH_METHOD            api_token | user_pat | project_token | repository_token
+KANDEV_BITBUCKET_LIVE_TOKEN                  secret API token/PAT/scoped token
+KANDEV_BITBUCKET_LIVE_AUTH_IDENTITY          Cloud account email; DC username for user_pat
+KANDEV_BITBUCKET_LIVE_CLOUD_WORKSPACE        Cloud workspace slug/ID
+KANDEV_BITBUCKET_LIVE_BASE_URL               DC HTTPS base URL including context path
+KANDEV_BITBUCKET_LIVE_REPOSITORY_NAMESPACE   Cloud workspace or DC project key
+KANDEV_BITBUCKET_LIVE_REPOSITORY_SLUG        disposable repository slug
+KANDEV_BITBUCKET_LIVE_PR_NUMBER              existing PR with review data
+KANDEV_BITBUCKET_LIVE_KANDEV_WORKSPACE_ID    required only if host has != 1 workspace
+```
+
+Optional live review mutations require explicit disposable-target permission:
+
+```text
+KANDEV_BITBUCKET_LIVE_REVIEW_WRITES=1
+KANDEV_BITBUCKET_LIVE_APPROVAL_PR_NUMBER     open PR authored by another identity
+KANDEV_BITBUCKET_LIVE_DECLINE_PR_NUMBER      open disposable PR that may be declined
+```
+
+That mode adds a marked test comment to `KANDEV_BITBUCKET_LIVE_PR_NUMBER`,
+approves then unapproves the approval PR, and permanently declines the decline
+PR. Tracing, screenshots, and video are disabled for the live runner so secret
+request bodies cannot enter Playwright artifacts. The runner disconnects the
+workspace in a `finally` cleanup. It does not replace the separate Docker/SSH
+credential-broker gate, which additionally needs a public HTTPS broker URL
+reachable from those executors.
+
 ## Install and configure
 
 Use **Settings > Plugins** in a compatible Kandev host to upload the generated
@@ -103,6 +144,13 @@ run the disposable-host packaged-plugin contract; forks cannot receive that
 host secret and retain the non-secret checks instead. The tag release workflow
 always runs the packaged-plugin contract before it uploads
 `<id>-<version>.tar.gz` on a matching `v<version>` tag.
+
+The initial release intentionally follows Kandev's current unsigned marketplace
+contract. Its generated internal `checksums.txt` remains mandatory, but the
+package does not claim a verified signature or publisher provenance and Kandev
+will report it as unsigned. Plugin signing is deferred until Kandev has a
+host-wide verifier, trust policy, and key lifecycle; it is not a Bitbucket-only
+release gate.
 
 Do not tag, publish a GitHub Release, add a marketplace registry entry, or set
 `min_kandev_version` yet. Those are external compatibility steps that must wait

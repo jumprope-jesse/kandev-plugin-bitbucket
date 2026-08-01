@@ -8,7 +8,8 @@
     "typecheck": "tsc --project ui/tsconfig.json --noEmit",
     "test": "npm run build:ui && vitest run",
     "e2e": "playwright test",
-    "e2e:contract": "playwright test --config playwright.config.ts"
+    "e2e:contract": "playwright test --config playwright.config.ts",
+    "e2e:live": "playwright test --config playwright.live.config.ts"
   },
   "devDependencies": {
     "@types/node": "24.3.0",

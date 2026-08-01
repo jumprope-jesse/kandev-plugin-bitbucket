@@ -1,4 +1,4 @@
-.PHONY: build build-ui run test test-ui fmt vet package package-host verify-package verify-package-host e2e clean
+.PHONY: build build-ui run test test-ui fmt vet package package-host verify-package verify-package-host e2e e2e-live clean
 
 # Keep these values synchronized with manifest.yaml.
 BIN := bin/kandev-plugin-bitbucket
@@ -93,6 +93,13 @@ verify-package-host:
 ## URL is absent or the artifact cannot be installed and activated.
 e2e: package-host verify-package-host
 	KANDEV_PLUGIN_E2E_PACKAGE="$(abspath $(PKG_OUT))" npm run e2e:contract
+
+## Opt-in configured-provider acceptance. Unlike the normal packaged contract,
+## this requires a disposable Bitbucket target and secret environment variables
+## documented in README.md. The live Playwright config disables traces,
+## screenshots, and video so credentials never enter test artifacts.
+e2e-live: package-host verify-package-host
+	KANDEV_PLUGIN_E2E_PACKAGE="$(abspath $(PKG_OUT))" npm run e2e:live
 
 clean:
 	rm -rf bin $(STAGE) .build kandev-plugin-bitbucket-*.tar.gz
