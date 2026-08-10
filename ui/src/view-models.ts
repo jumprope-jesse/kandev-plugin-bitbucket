@@ -34,10 +34,34 @@ export type PullRequest = {
   repositoryName: string;
   state: string;
   author?: string;
+  authorUrl?: string;
+  authorAvatarUrl?: string;
+  createdAt?: string;
   updatedAt?: string;
+  mergedAt?: string;
+  closedAt?: string;
+  sourceBranch?: string;
+  destinationBranch?: string;
+  headCommit?: string;
   statusLabel?: string;
   statusTone?: "success" | "warning" | "danger" | "neutral";
+  tasks: TaskRowLink[];
   capabilities: string[];
+};
+
+export type TaskRowLink = {
+  id: string;
+  taskId: string;
+  fallbackTitle: string;
+};
+
+export type SavedQuery = {
+  id: string;
+  label: string;
+  query: string;
+  repositoryId: string;
+  state: string;
+  createdAt: string;
 };
 
 export type ReviewFile = {
@@ -64,6 +88,7 @@ export type ReviewComment = {
   author: string;
   body: string;
   createdAt?: string;
+  line?: number;
 };
 
 export type BuildStatus = {
@@ -72,6 +97,9 @@ export type BuildStatus = {
   state: string;
   url?: string;
   target?: string;
+  output?: string;
+  startedAt?: string;
+  completedAt?: string;
 };
 
 export type ReviewDetail = PullRequest & {
@@ -80,9 +108,77 @@ export type ReviewDetail = PullRequest & {
   destinationBranch?: string;
   files: ReviewFile[];
   commits: Array<{ id: string; message: string; author?: string }>;
-  participants: Array<{ name: string; role?: string; approved?: boolean }>;
+  participants: Array<{
+    id?: string;
+    name: string;
+    role?: string;
+    approved?: boolean;
+    isCurrentUser?: boolean;
+    url?: string;
+    avatarUrl?: string;
+  }>;
   threads: ReviewThread[];
   statuses: BuildStatus[];
+  viewerApproved?: boolean;
+};
+
+export type HostChangeRequestDetail = {
+  providerId: "bitbucket";
+  reviewKey: string;
+  number: number;
+  title: string;
+  url: string;
+  state: string;
+  draft?: boolean;
+  author: { name: string; url?: string; avatarUrl?: string };
+  createdAt?: string;
+  mergedAt?: string;
+  closedAt?: string;
+  sourceBranch: string;
+  targetBranch: string;
+  additions: number;
+  deletions: number;
+  description?: string;
+  reviewState?: string;
+  pendingReviewCount?: number;
+  reviews: Array<{
+    id: string;
+    author: { name: string };
+    state: string;
+    body?: string;
+    createdAt?: string;
+  }>;
+  requestedReviewers: Array<{ name: string }>;
+  checks: Array<{
+    id: string;
+    name: string;
+    state: string;
+    conclusion?: string;
+    url?: string;
+    output?: string;
+    startedAt?: string;
+    completedAt?: string;
+  }>;
+  comments: Array<{
+    id: string;
+    parentId?: string;
+    author: { name: string };
+    body: string;
+    createdAt?: string;
+    path?: string;
+    line?: number;
+    resolved?: boolean;
+  }>;
+  lastSyncedAt?: string;
+};
+
+export type HostChangeRequestDetailAction = {
+  id: string;
+  label: string;
+  pendingLabel?: string;
+  placement: "header" | "comment" | "thread";
+  tone?: "default" | "success" | "danger" | "secondary";
+  input?: "text";
 };
 
 export type ConnectionFormInput = {
@@ -116,8 +212,43 @@ export type PullRequestCreateForm = {
   closeSourceOnMerge: boolean;
 };
 
-export type LaunchPreset = { id: string; name: string };
+export type TaskLaunchPreset = {
+  id: "review" | "address-feedback" | "fix-ci";
+  label: string;
+  hint: string;
+  iconName: "eye" | "message" | "tool";
+  prompt(pullRequest: PullRequest): string;
+};
 export type WatchSummary = { id: string; status: "running" | "paused"; lastPolled?: string };
+
+export function integrationSettingsHref(workspaceId?: string): string {
+  return workspaceId
+    ? `/settings/workspace/${encodeURIComponent(workspaceId)}/integrations/bitbucket`
+    : "/settings/integrations/bitbucket";
+}
+
+export function displayPullRequestAuthor(author?: string): string | undefined {
+  const value = author?.trim();
+  if (!value || /^\d+:[a-z0-9-]{20,}$/i.test(value)) return undefined;
+  return value;
+}
+
+export function relativeTimeLabel(value?: string, now = new Date()): string | undefined {
+  if (!value) return undefined;
+  const instant = new Date(value);
+  if (!Number.isFinite(instant.getTime())) return undefined;
+  const seconds = Math.floor((now.getTime() - instant.getTime()) / 1000);
+  if (seconds < 10) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days}d ago`;
+  return instant.toLocaleDateString();
+}
 
 export function oauthStartInput(workspaceId: string): { workspaceId: string } {
   return { workspaceId };
@@ -157,6 +288,53 @@ function array(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+function timestamp(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) && date.getUTCFullYear() > 1
+      ? date.toISOString()
+      : undefined;
+  }
+  const text = string(value);
+  if (!text) return undefined;
+  if (/^\d+$/.test(text)) {
+    const date = new Date(Number(text));
+    return Number.isFinite(date.getTime()) && date.getUTCFullYear() > 1
+      ? date.toISOString()
+      : undefined;
+  }
+  const date = new Date(text);
+  return Number.isFinite(date.getTime()) && date.getUTCFullYear() > 1 ? text : undefined;
+}
+
+function boolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function linkHref(value: unknown): string | undefined {
+  const direct = string(value);
+  if (direct) return direct;
+  if (Array.isArray(value)) {
+    for (const candidate of value) {
+      const href = linkHref(candidate);
+      if (href) return href;
+    }
+    return undefined;
+  }
+  const link = record(value);
+  return string(link.href) ?? string(link.url);
+}
+
+function pullRequestURL(value: unknown): string | undefined {
+  const links = record(value);
+  return linkHref(links.html) ?? linkHref(links.self) ?? linkHref(value);
+}
+
+function personLink(value: unknown, kind: "html" | "avatar"): string | undefined {
+  const person = record(value);
+  return linkHref(record(person.links)[kind]) ?? linkHref(person[kind === "html" ? "url" : "avatarUrl"]);
+}
+
 function itemList(value: unknown, keys: string[]): unknown[] {
   if (Array.isArray(value)) return value;
   const source = record(value);
@@ -176,19 +354,58 @@ function toCapabilities(value: unknown): string[] {
   return array(value).flatMap((entry) => (typeof entry === "string" ? [entry] : []));
 }
 
+function normalizeTaskLinks(value: unknown, reviewKey = ""): TaskRowLink[] {
+  return itemList(value, ["associations", "tasks", "items", "values"]).flatMap((entry) => {
+    const source = record(entry);
+    const taskId = string(source.task_id) ?? string(source.taskId);
+    const entryReviewKey = string(source.review_key) ?? string(source.reviewKey) ?? reviewKey;
+    if (!taskId || (reviewKey && entryReviewKey !== reviewKey)) return [];
+    return [{
+      id: string(source.id) ?? `${entryReviewKey}:${taskId}`,
+      taskId,
+      fallbackTitle: string(source.task_title) ?? string(source.taskTitle) ?? string(source.title) ?? "Bitbucket task",
+    }];
+  });
+}
+
+export function normalizePullRequestAssociations(value: unknown): Record<string, TaskRowLink[]> {
+  const result: Record<string, TaskRowLink[]> = {};
+  for (const entry of itemList(value, ["associations", "items", "values"])) {
+    const source = record(entry);
+    const reviewKey = string(source.review_key) ?? string(source.reviewKey);
+    if (!reviewKey) continue;
+    const links = normalizeTaskLinks([source], reviewKey);
+    if (links.length) result[reviewKey] = [...(result[reviewKey] ?? []), ...links];
+  }
+  return result;
+}
+
 function normalizeReviewComment(value: unknown): ReviewComment | null {
   const comment = record(value);
   const id = string(comment.id) ?? string(comment.ID) ?? string(comment.comment_id);
   if (!id) return null;
   const normalized: ReviewComment = {
     id,
-    author: string(comment.author) ?? string(comment.Author) ?? string(record(comment.author).display_name) ?? "Unknown",
-    body: string(comment.body) ?? string(comment.Body) ?? string(comment.content) ?? "",
+    author:
+      string(comment.author) ??
+      string(comment.Author) ??
+      string(record(comment.author).display_name) ??
+      string(record(comment.author).displayName) ??
+      "Unknown",
+    body:
+      string(comment.body) ??
+      string(comment.Body) ??
+      string(comment.content) ??
+      string(record(comment.content).raw) ??
+      string(comment.text) ??
+      "",
   };
   const parentId = string(comment.parent_id) ?? string(comment.parentId) ?? string(comment.ParentID);
-  const createdAt = string(comment.created_at) ?? string(comment.createdAt) ?? string(comment.When);
+  const createdAt = timestamp(comment.created_at) ?? timestamp(comment.createdAt) ?? timestamp(comment.When);
+  const line = number(comment.line) ?? number(record(comment.inline).to) ?? number(record(comment.anchor).line);
   if (parentId) normalized.parentId = parentId;
   if (createdAt) normalized.createdAt = createdAt;
+  if (line) normalized.line = line;
   return normalized;
 }
 
@@ -342,6 +559,96 @@ export function pluginRepositoryInput(value: unknown): JsonRecord {
   return body;
 }
 
+export function pullRequestListRequest(
+  repository: RepositoryInspection | null,
+  query: string,
+  state: string,
+): { actionKey: "pullrequests.search" | "pullrequests.queue"; body: JsonRecord } {
+  const parsed = parsePullRequestListQuery(query, state);
+  if (repository) {
+    return {
+      actionKey: "pullrequests.search",
+      body: { repository: pluginRepositoryInput(repository), query: parsed.query, state: parsed.state },
+    };
+  }
+  return { actionKey: "pullrequests.queue", body: { view: "queue", query: parsed.query, state: parsed.state } };
+}
+
+const PULL_REQUEST_STATES = new Set(["open", "all", "merged", "declined"]);
+const PULL_REQUEST_STATE_TOKEN = /(^|\s)state:(open|all|merged|declined)(?=\s|$)/gi;
+
+function normalizedPullRequestState(value: string): string {
+  const state = value.trim().toLowerCase();
+  return PULL_REQUEST_STATES.has(state) ? state : "open";
+}
+
+export function pullRequestScopeQuery(state: string): string {
+  return `state:${normalizedPullRequestState(state)}`;
+}
+
+export function parsePullRequestListQuery(
+  query: string,
+  fallbackState: string,
+): { query: string; state: string } {
+  let state = normalizedPullRequestState(fallbackState);
+  const textQuery = query.replace(
+    PULL_REQUEST_STATE_TOKEN,
+    (_match, prefix: string, value: string) => {
+      state = normalizedPullRequestState(value);
+      return prefix;
+    },
+  );
+  return { query: textQuery.trim().replace(/\s+/g, " "), state };
+}
+
+const MAX_SAVED_QUERIES = 50;
+
+export function normalizeSavedQueries(value: unknown): SavedQuery[] {
+  return array(value)
+    .flatMap((entry): SavedQuery[] => {
+      const source = record(entry);
+      const id = string(source.id);
+      const label = string(source.label);
+      const query = typeof source.query === "string" ? source.query.trim() : undefined;
+      const repositoryId =
+        typeof source.repositoryId === "string" ? source.repositoryId.trim() : undefined;
+      const state = string(source.state);
+      const createdAt = string(source.createdAt);
+      if (
+        !id ||
+        !label ||
+        query === undefined ||
+        repositoryId === undefined ||
+        !state ||
+        !PULL_REQUEST_STATES.has(state.toLowerCase()) ||
+        !createdAt
+      ) {
+        return [];
+      }
+      return [{ id, label, query, repositoryId, state: state.toLowerCase(), createdAt }];
+    })
+    .slice(-MAX_SAVED_QUERIES);
+}
+
+export function canSaveDashboardQuery(query: string, repositoryId: string): boolean {
+  return Boolean(query.trim() || repositoryId.trim());
+}
+
+export function newSavedQuery(
+  input: Pick<SavedQuery, "label" | "query" | "repositoryId" | "state">,
+  id: string,
+  createdAt: string,
+): SavedQuery {
+  return {
+    id,
+    label: input.label.trim(),
+    query: input.query.trim(),
+    repositoryId: input.repositoryId.trim(),
+    state: normalizedPullRequestState(input.state),
+    createdAt,
+  };
+}
+
 export function normalizePullRequests(value: unknown): PullRequest[] {
   return itemList(value, ["pull_requests", "pullRequests", "items", "values"])
     .map((item) => {
@@ -352,40 +659,121 @@ export function normalizePullRequests(value: unknown): PullRequest[] {
         string(source.uuid) ??
         String(number(source.number) ?? number(source.id) ?? "");
       const repository = record(source.repository);
-      const repositoryId = string(source.repository_id) ?? string(source.repositoryId) ?? string(repository.id) ?? "";
+      const repositorySlug = string(repository.slug) ?? string(repository.name);
+      const repositoryNamespace =
+        string(record(repository.project).key) ??
+        string(record(repository.owner).username) ??
+        string(record(repository.workspace).slug);
+      const repositoryId =
+        string(source.repository_id) ??
+        string(source.repositoryId) ??
+        string(repository.full_name) ??
+        (repositoryNamespace && repositorySlug ? `${repositoryNamespace}/${repositorySlug}` : undefined) ??
+        string(repository.id) ??
+        "";
       const numberValue = number(source.number) ?? number(source.id) ?? 0;
       const title = string(source.title) ?? `Pull request ${numberValue || id}`;
       if (!id || !repositoryId || !numberValue) return null;
       const status = record(source.status);
       const state = string(source.state) ?? string(source.status) ?? "UNKNOWN";
+      const reviewKey = string(source.review_key) ?? string(source.reviewKey) ?? `${repositoryId}:${id}`;
+      const author = record(source.author);
+      const sourceRef = record(source.source);
+      const destinationRef = record(source.destination);
+      const fromRef = record(source.fromRef);
+      const toRef = record(source.toRef);
       return {
-        key: string(source.review_key) ?? string(source.reviewKey) ?? `${repositoryId}:${id}`,
+        key: reviewKey,
         id,
         number: numberValue,
         title,
-        url: string(source.url) ?? string(source.links) ?? "",
+        url: string(source.url) ?? pullRequestURL(source.links) ?? "",
         repositoryId,
         repositoryName: string(source.repository_name) ?? string(source.repositoryName) ?? string(repository.name) ?? repositoryId,
         state,
-        author: string(source.author) ?? string(record(source.author).display_name) ?? string(record(source.author).name),
-        updatedAt: string(source.updated_at) ?? string(source.updatedAt),
+        author:
+          string(source.author_display_name) ??
+          string(source.authorDisplayName) ??
+          string(author.display_name) ??
+          string(author.displayName) ??
+          string(author.name) ??
+          string(source.author),
+        authorUrl: string(source.author_url) ?? string(source.authorUrl) ?? personLink(author, "html"),
+        authorAvatarUrl:
+          string(source.author_avatar_url) ??
+          string(source.authorAvatarUrl) ??
+          personLink(author, "avatar"),
+        createdAt:
+          timestamp(source.created_at) ??
+          timestamp(source.createdAt) ??
+          timestamp(source.created_on) ??
+          timestamp(source.createdDate),
+        updatedAt:
+          timestamp(source.updated_at) ??
+          timestamp(source.updatedAt) ??
+          timestamp(source.updated_on) ??
+          timestamp(source.updatedDate),
+        mergedAt: timestamp(source.merged_at) ?? timestamp(source.mergedAt),
+        closedAt: timestamp(source.closed_at) ?? timestamp(source.closedAt),
+        sourceBranch:
+          string(source.source_branch) ??
+          string(source.sourceBranch) ??
+          string(record(sourceRef.branch).name) ??
+          string(sourceRef.branch) ??
+          string(fromRef.displayId) ??
+          string(fromRef.id)?.replace(/^refs\/heads\//, ""),
+        destinationBranch:
+          string(source.destination_branch) ??
+          string(source.destinationBranch) ??
+          string(record(destinationRef.branch).name) ??
+          string(destinationRef.branch) ??
+          string(toRef.displayId) ??
+          string(toRef.id)?.replace(/^refs\/heads\//, ""),
+        headCommit:
+          string(source.head_commit) ??
+          string(source.headCommit) ??
+          string(record(sourceRef.commit).hash) ??
+          string(fromRef.latestCommit),
         statusLabel: string(status.label) ?? string(source.status_label) ?? string(source.statusLabel),
         statusTone: statusTone(string(status.state) ?? state),
+        tasks: normalizeTaskLinks(source.associations ?? source.tasks, reviewKey),
         capabilities: toCapabilities(source.capabilities),
       };
     })
     .flatMap((item): PullRequest[] => (item ? [item] : []));
 }
 
+function isCurrentUserParticipant(participant: JsonRecord): boolean {
+  const user = record(participant.user);
+  return participant.is_current_user === true ||
+    participant.isCurrentUser === true ||
+    participant.currentUser === true ||
+    user.is_current_user === true ||
+    user.isCurrentUser === true;
+}
+
+function normalizeViewerApproval(source: JsonRecord, participants: unknown[]): boolean | undefined {
+  const direct =
+    boolean(source.viewer_approved) ??
+    boolean(source.viewerApproved) ??
+    boolean(source.current_user_approved) ??
+    boolean(source.currentUserApproved);
+  if (direct !== undefined) return direct;
+  const viewer = participants.map(record).find(isCurrentUserParticipant);
+  if (!viewer) return undefined;
+  return boolean(viewer.approved) ?? (string(viewer.status)?.toUpperCase() === "APPROVED");
+}
+
 export function normalizeReviewDetail(value: unknown): ReviewDetail | null {
   const source = record(value);
   const pr = normalizePullRequests({ pull_requests: [source] })[0];
   if (!pr) return null;
+  const participantItems = itemList(source.participants ?? source.reviewers, ["items", "values"]);
   return {
     ...pr,
-    description: string(source.description),
-    sourceBranch: string(source.source_branch) ?? string(record(source.source).branch),
-    destinationBranch: string(source.destination_branch) ?? string(record(source.destination).branch),
+    description: string(source.description) ?? string(record(source.description).raw),
+    sourceBranch: pr.sourceBranch,
+    destinationBranch: pr.destinationBranch,
     files: itemList(source.files, ["items", "values"]).flatMap((entry) => {
       const file = record(entry);
       const path = string(file.path) ?? string(file.name);
@@ -398,10 +786,36 @@ export function normalizeReviewDetail(value: unknown): ReviewDetail | null {
       const id = string(commit.id) ?? string(commit.hash);
       return id ? [{ id, message: string(commit.message) ?? id, author: string(commit.author) ?? string(record(commit.author).name) }] : [];
     }),
-    participants: itemList(source.participants, ["items", "values"]).flatMap((entry) => {
+    participants: participantItems.flatMap((entry) => {
       const participant = record(entry);
-      const name = string(participant.name) ?? string(participant.display_name) ?? string(record(participant.user).display_name);
-      return name ? [{ name, role: string(participant.role), approved: participant.approved === true }] : [];
+      const user = record(participant.user);
+      const name =
+        string(participant.name) ??
+        string(participant.display_name) ??
+        string(participant.displayName) ??
+        string(user.display_name) ??
+        string(user.displayName) ??
+        string(user.name);
+      const approved =
+        boolean(participant.approved) ??
+        (string(participant.status)?.toUpperCase() === "APPROVED");
+      const isCurrentUser =
+        boolean(participant.is_current_user) ??
+        boolean(participant.isCurrentUser) ??
+        boolean(participant.currentUser) ??
+        boolean(user.is_current_user) ??
+        boolean(user.isCurrentUser);
+      return name
+        ? [{
+            id: string(participant.id) ?? string(user.account_id) ?? string(user.slug),
+            name,
+            role: string(participant.role),
+            approved,
+            isCurrentUser,
+            url: personLink(user, "html"),
+            avatarUrl: personLink(user, "avatar"),
+          }]
+        : [];
     }),
     threads: itemList(source.threads, ["items", "values"]).flatMap((entry) => {
       const thread = record(entry);
@@ -417,22 +831,167 @@ export function normalizeReviewDetail(value: unknown): ReviewDetail | null {
         id,
         author: rootComment?.author ?? string(thread.author) ?? string(record(thread.author).display_name) ?? "Unknown",
         body: rootComment?.body ?? string(thread.body) ?? string(thread.content) ?? "",
-        createdAt: rootComment?.createdAt ?? string(thread.created_at) ?? string(thread.createdAt),
+        createdAt: rootComment?.createdAt ?? timestamp(thread.created_at) ?? timestamp(thread.createdAt),
         resolved: thread.resolved === true,
         file: string(thread.file) ?? string(thread.path),
         comments: comments.length > 0 ? comments : [{ id, author: string(thread.author) ?? string(record(thread.author).display_name) ?? "Unknown", body: string(thread.body) ?? string(thread.content) ?? "" }],
       }];
     }),
-    statuses: itemList(source.statuses, ["items", "values"]).flatMap((entry) => {
+    statuses: itemList(source.statuses ?? source.builds, ["items", "values"]).flatMap((entry) => {
       const status = record(entry);
       const key = string(status.key) ?? string(status.id);
       const name = string(status.name) ?? key;
       const state = string(status.state);
+      const url = string(status.url) ?? pullRequestURL(status.links);
+      const target = string(status.target) ?? string(status.refname);
+      const output = string(status.output) ?? string(status.description);
+      const startedAt =
+        timestamp(status.started_at) ??
+        timestamp(status.startedAt) ??
+        timestamp(status.created_on) ??
+        timestamp(status.createdDate);
+      const completedAt =
+        timestamp(status.completed_at) ??
+        timestamp(status.completedAt) ??
+        timestamp(status.updated_on) ??
+        timestamp(status.updatedDate);
       return key && name && state
-        ? [{ key, name, state, url: string(status.url), target: string(status.target) }]
+        ? [{
+            key,
+            name,
+            state,
+            ...(url ? { url } : {}),
+            ...(target ? { target } : {}),
+            ...(output ? { output } : {}),
+            ...(startedAt ? { startedAt } : {}),
+            ...(completedAt ? { completedAt } : {}),
+          }]
         : [];
     }),
+    viewerApproved: normalizeViewerApproval(source, participantItems),
   };
+}
+
+function hostChangeRequestState(value: string): string {
+  const state = value.trim().toUpperCase();
+  if (state === "MERGED") return "merged";
+  if (["DECLINED", "CLOSED", "SUPERSEDED"].includes(state)) return "closed";
+  if (state === "DRAFT") return "draft";
+  return "open";
+}
+
+export function changeRequestDetailModel(detail: ReviewDetail): HostChangeRequestDetail {
+  const reviewers = detail.participants.filter((participant) =>
+    ["REVIEWER", "APPROVER"].includes(participant.role?.toUpperCase() ?? "REVIEWER"),
+  );
+  const approved = reviewers.filter((participant) => participant.approved);
+  const requested = reviewers.filter((participant) => !participant.approved);
+  const person = (participant: ReviewDetail["participants"][number]) => ({
+    name: participant.name,
+    ...(participant.url ? { url: participant.url } : {}),
+    ...(participant.avatarUrl ? { avatarUrl: participant.avatarUrl } : {}),
+  });
+  const comments = detail.threads.flatMap((thread) =>
+    thread.comments.map((comment) => ({
+      id: comment.id,
+      ...(comment.parentId ? { parentId: comment.parentId } : {}),
+      author: { name: comment.author },
+      body: comment.body,
+      ...(comment.createdAt ? { createdAt: comment.createdAt } : {}),
+      ...(thread.file ? { path: thread.file } : {}),
+      ...(comment.line ? { line: comment.line } : {}),
+      resolved: thread.resolved,
+    })),
+  );
+  return {
+    providerId: "bitbucket",
+    reviewKey: detail.key,
+    number: detail.number,
+    title: detail.title,
+    url: detail.url,
+    state: hostChangeRequestState(detail.state),
+    ...(detail.state.trim().toUpperCase() === "DRAFT" ? { draft: true } : {}),
+    author: {
+      name: detail.author ?? "Unknown",
+      ...(detail.authorUrl ? { url: detail.authorUrl } : {}),
+      ...(detail.authorAvatarUrl ? { avatarUrl: detail.authorAvatarUrl } : {}),
+    },
+    ...(detail.createdAt ? { createdAt: detail.createdAt } : {}),
+    ...(detail.mergedAt ? { mergedAt: detail.mergedAt } : {}),
+    ...(detail.closedAt ? { closedAt: detail.closedAt } : {}),
+    sourceBranch: detail.sourceBranch ?? "source",
+    targetBranch: detail.destinationBranch ?? "destination",
+    additions: detail.files.reduce((total, file) => total + (file.additions ?? 0), 0),
+    deletions: detail.files.reduce((total, file) => total + (file.deletions ?? 0), 0),
+    ...(detail.description ? { description: detail.description } : {}),
+    ...(approved.length > 0
+      ? { reviewState: "approved" }
+      : requested.length > 0
+        ? { reviewState: "pending" }
+        : {}),
+    ...(requested.length > 0 ? { pendingReviewCount: requested.length } : {}),
+    reviews: approved.map((participant) => ({
+      id: participant.id ?? participant.name,
+      author: person(participant),
+      state: "APPROVED",
+    })),
+    requestedReviewers: requested.map(person),
+    checks: detail.statuses.map((status) => ({
+      id: status.key,
+      name: status.name,
+      state: status.state,
+      ...(status.url ? { url: status.url } : {}),
+      ...(status.output ? { output: status.output } : {}),
+      ...(status.startedAt ? { startedAt: status.startedAt } : {}),
+      ...(status.completedAt ? { completedAt: status.completedAt } : {}),
+    })),
+    comments,
+    ...(detail.updatedAt ? { lastSyncedAt: detail.updatedAt } : {}),
+  };
+}
+
+export function changeRequestDetailActions(
+  detail: ReviewDetail,
+): HostChangeRequestDetailAction[] {
+  if (hostChangeRequestState(detail.state) !== "open") return [];
+  const can = (capability: string) => detail.capabilities.includes(capability);
+  const actions: HostChangeRequestDetailAction[] = [];
+  if (can("approve")) {
+    actions.push(detail.viewerApproved
+      ? {
+          id: "unapprove",
+          label: "Remove approval",
+          pendingLabel: "Removing approval…",
+          placement: "header",
+          tone: "secondary",
+        }
+      : {
+          id: "approve",
+          label: "Approve",
+          pendingLabel: "Approving…",
+          placement: "header",
+          tone: "success",
+        });
+  }
+  if (can("merge")) {
+    actions.push({ id: "merge", label: "Merge", pendingLabel: "Merging…", placement: "header" });
+  }
+  if (can("decline")) {
+    actions.push({
+      id: "decline",
+      label: "Decline",
+      pendingLabel: "Declining…",
+      placement: "header",
+      tone: "danger",
+    });
+  }
+  if (can("comments")) {
+    actions.push({ id: "comment", label: "Comment", placement: "comment", input: "text" });
+  }
+  if (can("thread_replies")) {
+    actions.push({ id: "reply", label: "Reply", placement: "thread", input: "text" });
+  }
+  return actions;
 }
 
 export function connectionIdentity(product: string, authMethod: string): ConnectionIdentity | null {
@@ -475,12 +1034,84 @@ export function currentWatchFilter(query: string, state: string): JsonRecord {
   return { query: query.trim(), states: state === "all" ? [] : [state] };
 }
 
-export function launchPresets(): LaunchPreset[] {
+export function taskLaunchPresets(): TaskLaunchPreset[] {
   return [
-    { id: "default", name: "Default" },
-    { id: "review", name: "Review and test" },
-    { id: "implement", name: "Implement change" },
+    {
+      id: "review",
+      label: "Review",
+      hint: "Read the diff, flag issues",
+      iconName: "eye",
+      prompt: (pullRequest) => `Review Bitbucket pull request ${pullRequest.url || pullRequest.key}. Inspect the changes, run relevant tests, and report concrete findings.`,
+    },
+    {
+      id: "address-feedback",
+      label: "Address feedback",
+      hint: "Apply review comments",
+      iconName: "message",
+      prompt: (pullRequest) => `Address the review feedback on Bitbucket pull request ${pullRequest.url || pullRequest.key}. Make the requested changes, verify them, and summarize what changed.`,
+    },
+    {
+      id: "fix-ci",
+      label: "Fix CI",
+      hint: "Diagnose failing checks",
+      iconName: "tool",
+      prompt: (pullRequest) => `Fix the failing CI checks on Bitbucket pull request ${pullRequest.url || pullRequest.key}. Reproduce the failures, implement the smallest correct fix, and run the relevant checks.`,
+    },
   ];
+}
+
+export function taskDialogInitialValues(
+  pullRequest: PullRequest,
+  preset: TaskLaunchPreset,
+  hostRepositoryId?: string,
+  remoteRepository?: RepositoryInspection,
+): JsonRecord {
+  const values: JsonRecord = {
+    title: `${preset.label}: ${pullRequest.title}`,
+    description: preset.prompt(pullRequest),
+  };
+  if (hostRepositoryId) values.repositoryId = hostRepositoryId;
+  else if (pullRequest.url) {
+    values.remoteUrl = pullRequest.url;
+    if (remoteRepository) values.remoteRepository = remoteRepository;
+  }
+  if (pullRequest.sourceBranch) {
+    values.branch = pullRequest.sourceBranch;
+    values.checkoutBranch = pullRequest.sourceBranch;
+  }
+  return values;
+}
+
+export function usePluginTaskCreation(hostRepositoryId?: string): boolean {
+  return !hostRepositoryId?.trim();
+}
+
+export function taskLaunchBody(
+  pullRequest: PullRequest,
+  payload: JsonRecord,
+  launchId: string,
+): JsonRecord {
+  const task: JsonRecord = {
+    title: string(payload.title) ?? "",
+    description: string(payload.description) ?? "",
+    workflow_id: string(payload.workflow_id) ?? "",
+    start_agent: payload.start_agent === true,
+    plan_mode: payload.plan_mode === true,
+  };
+  const workflowStepID = string(payload.workflow_step_id);
+  const agentProfileID = string(payload.agent_profile_id);
+  const executorProfileID = string(payload.executor_profile_id);
+  if (workflowStepID) task.workflow_step_id = workflowStepID;
+  if (agentProfileID) task.agent_profile_id = agentProfileID;
+  if (executorProfileID) task.executor_profile_id = executorProfileID;
+  return { review_key: pullRequest.key, launch_id: launchId, task };
+}
+
+export function taskFromLaunchResult(value: unknown): JsonRecord {
+  const result = record(value);
+  const taskID = string(result.task_id);
+  if (!taskID) throw new Error("Bitbucket task launch returned no task id.");
+  return { id: taskID, bitbucketLinked: result.linked === true };
 }
 
 export function normalizeWatches(value: unknown): WatchSummary[] {

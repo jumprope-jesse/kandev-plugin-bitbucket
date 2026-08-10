@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"kandev-plugin-bitbucket/internal/domain"
@@ -121,11 +122,32 @@ func TestDataCenterSearchPullRequestsPageResumesStartCursorAndMapsAuthor(t *test
 	require.Empty(t, second.NextCursor)
 }
 
+func TestDataCenterMapsPullRequestDisplayAuthorAndCreatedTime(t *testing.T) {
+	client, err := NewClient(ClientOptions{
+		ConnectionOptions: ConnectionOptions{BaseURL: "https://dc.example.test/bitbucket"},
+		TokenSource:       staticTokenSource("dc-token"),
+	})
+	require.NoError(t, err)
+	var payload pullRequestPayload
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id":42,"title":"Fix race","state":"OPEN","createdDate":1785499200000,
+		"author":{"slug":"ada","displayName":"Ada Lovelace"},
+		"fromRef":{"displayId":"feature/race"},
+		"toRef":{"displayId":"main","repository":{"defaultBranch":"main"}}
+	}`), &payload))
+
+	pullRequest, err := client.mapPullRequest(domain.Repository{Namespace: "ENG", Slug: "widgets"}, payload)
+	require.NoError(t, err)
+	require.Equal(t, "ada", pullRequest.Author)
+	require.Equal(t, "Ada Lovelace", pullRequest.AuthorDisplayName)
+	require.Equal(t, time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC), pullRequest.CreatedAt)
+}
+
 func TestDataCenterGetReviewMapsGoldenReviewData(t *testing.T) {
 	responses := map[string]string{
 		"/bitbucket/rest/api/latest/projects/ENG/repos/widgets/pull-requests/42":         "review-pullrequest.json",
 		"/bitbucket/rest/api/latest/projects/ENG/repos/widgets/pull-requests/42/commits": "review-commits.json",
-		"/bitbucket/rest/build-status/latest/commits/dest-hash":                          "review-statuses.json",
+		"/bitbucket/rest/build-status/latest/commits/source-hash":                        "review-statuses.json",
 		"/bitbucket/rest/api/latest/projects/ENG/repos/widgets/pull-requests/42.diff":    "review.diff",
 		"/bitbucket/rest/api/latest/projects/ENG/repos/widgets/pull-requests/42/changes": "review-changes.json",
 	}
@@ -140,7 +162,7 @@ func TestDataCenterGetReviewMapsGoldenReviewData(t *testing.T) {
 				return
 			}
 		}
-		if r.URL.Path == "/bitbucket/rest/api/latest/projects/ENG/repos/widgets/pull-requests/42/commits" || r.URL.Path == "/bitbucket/rest/build-status/latest/commits/dest-hash" {
+		if r.URL.Path == "/bitbucket/rest/api/latest/projects/ENG/repos/widgets/pull-requests/42/commits" || r.URL.Path == "/bitbucket/rest/build-status/latest/commits/source-hash" {
 			require.Equal(t, "100", r.URL.Query().Get("limit"))
 			if r.URL.Query().Get("start") == "1" {
 				fixture, ok := responses[r.URL.Path]
@@ -187,8 +209,12 @@ func TestDataCenterGetReviewMapsGoldenReviewData(t *testing.T) {
 	require.Equal(t, "diff --git a/race.go b/race.go\nindex 1111111..2222222 100644\n--- a/race.go\n+++ b/race.go\n@@ -1 +1 @@\n-unsafe()\n+safe()\n", review.Diff)
 	require.Equal(t, []domain.Commit{{Hash: "source-hash", Message: "Fix race", Author: "Ada"}, {Hash: "source-hash-2", Message: "Add coverage", Author: "Bob"}}, review.Commits)
 	require.Equal(t, []domain.Participant{{ID: "ada", Name: "Ada", Role: "REVIEWER", Approved: true}}, review.Participants)
-	require.Equal(t, []domain.Thread{{ID: "10", Comments: []domain.Comment{{ID: "10", Author: "Ada", Body: "Please add a test."}, {ID: "11", ParentID: "10", Author: "Bob", Body: "Done."}}}}, review.Threads)
-	require.Equal(t, []domain.BuildStatus{{Key: "build-7", Name: "CI", State: "SUCCESSFUL", URL: "https://ci.example.test/build/7", Target: "dest-hash"}, {Key: "build-8", Name: "Lint", State: "FAILED", URL: "https://ci.example.test/build/8", Target: "dest-hash"}}, review.Statuses)
+	require.Equal(t, "dev", review.ViewerID)
+	require.Equal(t, []domain.Thread{{ID: "10", Comments: []domain.Comment{
+		{ID: "10", Author: "Ada", Body: "Please add a test.", When: time.Date(2026, time.July, 31, 12, 1, 0, 0, time.UTC)},
+		{ID: "11", ParentID: "10", Author: "Bob", Body: "Done.", When: time.Date(2026, time.July, 31, 12, 2, 0, 0, time.UTC)},
+	}}}, review.Threads)
+	require.Equal(t, []domain.BuildStatus{{Key: "build-7", Name: "CI", State: "SUCCESSFUL", URL: "https://ci.example.test/build/7", Target: "source-hash"}, {Key: "build-8", Name: "Lint", State: "FAILED", URL: "https://ci.example.test/build/8", Target: "source-hash"}}, review.Statuses)
 	require.Equal(t, []domain.ReviewFile{{
 		Path:      "race.go",
 		Status:    "modified",

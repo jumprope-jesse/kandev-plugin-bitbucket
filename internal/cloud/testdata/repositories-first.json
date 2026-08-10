@@ -8,7 +8,7 @@
       "mainbranch": {"name": "main"},
       "links": {
         "clone": [
-          {"name": "https", "href": "https://bitbucket.org/acme/widgets.git"},
+          {"name": "https", "href": "https://api-token-auth-user@bitbucket.org/acme/widgets.git"},
           {"name": "ssh", "href": "git@bitbucket.org:acme/widgets.git"}
         ]
       }

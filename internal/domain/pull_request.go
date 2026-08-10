@@ -1,6 +1,9 @@
 package domain
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Branch is a provider-neutral Git branch.
 type Branch struct {
@@ -21,11 +24,13 @@ type PullRequest struct {
 	State       string
 	// Author is the provider's canonical PR author identity (Cloud account id
 	// or Data Center user slug), not a display label.
-	Author       string
-	Source       Branch
-	Destination  Branch
-	URL          string
-	Capabilities Capabilities
+	Author            string
+	AuthorDisplayName string
+	CreatedAt         time.Time
+	Source            Branch
+	Destination       Branch
+	URL               string
+	Capabilities      Capabilities
 }
 
 // Key returns the stable external identity used for links and watch deduplication.

@@ -122,6 +122,25 @@ func TestRepositorySearchProviderDispatchesDataCenterSearch(t *testing.T) {
 	require.Equal(t, 7, searcher.limit)
 }
 
+func TestRepositorySearchProviderForwardsPullRequestPaging(t *testing.T) {
+	pullRequest := testPullRequest()
+	query := domain.PullRequestQuery{Repository: pullRequest.Repository, State: "OPEN", Cursor: "page-2", Limit: 37}
+	expected := domain.PullRequestPage{PullRequests: []domain.PullRequest{pullRequest}, NextCursor: "page-3"}
+	pager := &pagedWorkflowProvider{pages: map[string]domain.PullRequestPage{"page-2": expected}}
+	provider := repositorySearchProvider{Provider: pager, workspace: "acme"}
+
+	forwarded, ok := any(provider).(domain.PullRequestPager)
+	require.True(t, ok, "repository wrapper must retain the provider paging contract")
+	if !ok {
+		return
+	}
+	page, err := forwarded.SearchPullRequestsPage(context.Background(), query)
+
+	require.NoError(t, err)
+	require.Equal(t, expected, page)
+	require.Equal(t, []string{"page-2"}, pager.cursors)
+}
+
 type cloudRepositorySearcher struct {
 	workflowProvider
 	workspace string

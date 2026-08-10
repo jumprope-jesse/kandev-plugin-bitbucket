@@ -585,7 +585,7 @@ func TestConnectionResolver_AllowsOnlyVerifiedForkSourceCredentialScope(t *testi
 			ID: "task-1", WorkspaceID: "workspace-1", Repositories: []pluginsdk.TaskRepository{{RepositoryID: "fork-repository", CheckoutBranch: "feature"}},
 		}},
 		repositories: &repositoryReader{repositories: []pluginsdk.Repository{{
-			ID: "fork-repository", WorkspaceID: "workspace-1", SourceType: "provider", ProviderID: "bitbucket", ProviderHost: "bitbucket.org",
+			ID: "fork-repository", WorkspaceID: "workspace-1", SourceType: "provider", ProviderID: "bitbucket", ProviderHost: "https://bitbucket.org",
 			OwnerOrProject: "fork", ProviderRepositoryID: "fork-uuid", ProviderName: "repo", Name: "repo", RemoteURL: "https://bitbucket.org/fork/repo.git",
 		}}},
 	}
@@ -613,6 +613,11 @@ func TestConnectionResolver_AllowsOnlyVerifiedForkSourceCredentialScope(t *testi
 	host.repositories.repositories[0].ProviderName = "other"
 	require.ErrorIs(t, resolver.ValidateGitCredentialScope(context.Background(), scope), ErrCredentialUnavailable)
 	host.repositories.repositories[0].ProviderName = "repo"
+	host.repositories.repositories[0].ProviderHost = "https://user@bitbucket.org"
+	require.ErrorIs(t, resolver.ValidateGitCredentialScope(context.Background(), scope), ErrCredentialUnavailable)
+	host.repositories.repositories[0].ProviderHost = "https://bitbucket.org/path"
+	require.ErrorIs(t, resolver.ValidateGitCredentialScope(context.Background(), scope), ErrCredentialUnavailable)
+	host.repositories.repositories[0].ProviderHost = "https://bitbucket.org"
 	host.repositories.repositories[0].RemoteURL = "https://bitbucket.org/fork/repo.git?credential=leak"
 	require.ErrorIs(t, resolver.ValidateGitCredentialScope(context.Background(), scope), ErrCredentialUnavailable)
 }

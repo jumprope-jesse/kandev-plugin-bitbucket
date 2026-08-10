@@ -1,0 +1,178 @@
+import {
+  normalizePullRequests,
+  normalizeReviewDetail,
+  type BuildStatus,
+  type PullRequest,
+  type ReviewDetail,
+} from "./view-models";
+
+type ActionInput = {
+  workspaceId?: string;
+  taskId?: string;
+  body?: unknown;
+};
+
+type InvokeAction = <T>(
+  key: string,
+  input?: ActionInput,
+  options?: { signal?: AbortSignal },
+) => Promise<T>;
+
+export type PullRequestWithStatus = PullRequest & {
+  statuses?: BuildStatus[];
+  participants?: ReviewDetail["participants"];
+  threads?: ReviewDetail["threads"];
+};
+
+export type ChangeRequestStatusView = {
+  number: number | string;
+  state: "open" | "merged" | "closed" | "draft";
+  pipelineState: "success" | "failure" | "pending" | "neutral";
+  checks: Array<{
+    id: string;
+    label: string;
+    state: "success" | "failure" | "pending" | "neutral";
+    detail?: string;
+    url?: string;
+  }>;
+  review?: {
+    state: "approved" | "changes_requested" | "pending";
+    approved: number;
+    required?: number;
+    requested?: number;
+  };
+  unresolvedComments?: number;
+  updatedAt?: number;
+};
+
+export type ReviewSummaryForHost = {
+  providerId: "bitbucket";
+  reviewKey: string;
+  title: string;
+  url: string;
+  repositoryId: string;
+  state: string;
+  statusBadge?: { label: string; tone?: string };
+  taskStatus: ChangeRequestStatusView;
+};
+
+export async function loadTaskPullRequestDetails(
+  invokeAction: InvokeAction,
+  context: { taskId: string; workspaceId?: string },
+  signal: AbortSignal,
+): Promise<PullRequestWithStatus[]> {
+  const scope = {
+    ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+    taskId: context.taskId,
+  };
+  const linkedResponse = await invokeAction<unknown>(
+    "pullrequests.get",
+    { ...scope, body: { view: "task" } },
+    { signal },
+  );
+  const linked = normalizePullRequests(linkedResponse);
+  return Promise.all(linked.map(async (pullRequest) => {
+    const detailResponse = await invokeAction<unknown>(
+      "pullrequests.get",
+      {
+        ...scope,
+        body: {
+          review_key: pullRequest.key,
+          pull_request_id: pullRequest.id,
+          include: ["participants", "threads", "status"],
+        },
+      },
+      { signal },
+    );
+    return normalizeReviewDetail(detailResponse) ?? pullRequest;
+  }));
+}
+
+function normalizePipelineState(value: string): "success" | "failure" | "pending" | "neutral" {
+  const state = value.trim().toUpperCase();
+  if (["SUCCESS", "SUCCESSFUL", "PASSED", "COMPLETED"].includes(state)) return "success";
+  if (["FAILED", "FAILURE", "ERROR", "STOPPED"].includes(state)) return "failure";
+  if (["PENDING", "INPROGRESS", "IN_PROGRESS", "RUNNING"].includes(state)) return "pending";
+  return "neutral";
+}
+
+function pullRequestState(value: string): "open" | "merged" | "closed" | "draft" {
+  const state = value.trim().toUpperCase();
+  if (state === "MERGED") return "merged";
+  if (state === "DRAFT") return "draft";
+  if (["DECLINED", "CLOSED", "SUPERSEDED"].includes(state)) return "closed";
+  return "open";
+}
+
+export function changeRequestStatusView(
+  pullRequest: PullRequestWithStatus,
+  refreshedAt = Date.now(),
+): ChangeRequestStatusView {
+  const checks = (pullRequest.statuses ?? []).map((status) => ({
+    id: status.key,
+    label: status.name,
+    state: normalizePipelineState(status.state),
+    ...(status.target ? { detail: status.target } : {}),
+    ...(status.url ? { url: status.url } : {}),
+  }));
+  const states = checks.map((row) => row.state);
+  const reviewers = "participants" in pullRequest && Array.isArray(pullRequest.participants)
+    ? pullRequest.participants.filter((participant) =>
+        ["REVIEWER", "APPROVER"].includes(participant.role?.toUpperCase() ?? "REVIEWER"),
+      )
+    : [];
+  const approved = reviewers.filter((participant) => participant.approved).length;
+  const requested = reviewers.length - approved;
+  const unresolvedComments = "threads" in pullRequest && Array.isArray(pullRequest.threads)
+    ? pullRequest.threads.filter((thread) => !thread.resolved).length
+    : 0;
+  const providerUpdatedAt = pullRequest.updatedAt ? Date.parse(pullRequest.updatedAt) : Number.NaN;
+  const updatedAt = Number.isFinite(providerUpdatedAt) ? providerUpdatedAt : refreshedAt;
+  const pipelineState = states.includes("failure")
+    ? "failure"
+    : states.includes("pending")
+      ? "pending"
+      : states.length > 0 && states.every((state) => state === "success")
+        ? "success"
+        : "neutral";
+  return {
+    number: pullRequest.number,
+    state: pullRequestState(pullRequest.state),
+    pipelineState,
+    checks,
+    ...(reviewers.length > 0
+      ? {
+          review: {
+            state: approved > 0 ? "approved" as const : "pending" as const,
+            approved,
+            ...(requested > 0 ? { requested } : {}),
+          },
+        }
+      : {}),
+    ...(unresolvedComments > 0 ? { unresolvedComments } : {}),
+    updatedAt,
+  };
+}
+
+export function reviewSummaryForPullRequest(
+  pullRequest: PullRequestWithStatus,
+  refreshedAt = Date.now(),
+): ReviewSummaryForHost {
+  return {
+    providerId: "bitbucket",
+    reviewKey: pullRequest.key,
+    title: pullRequest.title,
+    url: pullRequest.url,
+    repositoryId: pullRequest.repositoryId,
+    state: pullRequest.state,
+    ...(pullRequest.statusLabel
+      ? {
+          statusBadge: {
+            label: pullRequest.statusLabel,
+            ...(pullRequest.statusTone ? { tone: pullRequest.statusTone } : {}),
+          },
+        }
+      : {}),
+    taskStatus: changeRequestStatusView(pullRequest, refreshedAt),
+  };
+}

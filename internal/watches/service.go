@@ -153,6 +153,45 @@ func (s *Service) List(ctx context.Context, workspaceID string) ([]Watch, error)
 	return watches, nil
 }
 
+// DetachTaskLink removes watch ownership of one task association without
+// deleting the task or forgetting the durable reservation. Keeping an
+// unowned link prevents a later poll from recreating or reattaching it.
+func (s *Service) DetachTaskLink(ctx context.Context, workspaceID, taskID, pullRequestKey string) error {
+	if workspaceID == "" || taskID == "" || pullRequestKey == "" {
+		return fmt.Errorf("workspace, task, and pull request key are required")
+	}
+	unlock := s.locks.lock(workspaceID)
+	defer unlock()
+	snapshot, err := s.repository.Load(ctx, workspaceID)
+	if err != nil {
+		return fmt.Errorf("load watch snapshot: %w", err)
+	}
+	changed := false
+	for id, watch := range snapshot.Watches {
+		normalizeWatch(&watch)
+		link, found := watch.Links[pullRequestKey]
+		if !found || link.TaskID != taskID || !link.Owned {
+			continue
+		}
+		link.Owned = false
+		watch.Links[pullRequestKey] = link
+		snapshot.Watches[id] = watch
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	if err := s.repository.Save(ctx, workspaceID, snapshot); err != nil {
+		return fmt.Errorf("save detached watch link: %w", err)
+	}
+	s.emit(ctx, "watch.link_detached", map[string]any{
+		"workspace_id":     workspaceID,
+		"task_id":          taskID,
+		"pull_request_key": pullRequestKey,
+	})
+	return nil
+}
+
 // Recover finalizes durable reservations left in creating state when the
 // process stopped after the host created a task but before state was saved.
 // It never creates or deletes tasks; a later Run safely retries reservations

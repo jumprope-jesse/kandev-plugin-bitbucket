@@ -1,6 +1,6 @@
 id: "kandev-plugin-bitbucket"
 api_version: 1
-version: "0.1.0"
+version: "0.1.10"
 display_name: "Bitbucket"
 description: "Connect Bitbucket Cloud or Data Center to native Kandev repository, pull-request, task, review, and watch workflows."
 author: "kdlbs"
@@ -23,6 +23,7 @@ runtime:
 capabilities:
   state: true
   secrets: true
+  user_state: true
   api_read: ["tasks", "workspaces", "workflows", "agent_profiles", "repositories"]
   api_write: ["tasks"]
 
@@ -42,6 +43,7 @@ actions:
   - { key: "repositories.inspect", scope: "workspace", max_body_bytes: 16384 }
   - { key: "branches.list", scope: "workspace", max_body_bytes: 16384 }
   - { key: "pullrequests.queue", scope: "workspace", max_body_bytes: 65536 }
+  - { key: "pullrequests.associations", scope: "workspace", max_body_bytes: 8192 }
   - { key: "pullrequests.search", scope: "workspace", max_body_bytes: 65536 }
   - { key: "pullrequests.get", scope: "task", max_body_bytes: 65536 }
   - { key: "pullrequests.inspect", scope: "workspace", max_body_bytes: 65536 }

@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"kandev-plugin-bitbucket/internal/domain"
+	"kandev-plugin-bitbucket/internal/watches"
 
 	"github.com/kandev/kandev/pkg/pluginsdk"
 	"github.com/stretchr/testify/require"
@@ -75,6 +77,359 @@ func TestPullRequestViewIncludesCanonicalAuthor(t *testing.T) {
 	pullRequest.Author = "cloud-account-ada"
 	require.Equal(t, "cloud-account-ada", pullRequestView(pullRequest)["author"])
 }
+
+func TestPullRequestViewIncludesHumanDisplayMetadata(t *testing.T) {
+	pullRequest := testPullRequest()
+	pullRequest.Author = "cloud-account-ada"
+	pullRequest.AuthorDisplayName = "Ada Lovelace"
+	pullRequest.CreatedAt = time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+
+	view := pullRequestView(pullRequest)
+	require.Equal(t, "cloud-account-ada", view["author"])
+	require.Equal(t, "Ada Lovelace", view["author_display_name"])
+	require.Equal(t, "2026-07-31T12:00:00Z", view["created_at"])
+}
+
+func TestWorkflows_PullRequestAssociationsPaginatesWorkspaceTasksAndSkipsEmptyLinks(t *testing.T) {
+	tasks := &associationTaskReader{pages: map[string]associationTaskPage{
+		"": {
+			tasks: []pluginsdk.Task{{ID: "task-1", Title: "Fix auth"}, {ID: "task-without-link", Title: "Unrelated"}},
+			info:  &pluginsdk.PageInfo{HasMore: true, NextCursor: "page-2"},
+		},
+		"page-2": {tasks: []pluginsdk.Task{{ID: "task-2", Title: "Review race"}}},
+	}}
+	host := &associationHost{connectionHost: newConnectionHost(), tasks: tasks}
+	provider := &workflowProvider{}
+	workflows, err := NewWorkflows(host, staticResolver{provider: provider})
+	require.NoError(t, err)
+	_, err = workflows.links.Link(context.Background(), "task-1", PullRequestLink{
+		Key: "workspace/repo#42", RepositoryID: "workspace/repo", URL: "https://bitbucket.org/workspace/repo/pull-requests/42", Number: 42,
+	})
+	require.NoError(t, err)
+	_, err = workflows.links.Link(context.Background(), "task-2", PullRequestLink{
+		Key: "workspace/repo#43", RepositoryID: "workspace/repo", URL: "https://bitbucket.org/workspace/repo/pull-requests/43", Number: 43,
+	})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.associations", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+	})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"associations":[
+		{"review_key":"workspace/repo#42","task_id":"task-1","task_title":"Fix auth"},
+		{"review_key":"workspace/repo#43","task_id":"task-2","task_title":"Review race"}
+	]}`, string(response.Body))
+	require.Equal(t, []string{"", "page-2"}, tasks.cursors)
+	require.Equal(t, []pluginsdk.TaskFilter{
+		{WorkspaceIDs: []string{"workspace-1"}}, {WorkspaceIDs: []string{"workspace-1"}},
+	}, tasks.filters)
+	require.Empty(t, provider.searchQueries, "association lookup must not call Bitbucket")
+	require.Zero(t, provider.getPullRequestCalls, "association lookup must not call Bitbucket")
+}
+
+func TestWorkflows_WatchOwnedLinksAppearInTaskAndWorkspaceAssociations(t *testing.T) {
+	ctx := context.Background()
+	tasks := &associationTaskReader{pages: map[string]associationTaskPage{
+		"": {tasks: []pluginsdk.Task{{ID: "watch-task", Title: "Watch-created task"}}},
+	}}
+	host := &associationHost{connectionHost: newConnectionHost(), tasks: tasks}
+	pullRequest := testPullRequest()
+	provider := &workflowProvider{pullRequest: pullRequest}
+	workflows, err := NewWorkflows(host, staticResolver{provider: provider})
+	require.NoError(t, err)
+	_, err = workflows.watches.Create(ctx, watches.Watch{
+		ID: "watch-1", WorkspaceID: "workspace-1",
+		Links: map[string]watches.TaskLink{
+			pullRequest.Key(): {PullRequestKey: pullRequest.Key(), TaskID: "watch-task", Owned: true},
+		},
+	})
+	require.NoError(t, err)
+	_, err = workflows.links.Link(ctx, "watch-task", PullRequestLink{
+		Key: pullRequest.Key(), RepositoryID: "workspace/repo", URL: pullRequest.URL, Number: int64(pullRequest.Number),
+	})
+	require.NoError(t, err)
+	workflows, err = NewWorkflows(host, staticResolver{provider: provider})
+	require.NoError(t, err, "persisted watch links must survive a plugin restart")
+
+	taskResponse, err := workflows.HandleAction(ctx, &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.get", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "watch-task"},
+	})
+	require.NoError(t, err)
+	var taskResult struct {
+		PullRequests []map[string]any `json:"pull_requests"`
+	}
+	require.NoError(t, json.Unmarshal(taskResponse.Body, &taskResult))
+	require.Len(t, taskResult.PullRequests, 1, "manual and watch-owned associations must be deduplicated")
+	require.Equal(t, pullRequest.Key(), taskResult.PullRequests[0]["review_key"])
+
+	workspaceResponse, err := workflows.HandleAction(ctx, &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.associations", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+	})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"associations":[{"review_key":"workspace/repo#42","task_id":"watch-task","task_title":"Watch-created task"}]}`, string(workspaceResponse.Body))
+
+	_, err = workflows.HandleAction(ctx, &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.unlink",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "watch-task"},
+		Body:      []byte(`{"review_key":"workspace/repo#42"}`),
+	})
+	require.NoError(t, err)
+
+	taskResponse, err = workflows.HandleAction(ctx, &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.get",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "watch-task"},
+	})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"pull_requests":[]}`, string(taskResponse.Body))
+	workspaceResponse, err = workflows.HandleAction(ctx, &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.associations",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+	})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"associations":[]}`, string(workspaceResponse.Body))
+}
+
+func TestWorkflows_TaskScopedExplicitGetRequiresManualOrWatchAssociation(t *testing.T) {
+	ctx := context.Background()
+	pullRequest := testPullRequest()
+	provider := &workflowProvider{pullRequest: pullRequest}
+	workflows, err := NewWorkflows(newConnectionHost(), staticResolver{provider: provider})
+	require.NoError(t, err)
+	request := func(taskID string) *pluginsdk.PluginActionRequest {
+		return &pluginsdk.PluginActionRequest{
+			ActionKey: "pullrequests.get", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: taskID},
+			Body: []byte(`{"review_key":"workspace/repo#42"}`),
+		}
+	}
+
+	_, err = workflows.HandleAction(ctx, request("unassociated-task"))
+	require.Error(t, err)
+	require.Zero(t, provider.getPullRequestCalls, "authorization must precede the live pull request fetch")
+
+	_, err = workflows.links.Link(ctx, "manual-task", PullRequestLink{
+		Key: pullRequest.Key(), RepositoryID: "workspace/repo", URL: pullRequest.URL, Number: int64(pullRequest.Number),
+	})
+	require.NoError(t, err)
+	_, err = workflows.HandleAction(ctx, request("manual-task"))
+	require.NoError(t, err)
+
+	_, err = workflows.watches.Create(ctx, watches.Watch{
+		ID: "watch-1", WorkspaceID: "workspace-1",
+		Links: map[string]watches.TaskLink{
+			pullRequest.Key(): {PullRequestKey: pullRequest.Key(), TaskID: "watch-task", Owned: true},
+		},
+	})
+	require.NoError(t, err)
+	_, err = workflows.HandleAction(ctx, request("watch-task"))
+	require.NoError(t, err)
+
+	_, err = workflows.HandleAction(ctx, &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.inspect", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "unassociated-task"},
+		Body: []byte(`{"review_key":"workspace/repo#42"}`),
+	})
+	require.NoError(t, err, "workspace-scoped inspection remains available")
+}
+
+func TestWorkflows_TaskGetAutoLinksOpenPullRequestForVerifiedCheckoutBranch(t *testing.T) {
+	host := autoLinkHost(
+		[]pluginsdk.TaskRepository{{RepositoryID: "repo-1", CheckoutBranch: "refs/heads/feature/auth"}},
+		[]pluginsdk.Repository{bitbucketHostRepository("repo-1", "workspace", "repo")},
+	)
+	pullRequest := testPullRequest()
+	pullRequest.Source.Name = "feature/auth"
+	provider := &workflowProvider{pullRequest: pullRequest}
+	workflows, err := NewWorkflows(host, staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.get", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1"},
+	})
+
+	require.NoError(t, err)
+	require.Contains(t, string(response.Body), pullRequest.Key())
+	links, err := workflows.links.List(context.Background(), "task-1")
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	require.Equal(t, pullRequest.Key(), links[0].Key)
+	require.Len(t, provider.searchQueries, 1)
+	require.Equal(t, pullRequest.Repository.Namespace, provider.searchQueries[0].Repository.Namespace)
+	require.Equal(t, pullRequest.Repository.Slug, provider.searchQueries[0].Repository.Slug)
+	require.Equal(t, "OPEN", provider.searchQueries[0].State)
+	require.Equal(t, 100, provider.searchQueries[0].Limit)
+}
+
+func TestWorkflows_TaskGetDoesNotAutoRelinkAfterExplicitUnlink(t *testing.T) {
+	host := autoLinkHost(
+		[]pluginsdk.TaskRepository{{RepositoryID: "repo-1", CheckoutBranch: "feature/auth"}},
+		[]pluginsdk.Repository{bitbucketHostRepository("repo-1", "workspace", "repo")},
+	)
+	pullRequest := testPullRequest()
+	pullRequest.Source.Name = "feature/auth"
+	workflows, err := NewWorkflows(host, staticResolver{provider: &workflowProvider{pullRequest: pullRequest}})
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	_, err = workflows.HandleAction(ctx, &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.get",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1"},
+	})
+	require.NoError(t, err)
+	_, err = workflows.HandleAction(ctx, &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.unlink",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1"},
+		Body:      []byte(`{"review_key":"workspace/repo#42"}`),
+	})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(ctx, &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.get",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1"},
+	})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"pull_requests":[]}`, string(response.Body))
+}
+
+func TestWorkflows_TaskGetDoesNotAutoLinkDifferentCheckoutBranch(t *testing.T) {
+	host := autoLinkHost(
+		[]pluginsdk.TaskRepository{{RepositoryID: "repo-1", CheckoutBranch: "feature/wanted"}},
+		[]pluginsdk.Repository{bitbucketHostRepository("repo-1", "workspace", "repo")},
+	)
+	pullRequest := testPullRequest()
+	pullRequest.Source.Name = "feature/other"
+	workflows, err := NewWorkflows(host, staticResolver{provider: &workflowProvider{pullRequest: pullRequest}})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.get", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1"},
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{"pull_requests":[]}`, string(response.Body))
+}
+
+func TestWorkflows_TaskGetAutoLinksAcrossVerifiedTaskRepositories(t *testing.T) {
+	host := autoLinkHost(
+		[]pluginsdk.TaskRepository{
+			{RepositoryID: "repo-1", CheckoutBranch: "feature/one"},
+			{RepositoryID: "repo-2", CheckoutBranch: "refs/heads/feature/two"},
+		},
+		[]pluginsdk.Repository{
+			bitbucketHostRepository("repo-1", "workspace", "one"),
+			bitbucketHostRepository("repo-2", "workspace", "two"),
+		},
+	)
+	first := testPullRequest()
+	first.Repository.Slug = "one"
+	first.Number = 41
+	first.Source.Name = "feature/one"
+	first.URL = "https://bitbucket.org/workspace/one/pull-requests/41"
+	second := testPullRequest()
+	second.Repository.Slug = "two"
+	second.Number = 42
+	second.Source.Name = "feature/two"
+	second.URL = "https://bitbucket.org/workspace/two/pull-requests/42"
+	provider := &workflowProvider{
+		pullRequest: first,
+		pullRequestsByRepository: map[string][]domain.PullRequest{
+			"workspace/one": {first},
+			"workspace/two": {second},
+		},
+	}
+	workflows, err := NewWorkflows(host, staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.get", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1"},
+	})
+
+	require.NoError(t, err)
+	var result struct {
+		PullRequests []map[string]any `json:"pull_requests"`
+	}
+	require.NoError(t, json.Unmarshal(response.Body, &result))
+	require.Len(t, result.PullRequests, 2)
+	links, err := workflows.links.List(context.Background(), "task-1")
+	require.NoError(t, err)
+	require.Len(t, links, 2)
+}
+
+func TestWorkflows_TaskGetPreservesExistingLinkWhenBranchDetectionFails(t *testing.T) {
+	host := autoLinkHost(
+		[]pluginsdk.TaskRepository{{RepositoryID: "repo-1", CheckoutBranch: "feature/auth"}},
+		[]pluginsdk.Repository{bitbucketHostRepository("repo-1", "workspace", "repo")},
+	)
+	pullRequest := testPullRequest()
+	provider := &workflowProvider{pullRequest: pullRequest, searchErr: errors.New("provider unavailable")}
+	workflows, err := NewWorkflows(host, staticResolver{provider: provider})
+	require.NoError(t, err)
+	_, err = workflows.links.Link(context.Background(), "task-1", PullRequestLink{
+		Key: pullRequest.Key(), RepositoryID: "workspace/repo", URL: pullRequest.URL, Number: int64(pullRequest.Number),
+	})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.get", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1"},
+	})
+
+	require.NoError(t, err)
+	require.Contains(t, string(response.Body), pullRequest.Key())
+}
+
+func autoLinkHost(taskRepositories []pluginsdk.TaskRepository, repositories []pluginsdk.Repository) *scopedConnectionHost {
+	return &scopedConnectionHost{
+		connectionHost: newConnectionHost(),
+		tasks: &taskReader{task: &pluginsdk.Task{
+			ID: "task-1", WorkspaceID: "workspace-1", Title: "Task", Repositories: taskRepositories,
+		}},
+		repositories: &repositoryReader{repositories: repositories},
+	}
+}
+
+func bitbucketHostRepository(id, namespace, slug string) pluginsdk.Repository {
+	defaultBranch := "main"
+	return pluginsdk.Repository{
+		ID: id, WorkspaceID: "workspace-1", Name: namespace + "/" + slug, SourceType: "provider", ProviderID: "bitbucket",
+		ProviderHost: "bitbucket.org", OwnerOrProject: namespace, ProviderRepositoryID: "uuid-" + id,
+		ProviderName: slug, RemoteURL: "https://bitbucket.org/" + namespace + "/" + slug + ".git", DefaultBranch: &defaultBranch,
+	}
+}
+
+type associationTaskPage struct {
+	tasks []pluginsdk.Task
+	info  *pluginsdk.PageInfo
+}
+
+type associationTaskReader struct {
+	pages   map[string]associationTaskPage
+	cursors []string
+	filters []pluginsdk.TaskFilter
+}
+
+func (r *associationTaskReader) List(_ context.Context, filter pluginsdk.TaskFilter, page pluginsdk.Page) ([]pluginsdk.Task, *pluginsdk.PageInfo, error) {
+	r.filters = append(r.filters, filter)
+	r.cursors = append(r.cursors, page.Cursor)
+	result := r.pages[page.Cursor]
+	return result.tasks, result.info, nil
+}
+
+func (*associationTaskReader) Get(context.Context, string) (*pluginsdk.Task, error) {
+	return nil, nil
+}
+
+func (*associationTaskReader) Create(context.Context, pluginsdk.CreateTaskInput) (*pluginsdk.Task, error) {
+	return nil, nil
+}
+
+func (*associationTaskReader) Update(context.Context, pluginsdk.UpdateTaskInput) (*pluginsdk.Task, error) {
+	return nil, nil
+}
+
+type associationHost struct {
+	*connectionHost
+	tasks *associationTaskReader
+}
+
+func (h *associationHost) Tasks() pluginsdk.TaskReader { return h.tasks }
 
 func TestWorkflows_LinkAndUnlinkDoNotDeleteTask(t *testing.T) {
 	provider := &workflowProvider{pullRequest: testPullRequest()}
@@ -263,6 +618,120 @@ func TestWorkflows_CreatePullRequestDerivesRepositoryAndSourceFromVerifiedTask(t
 	require.Error(t, err, "browser input cannot select a source checkout")
 }
 
+func TestWorkflows_CreatePullRequestSelectsVerifiedRepositoryIDForMultiRepoTask(t *testing.T) {
+	host := newTaskHost()
+	host.tasks.task = &pluginsdk.Task{
+		ID: "task-1", WorkspaceID: "workspace-1", Title: "Host task",
+		Repositories: []pluginsdk.TaskRepository{
+			{RepositoryID: "repository-1", BaseBranch: "main", CheckoutBranch: "feature-one"},
+			{RepositoryID: "repository-2", BaseBranch: "develop", CheckoutBranch: "feature-two"},
+		},
+	}
+	defaultBranch := "main"
+	host.repositories.repositories = []pluginsdk.Repository{
+		{ID: "repository-1", WorkspaceID: "workspace-1", Name: "one", SourceType: "provider", ProviderID: "bitbucket", ProviderHost: "bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-one", RemoteURL: "https://bitbucket.org/workspace/one.git", DefaultBranch: &defaultBranch},
+		{ID: "repository-2", WorkspaceID: "workspace-1", Name: "two", SourceType: "provider", ProviderID: "bitbucket", ProviderHost: "bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-two", RemoteURL: "https://bitbucket.org/workspace/two.git", DefaultBranch: &defaultBranch},
+	}
+	provider := &workflowProvider{pullRequest: testPullRequest()}
+	workflows, err := NewWorkflows(host, staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	_, err = workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.create",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1", RepositoryID: "repository-2"},
+		Body:      []byte(`{}`),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "two", provider.createdPullRequest.Repository.Slug)
+	require.Equal(t, "feature-two", provider.createdPullRequest.Source)
+	require.Equal(t, "develop", provider.createdPullRequest.Destination)
+}
+
+func TestWorkflows_CreatePullRequestRejectsAmbiguousOrUnattachedVerifiedRepository(t *testing.T) {
+	host := newTaskHost()
+	host.tasks.task = &pluginsdk.Task{
+		ID: "task-1", WorkspaceID: "workspace-1", Title: "Host task",
+		Repositories: []pluginsdk.TaskRepository{
+			{RepositoryID: "repository-1", BaseBranch: "main", CheckoutBranch: "feature-one"},
+			{RepositoryID: "repository-2", BaseBranch: "main", CheckoutBranch: "feature-two"},
+		},
+	}
+	host.repositories.repositories = []pluginsdk.Repository{
+		{ID: "repository-1", WorkspaceID: "workspace-1", Name: "one", SourceType: "provider", ProviderID: "bitbucket", ProviderHost: "bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-one", RemoteURL: "https://bitbucket.org/workspace/one.git"},
+		{ID: "repository-2", WorkspaceID: "workspace-1", Name: "two", SourceType: "provider", ProviderID: "bitbucket", ProviderHost: "bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-two", RemoteURL: "https://bitbucket.org/workspace/two.git"},
+	}
+	workflows, err := NewWorkflows(host, staticResolver{provider: &workflowProvider{pullRequest: testPullRequest()}})
+	require.NoError(t, err)
+
+	_, err = workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.create", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1"}, Body: []byte(`{}`),
+	})
+	require.ErrorContains(t, err, "exactly one")
+
+	_, err = workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.create", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1", RepositoryID: "repository-attacker"}, Body: []byte(`{}`),
+	})
+	require.ErrorContains(t, err, "verified repository")
+}
+
+func TestWorkflows_CreatePullRequestPersistsTaskAssociation(t *testing.T) {
+	host := createPullRequestHost()
+	pullRequest := testPullRequest()
+	provider := &workflowProvider{pullRequest: pullRequest}
+	workflows, err := NewWorkflows(host, staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.create", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1"}, Body: []byte(`{}`),
+	})
+	require.NoError(t, err)
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(response.Body, &result))
+	require.Equal(t, true, result["linked"])
+	require.NotContains(t, result, "association_error")
+	links, err := workflows.links.List(context.Background(), "task-1")
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	require.Equal(t, pullRequest.Key(), links[0].Key)
+}
+
+func TestWorkflows_CreatePullRequestReportsAssociationFailureWithoutRetryableError(t *testing.T) {
+	host := createPullRequestHost()
+	host.setStateErr = errors.New("state unavailable with sensitive implementation detail")
+	provider := &workflowProvider{pullRequest: testPullRequest()}
+	workflows, err := NewWorkflows(host, staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.create", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1"}, Body: []byte(`{}`),
+	})
+
+	require.NoError(t, err, "external creation succeeded, so an association failure must not invite a duplicate retry")
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(response.Body, &result))
+	require.Equal(t, false, result["linked"])
+	require.Equal(t, "task association could not be saved", result["association_error"])
+	require.NotContains(t, string(response.Body), "sensitive implementation detail")
+	require.NotEmpty(t, provider.createdPullRequest.Repository.Slug, "the external create completed")
+}
+
+func createPullRequestHost() *scopedConnectionHost {
+	defaultBranch := "main"
+	return &scopedConnectionHost{
+		connectionHost: newConnectionHost(),
+		tasks: &taskReader{task: &pluginsdk.Task{
+			ID: "task-1", WorkspaceID: "workspace-1", Title: "Host task", Description: "Host description",
+			Repositories: []pluginsdk.TaskRepository{{RepositoryID: "repository-1", BaseBranch: "main", CheckoutBranch: "feature"}},
+		}},
+		repositories: &repositoryReader{repositories: []pluginsdk.Repository{{
+			ID: "repository-1", WorkspaceID: "workspace-1", Name: "repo", SourceType: "provider", ProviderID: "bitbucket",
+			ProviderHost: "bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-uuid",
+			RemoteURL: "https://bitbucket.org/workspace/repo.git", DefaultBranch: &defaultBranch,
+		}}},
+	}
+}
+
 func TestWorkflows_CreatePullRequestRejectsManualRepositoryWithBitbucketFields(t *testing.T) {
 	host := newTaskHost()
 	host.tasks.task = &pluginsdk.Task{
@@ -299,6 +768,164 @@ func TestWorkflows_LaunchAppliesNamedPreset(t *testing.T) {
 	require.Equal(t, "Review the Bitbucket pull request and run relevant tests.", *host.tasks.created.Launch.Prompt)
 }
 
+func TestWorkflows_TasksLaunchMapsNativeTaskOptionsAndTrustedPullRequestRepository(t *testing.T) {
+	ctx := context.Background()
+	host := &scopedConnectionHost{connectionHost: newConnectionHost(), tasks: &taskReader{}, repositories: &repositoryReader{}}
+	pullRequest := launchablePullRequest(t)
+	provider := &workflowProvider{pullRequest: pullRequest}
+	workflows, err := NewWorkflows(host, staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(ctx, &pluginsdk.PluginActionRequest{
+		ActionKey: "tasks.launch", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body: []byte(`{
+			"review_key":"workspace/repo#42",
+			"launch_id":"launch-123",
+			"repository":{"provider_id":"bitbucket","provider_host":"attacker.test","owner_or_project":"evil","provider_repository_id":"evil/repo","name":"repo","clone_url":"https://attacker.test/evil/repo.git"},
+			"task":{"title":"Review this safely","description":"Trusted launch","workflow_id":"workflow-1","workflow_step_id":"step-1","agent_profile_id":"agent-1","executor_profile_id":"executor-1","start_agent":true,"plan_mode":true}
+		}`),
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{"task_id":"created-task","linked":true}`, string(response.Body))
+	created := host.tasks.created
+	require.Equal(t, "workspace-1", created.WorkspaceID)
+	require.Equal(t, "workflow-1", created.WorkflowID)
+	require.Equal(t, "step-1", requireStringPointer(t, created.WorkflowStepID))
+	require.Equal(t, "Review this safely", created.Title)
+	require.Equal(t, "Trusted launch", created.Description)
+	require.True(t, created.StartAgent)
+	require.Equal(t, "agent-1", requireStringPointer(t, created.Launch.AgentProfileID))
+	require.Equal(t, "executor-1", requireStringPointer(t, created.Launch.ExecutorProfileID))
+	require.Equal(t, "on", requireStringPointer(t, created.Launch.PlanMode))
+	require.Len(t, created.Repositories, 1)
+	require.Equal(t, "fork", created.Repositories[0].Remote.OwnerOrProject)
+	require.Equal(t, "https://bitbucket.org/fork/repo.git", created.Repositories[0].Remote.CloneURL)
+	require.Equal(t, "main", requireStringPointer(t, created.Repositories[0].BaseBranch))
+	require.Equal(t, "feature/fork", requireStringPointer(t, created.Repositories[0].CheckoutBranch))
+	require.Equal(t, "manual:workspace/repo#42:launch-123", created.Metadata["reservation"])
+	links, err := workflows.links.List(ctx, "created-task")
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	require.Equal(t, pullRequest.Key(), links[0].Key)
+}
+
+func TestTaskLaunchReservationScopesRetriesToOneDialogLaunch(t *testing.T) {
+	first, err := taskLaunchReservation("workspace/repo#42", "launch-one")
+	require.NoError(t, err)
+	retry, err := taskLaunchReservation("workspace/repo#42", "launch-one")
+	require.NoError(t, err)
+	second, err := taskLaunchReservation("workspace/repo#42", "launch-two")
+	require.NoError(t, err)
+
+	require.Equal(t, first, retry)
+	require.NotEqual(t, first, second)
+	_, err = taskLaunchReservation("workspace/repo#42", "attacker:value")
+	require.ErrorContains(t, err, "launch_id is invalid")
+}
+
+func TestWorkflows_TasksLaunchUsesSafeDefaults(t *testing.T) {
+	host := &scopedConnectionHost{connectionHost: newConnectionHost(), tasks: &taskReader{}, repositories: &repositoryReader{}}
+	pullRequest := launchablePullRequest(t)
+	workflows, err := NewWorkflows(host, staticResolver{provider: &workflowProvider{pullRequest: pullRequest}})
+	require.NoError(t, err)
+
+	_, err = workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "tasks.launch", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body: []byte(`{"review_key":"workspace/repo#42"}`),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "Bitbucket PR #42: Fix auth", host.tasks.created.Title)
+	require.Equal(t, pullRequest.URL, host.tasks.created.Description)
+	require.Empty(t, host.tasks.created.WorkflowID)
+	require.Nil(t, host.tasks.created.WorkflowStepID)
+	require.False(t, host.tasks.created.StartAgent)
+	require.Nil(t, host.tasks.created.Launch)
+}
+
+func TestWorkflows_TasksLaunchRejectsUnknownNestedTaskFieldsBeforeProviderLookup(t *testing.T) {
+	host := &scopedConnectionHost{connectionHost: newConnectionHost(), tasks: &taskReader{}, repositories: &repositoryReader{}}
+	provider := &workflowProvider{pullRequest: launchablePullRequest(t)}
+	workflows, err := NewWorkflows(host, staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	_, err = workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "tasks.launch", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body: []byte(`{"review_key":"workspace/repo#42","task":{"title":"x","repositories":[{"clone_url":"https://attacker.test/repo.git"}]}}`),
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown field")
+	require.Zero(t, provider.getPullRequestCalls)
+	require.Zero(t, host.tasks.createCalls)
+}
+
+func TestWorkflows_TasksLaunchAssociationFailureReturnsCreatedTaskWithoutRetryableError(t *testing.T) {
+	host := &scopedConnectionHost{connectionHost: newConnectionHost(), tasks: &taskReader{}, repositories: &repositoryReader{}}
+	workflows, err := NewWorkflows(host, staticResolver{provider: &workflowProvider{pullRequest: launchablePullRequest(t)}})
+	require.NoError(t, err)
+	host.setStateErr = errors.New("state backend leaked detail")
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "tasks.launch", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body: []byte(`{"review_key":"workspace/repo#42"}`),
+	})
+
+	require.NoError(t, err, "task creation succeeded, so association failure must not invite a duplicate retry")
+	require.JSONEq(t, `{"task_id":"created-task","linked":false,"association_error":"task association could not be saved"}`, string(response.Body))
+	require.NotContains(t, string(response.Body), "leaked detail")
+	require.Equal(t, 1, host.tasks.createCalls)
+}
+
+func TestWorkflows_TasksLaunchReusesReservedTaskAndRepairsAssociation(t *testing.T) {
+	ctx := context.Background()
+	pullRequest := launchablePullRequest(t)
+	tasks := &taskReader{listed: []pluginsdk.Task{{
+		ID: "existing-task", Metadata: map[string]any{sourceMetadataKey: map[string]any{"reservation": "manual:" + pullRequest.Key()}},
+	}}}
+	host := &scopedConnectionHost{connectionHost: newConnectionHost(), tasks: tasks, repositories: &repositoryReader{}}
+	workflows, err := NewWorkflows(host, staticResolver{provider: &workflowProvider{pullRequest: pullRequest}})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(ctx, &pluginsdk.PluginActionRequest{
+		ActionKey: "tasks.launch", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body: []byte(`{"review_key":"workspace/repo#42"}`),
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{"task_id":"existing-task","linked":true}`, string(response.Body))
+	response, err = workflows.HandleAction(ctx, &pluginsdk.PluginActionRequest{
+		ActionKey: "tasks.launch", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body: []byte(`{"review_key":"workspace/repo#42"}`),
+	})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"task_id":"existing-task","linked":true}`, string(response.Body))
+	require.Zero(t, tasks.createCalls, "retry must not create another task")
+	links, err := workflows.links.List(ctx, "existing-task")
+	require.NoError(t, err)
+	require.Len(t, links, 1, "association repair must also be idempotent")
+}
+
+func launchablePullRequest(t *testing.T) domain.PullRequest {
+	t.Helper()
+	pullRequest := testPullRequest()
+	pullRequest.Repository.CloneURL = mustURL(t, "https://bitbucket.org/workspace/repo.git")
+	pullRequest.SourceRepository = domain.Repository{Namespace: "fork", Slug: "repo", CloneURL: mustURL(t, "https://bitbucket.org/fork/repo.git")}
+	pullRequest.Source.Name = "feature/fork"
+	pullRequest.Destination.Name = "main"
+	return pullRequest
+}
+
+func requireStringPointer(t *testing.T, value *string) string {
+	t.Helper()
+	require.NotNil(t, value)
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
 func TestReviewView_PreservesAdapterFiles(t *testing.T) {
 	view := reviewView(domain.Review{
 		PullRequest: testPullRequest(),
@@ -312,6 +939,23 @@ func TestReviewView_PreservesAdapterFiles(t *testing.T) {
 	require.Equal(t, []map[string]any{{
 		"path": "internal/auth.go", "status": "modified", "additions": 4, "deletions": 1, "patch": "@@ -1 +1 @@",
 	}}, files)
+}
+
+func TestReviewView_MarksCurrentViewerAndApproval(t *testing.T) {
+	view := reviewView(domain.Review{
+		PullRequest: testPullRequest(),
+		ViewerID:    "viewer-1",
+		Participants: []domain.Participant{
+			{ID: "reviewer-1", Name: "Reviewer", Role: "REVIEWER", Approved: false},
+			{ID: "VIEWER-1", Name: "Current viewer", Role: "REVIEWER", Approved: true},
+		},
+	})
+
+	require.Equal(t, true, view["viewer_approved"])
+	participants, ok := view["participants"].([]map[string]any)
+	require.True(t, ok)
+	require.Equal(t, true, participants[1]["is_current_user"])
+	require.NotContains(t, participants[0], "is_current_user")
 }
 
 func testPullRequest() domain.PullRequest {
@@ -349,17 +993,19 @@ func (r staticResolver) GitCredentialBinding(context.Context, GitCredentialScope
 }
 
 type workflowProvider struct {
-	pullRequest             domain.PullRequest
-	capabilities            domain.Capabilities
-	credentialErr           error
-	healthErr               error
-	actions                 int
-	createdPullRequest      domain.CreatePullRequestInput
-	inspectedRepositoryURL  string
-	inspectedPullRequestURL string
-	repositoryInspectErr    error
-	getPullRequestCalls     int
-	searchQueries           []domain.PullRequestQuery
+	pullRequest              domain.PullRequest
+	capabilities             domain.Capabilities
+	credentialErr            error
+	healthErr                error
+	actions                  int
+	createdPullRequest       domain.CreatePullRequestInput
+	inspectedRepositoryURL   string
+	inspectedPullRequestURL  string
+	repositoryInspectErr     error
+	getPullRequestCalls      int
+	searchQueries            []domain.PullRequestQuery
+	searchErr                error
+	pullRequestsByRepository map[string][]domain.PullRequest
 }
 
 func (p *workflowProvider) Capabilities() domain.Capabilities {
@@ -387,6 +1033,12 @@ func (*workflowProvider) ListBranches(context.Context, domain.Repository) ([]dom
 }
 func (p *workflowProvider) SearchPullRequests(_ context.Context, query domain.PullRequestQuery) ([]domain.PullRequest, error) {
 	p.searchQueries = append(p.searchQueries, query)
+	if p.searchErr != nil {
+		return nil, p.searchErr
+	}
+	if p.pullRequestsByRepository != nil {
+		return p.pullRequestsByRepository[query.Repository.Namespace+"/"+query.Repository.Slug], nil
+	}
 	return []domain.PullRequest{p.pullRequest}, nil
 }
 func (p *workflowProvider) SearchPullRequestsPage(ctx context.Context, query domain.PullRequestQuery) (domain.PullRequestPage, error) {
@@ -395,6 +1047,14 @@ func (p *workflowProvider) SearchPullRequestsPage(ctx context.Context, query dom
 }
 func (p *workflowProvider) GetPullRequest(_ context.Context, repository domain.Repository, number int) (domain.PullRequest, error) {
 	p.getPullRequestCalls++
+	if p.pullRequestsByRepository != nil {
+		for _, pullRequest := range p.pullRequestsByRepository[repository.Namespace+"/"+repository.Slug] {
+			if pullRequest.Number == number {
+				return pullRequest, nil
+			}
+		}
+		return domain.PullRequest{}, errors.New("not found")
+	}
 	if repository.Namespace != p.pullRequest.Repository.Namespace || repository.Slug != p.pullRequest.Repository.Slug || number != p.pullRequest.Number {
 		return domain.PullRequest{}, errors.New("not found")
 	}

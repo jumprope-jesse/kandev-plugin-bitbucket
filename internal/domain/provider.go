@@ -82,6 +82,7 @@ type ReviewFile struct {
 // Review contains provider-rendered data used by native review panels.
 type Review struct {
 	PullRequest  PullRequest
+	ViewerID     string
 	Diff         string
 	Files        []ReviewFile
 	Commits      []Commit

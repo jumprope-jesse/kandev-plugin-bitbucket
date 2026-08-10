@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"kandev-plugin-bitbucket/internal/domain"
@@ -66,6 +67,7 @@ func TestCloudSearchPullRequestsPagePreservesProviderCursorAndAuthor(t *testing.
 			return
 		}
 		require.Equal(t, "OPEN", r.URL.Query().Get("state"))
+		require.Equal(t, "50", r.URL.Query().Get("pagelen"))
 		next := fmt.Sprintf("%s/2.0/repositories/acme/widgets/pullrequests?page=2", server.URL)
 		_, _ = w.Write([]byte(fmt.Sprintf(`{"values":[{"id":1,"title":"One","state":"OPEN","author":{"account_id":"account-1"},"links":{"html":{"href":"https://bitbucket.org/acme/widgets/pull-requests/1"}},"source":{"branch":{"name":"one"}},"destination":{"branch":{"name":"main"},"repository":{"mainbranch":{"name":"main"}}}}],"next":%q}`, next)))
 	}))
@@ -85,6 +87,24 @@ func TestCloudSearchPullRequestsPagePreservesProviderCursorAndAuthor(t *testing.
 	require.Equal(t, "account-2", second.PullRequests[0].Author)
 	require.Empty(t, second.NextCursor)
 	require.Equal(t, 2, requests)
+}
+
+func TestCloudMapsPullRequestDisplayAuthorAndCreatedTime(t *testing.T) {
+	var payload pullRequestPayload
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id":42,"title":"Fix race","state":"OPEN",
+		"author":{"account_id":"account-1","display_name":"Ada Lovelace"},
+		"created_on":"2026-07-31T12:00:00Z",
+		"links":{"html":{"href":"https://bitbucket.org/acme/widgets/pull-requests/42"}},
+		"source":{"branch":{"name":"feature/race"}},
+		"destination":{"branch":{"name":"main"},"repository":{"mainbranch":{"name":"main"}}}
+	}`), &payload))
+
+	pullRequest, err := mapPullRequest(domain.Repository{Namespace: "acme", Slug: "widgets"}, payload)
+	require.NoError(t, err)
+	require.Equal(t, "account-1", pullRequest.Author)
+	require.Equal(t, "Ada Lovelace", pullRequest.AuthorDisplayName)
+	require.Equal(t, time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC), pullRequest.CreatedAt)
 }
 
 func TestCloudSearchPullRequestsPageAllStatesUsesOpaqueStateContinuation(t *testing.T) {
@@ -144,16 +164,17 @@ func TestCloudSearchPullRequestsExpandsAllStates(t *testing.T) {
 
 func TestCloudGetReviewMapsGoldenReviewData(t *testing.T) {
 	responses := map[string]string{
-		"/2.0/repositories/acme/widgets/pullrequests/42":           "review-pullrequest.json",
-		"/2.0/repositories/acme/widgets/pullrequests/42/commits":   "review-commits.json",
-		"/2.0/repositories/acme/widgets/pullrequests/42/comments":  "review-comments.json",
-		"/2.0/repositories/acme/widgets/commit/dest-hash/statuses": "review-statuses.json",
-		"/2.0/repositories/acme/widgets/pullrequests/42/diff":      "review.diff",
+		"/2.0/user": "review-current-user.json",
+		"/2.0/repositories/acme/widgets/pullrequests/42":             "review-pullrequest.json",
+		"/2.0/repositories/acme/widgets/pullrequests/42/commits":     "review-commits.json",
+		"/2.0/repositories/acme/widgets/pullrequests/42/comments":    "review-comments.json",
+		"/2.0/repositories/acme/widgets/commit/source-hash/statuses": "review-statuses.json",
+		"/2.0/repositories/acme/widgets/pullrequests/42/diff":        "review.diff",
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "Bearer cloud-token", r.Header.Get("Authorization"))
 		fixture, ok := responses[r.URL.Path]
-		if r.URL.Path == "/2.0/repositories/acme/widgets/pullrequests/42/commits" || r.URL.Path == "/2.0/repositories/acme/widgets/pullrequests/42/comments" || r.URL.Path == "/2.0/repositories/acme/widgets/commit/dest-hash/statuses" {
+		if r.URL.Path == "/2.0/repositories/acme/widgets/pullrequests/42/commits" || r.URL.Path == "/2.0/repositories/acme/widgets/pullrequests/42/comments" || r.URL.Path == "/2.0/repositories/acme/widgets/commit/source-hash/statuses" {
 			if r.URL.Query().Get("page") == "2" {
 				fixture += "-second.json"
 			} else {
@@ -186,8 +207,12 @@ func TestCloudGetReviewMapsGoldenReviewData(t *testing.T) {
 	require.Equal(t, "diff --git a/race.go b/race.go\nindex 1111111..2222222 100644\n--- a/race.go\n+++ b/race.go\n@@ -1 +1 @@\n-unsafe()\n+safe()\ndiff --git a/README.md b/README.md\nnew file mode 100644\n--- /dev/null\n+++ b/README.md\n@@ -0,0 +1 @@\n+safe usage\n", review.Diff)
 	require.Equal(t, []domain.Commit{{Hash: "source-hash", Message: "Fix race", Author: "Ada <ada@example.test>"}, {Hash: "source-hash-2", Message: "Add coverage", Author: "Bob <bob@example.test>"}}, review.Commits)
 	require.Equal(t, []domain.Participant{{ID: "user-1", Name: "Ada", Role: "REVIEWER", Approved: true}}, review.Participants)
-	require.Equal(t, []domain.Thread{{ID: "10", Comments: []domain.Comment{{ID: "10", Author: "Ada", Body: "Please add a test."}, {ID: "11", ParentID: "10", Author: "Bob", Body: "Done."}}}}, review.Threads)
-	require.Equal(t, []domain.BuildStatus{{Key: "build-7", Name: "CI", State: "SUCCESSFUL", URL: "https://ci.example.test/build/7", Target: "dest-hash"}, {Key: "build-8", Name: "Lint", State: "FAILED", URL: "https://ci.example.test/build/8", Target: "dest-hash"}}, review.Statuses)
+	require.Equal(t, "user-1", review.ViewerID)
+	require.Equal(t, []domain.Thread{{ID: "10", Comments: []domain.Comment{
+		{ID: "10", Author: "Ada", Body: "Please add a test.", When: time.Date(2026, time.July, 31, 12, 1, 0, 0, time.UTC)},
+		{ID: "11", ParentID: "10", Author: "Bob", Body: "Done.", When: time.Date(2026, time.July, 31, 12, 2, 0, 0, time.UTC)},
+	}}}, review.Threads)
+	require.Equal(t, []domain.BuildStatus{{Key: "build-7", Name: "CI", State: "SUCCESSFUL", URL: "https://ci.example.test/build/7", Target: "source-hash"}, {Key: "build-8", Name: "Lint", State: "FAILED", URL: "https://ci.example.test/build/8", Target: "source-hash"}}, review.Statuses)
 	require.Equal(t, []domain.ReviewFile{
 		{Path: "race.go", Status: "modified", Additions: 1, Deletions: 1, Patch: "diff --git a/race.go b/race.go\nindex 1111111..2222222 100644\n--- a/race.go\n+++ b/race.go\n@@ -1 +1 @@\n-unsafe()\n+safe()\n"},
 		{Path: "README.md", Status: "added", Additions: 1, Patch: "diff --git a/README.md b/README.md\nnew file mode 100644\n--- /dev/null\n+++ b/README.md\n@@ -0,0 +1 @@\n+safe usage\n"},

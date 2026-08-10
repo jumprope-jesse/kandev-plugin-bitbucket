@@ -119,9 +119,12 @@ func (h *taskHost) Repositories() pluginsdk.RepositoryReader                   {
 func (h *taskHost) PluginOwnedTaskTrees() pluginsdk.PluginOwnedTaskTreeManager { return h.trees }
 
 type taskReader struct {
-	created pluginsdk.CreateTaskInput
-	listed  []pluginsdk.Task
-	task    *pluginsdk.Task
+	created      pluginsdk.CreateTaskInput
+	listed       []pluginsdk.Task
+	task         *pluginsdk.Task
+	createCalls  int
+	createErr    error
+	createResult *pluginsdk.Task
 }
 
 func (r *taskReader) List(context.Context, pluginsdk.TaskFilter, pluginsdk.Page) ([]pluginsdk.Task, *pluginsdk.PageInfo, error) {
@@ -131,7 +134,14 @@ func (r *taskReader) List(context.Context, pluginsdk.TaskFilter, pluginsdk.Page)
 func (r *taskReader) Get(context.Context, string) (*pluginsdk.Task, error) { return r.task, nil }
 
 func (r *taskReader) Create(_ context.Context, input pluginsdk.CreateTaskInput) (*pluginsdk.Task, error) {
+	r.createCalls++
 	r.created = input
+	if r.createErr != nil {
+		return nil, r.createErr
+	}
+	if r.createResult != nil {
+		return r.createResult, nil
+	}
 	return &pluginsdk.Task{ID: "created-task", CreatedAt: time.Now().UTC().Format(time.RFC3339)}, nil
 }
 

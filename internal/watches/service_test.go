@@ -229,6 +229,44 @@ func TestReset_PreviewsAndDeletesOnlyWatchOwnedTaskTrees(t *testing.T) {
 	require.Contains(t, watch.Reservations, "repo-1#manual")
 }
 
+func TestDetachTaskLinkKeepsReservationButPreventsReattachment(t *testing.T) {
+	repository := &memoryRepository{snapshots: map[string]Snapshot{
+		"workspace-1": {Watches: map[string]Watch{
+			"watch-1": {
+				ID: "watch-1", WorkspaceID: "workspace-1", Status: StatusRunning,
+				Links: map[string]TaskLink{
+					"repo-1#42": {PullRequestKey: "repo-1#42", TaskID: "task-1", Owned: true},
+				},
+				Reservations: map[string]Reservation{
+					"repo-1#42": {Token: "reservation", State: ReservationCreated, TaskID: "task-1"},
+				},
+			},
+		}},
+	}}
+	tasks := &recordingTasks{}
+	service, err := NewService(Options{
+		Repository: repository,
+		Provider: staticProvider{items: []PullRequest{{
+			Key: "repo-1#42", RepositoryID: "repo-1", Number: 42,
+		}}},
+		Tasks: tasks,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, service.DetachTaskLink(
+		context.Background(), "workspace-1", "task-1", "repo-1#42",
+	))
+	watch := repository.snapshots["workspace-1"].Watches["watch-1"]
+	require.False(t, watch.Links["repo-1#42"].Owned)
+	require.Contains(t, watch.Reservations, "repo-1#42")
+
+	result, err := service.Run(context.Background(), "workspace-1", "watch-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Skipped)
+	require.Zero(t, tasks.createCalls)
+	require.False(t, repository.snapshots["workspace-1"].Watches["watch-1"].Links["repo-1#42"].Owned)
+}
+
 func TestWatchControls_PersistFiltersPresetsStatusAndSafeDelete(t *testing.T) {
 	repository := &memoryRepository{snapshots: map[string]Snapshot{"workspace-1": {}}}
 	provider := &countingProvider{}

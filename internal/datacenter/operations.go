@@ -10,6 +10,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"kandev-plugin-bitbucket/internal/domain"
 )
@@ -94,15 +95,16 @@ func (c *Client) GetReview(ctx context.Context, repository domain.Repository, nu
 	if err != nil {
 		return domain.Review{}, err
 	}
-	if !isPathSegment(pr.Destination.Commit) {
-		return domain.Review{}, fmt.Errorf("Data Center pull request destination commit is invalid")
+	if !isPathSegment(pr.Source.Commit) {
+		return domain.Review{}, fmt.Errorf("Data Center pull request source commit is invalid")
 	}
-	statuses, err := c.reviewStatuses(ctx, pr.Destination.Commit)
+	statuses, err := c.reviewStatuses(ctx, pr.Source.Commit)
 	if err != nil {
 		return domain.Review{}, err
 	}
 	return domain.Review{
 		PullRequest:  pr,
+		ViewerID:     strings.TrimSpace(c.authentication.Username),
 		Diff:         diff,
 		Files:        files,
 		Commits:      commits,
@@ -394,8 +396,10 @@ type pullRequestPayload struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	State       string `json:"state"`
+	CreatedDate int64  `json:"createdDate"`
 	Author      struct {
-		Slug string `json:"slug"`
+		Slug        string `json:"slug"`
+		DisplayName string `json:"displayName"`
 	} `json:"author"`
 	Links struct {
 		Self []struct {
@@ -457,8 +461,9 @@ type reviewActivity struct {
 }
 
 type reviewComment struct {
-	ID     int `json:"id"`
-	Parent struct {
+	ID          int   `json:"id"`
+	CreatedDate int64 `json:"createdDate"`
+	Parent      struct {
 		ID int `json:"id"`
 	} `json:"parent"`
 	Text   string `json:"text"`
@@ -912,18 +917,27 @@ func (c *Client) mapPullRequest(repository domain.Repository, payload pullReques
 		return domain.PullRequest{}, err
 	}
 	return domain.PullRequest{
-		Repository:       repository,
-		SourceRepository: sourceRepository,
-		Number:           payload.ID,
-		Version:          payload.Version,
-		Title:            payload.Title,
-		Description:      payload.Description,
-		State:            payload.State,
-		Author:           payload.Author.Slug,
-		URL:              c.pullRequestURL(repository, payload.ID),
-		Source:           domain.Branch{Name: payload.FromRef.DisplayID, Commit: payload.FromRef.LatestCommit},
-		Destination:      domain.Branch{Name: payload.ToRef.DisplayID, Commit: payload.ToRef.LatestCommit},
+		Repository:        repository,
+		SourceRepository:  sourceRepository,
+		Number:            payload.ID,
+		Version:           payload.Version,
+		Title:             payload.Title,
+		Description:       payload.Description,
+		State:             payload.State,
+		Author:            payload.Author.Slug,
+		AuthorDisplayName: payload.Author.DisplayName,
+		CreatedAt:         dataCenterTimestamp(payload.CreatedDate),
+		URL:               c.pullRequestURL(repository, payload.ID),
+		Source:            domain.Branch{Name: payload.FromRef.DisplayID, Commit: payload.FromRef.LatestCommit},
+		Destination:       domain.Branch{Name: payload.ToRef.DisplayID, Commit: payload.ToRef.LatestCommit},
 	}, nil
+}
+
+func dataCenterTimestamp(milliseconds int64) time.Time {
+	if milliseconds <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(milliseconds).UTC()
 }
 
 func (c *Client) mapSourceRepository(payload *dataCenterRepositoryReference, fallback domain.Repository) (domain.Repository, error) {
@@ -977,7 +991,7 @@ func mapReviewThreads(comments []reviewComment) []domain.Thread {
 		}
 		id := fmt.Sprint(value.ID)
 		byRoot[id] = len(threads)
-		threads = append(threads, domain.Thread{ID: id, Comments: []domain.Comment{{ID: id, Author: value.Author.DisplayName, Body: value.Text}}})
+		threads = append(threads, domain.Thread{ID: id, Comments: []domain.Comment{{ID: id, Author: value.Author.DisplayName, Body: value.Text, When: unixMillis(value.CreatedDate)}}})
 	}
 	for _, value := range comments {
 		if value.Parent.ID == 0 {
@@ -990,9 +1004,16 @@ func mapReviewThreads(comments []reviewComment) []domain.Thread {
 			byRoot[parentID] = index
 			threads = append(threads, domain.Thread{ID: parentID})
 		}
-		threads[index].Comments = append(threads[index].Comments, domain.Comment{ID: fmt.Sprint(value.ID), ParentID: parentID, Author: value.Author.DisplayName, Body: value.Text})
+		threads[index].Comments = append(threads[index].Comments, domain.Comment{ID: fmt.Sprint(value.ID), ParentID: parentID, Author: value.Author.DisplayName, Body: value.Text, When: unixMillis(value.CreatedDate)})
 	}
 	return threads
+}
+
+func unixMillis(value int64) time.Time {
+	if value <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(value).UTC()
 }
 
 func mapReviewStatuses(page reviewStatusPage, target string) []domain.BuildStatus {

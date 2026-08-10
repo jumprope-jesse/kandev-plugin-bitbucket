@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 
 	"kandev-plugin-bitbucket/internal/domain"
-	"sync"
 )
 
-const taskLinkStateKey = "bitbucket.pull-request-links.v1"
+const (
+	taskLinkStateKey          = "bitbucket.pull-request-links.v1"
+	maxSuppressedPullRequests = 100
+)
 
 // PullRequestLink is a user-created task association. It is deliberately
 // separate from watch-owned links and has no deletion path for Kandev tasks.
@@ -31,7 +34,8 @@ type LinkStore struct {
 }
 
 type linkState struct {
-	Links []PullRequestLink `json:"links"`
+	Links          []PullRequestLink `json:"links"`
+	SuppressedKeys []string          `json:"suppressed_keys,omitempty"`
 }
 
 func NewLinkStore(host StateHost) (*LinkStore, error) {
@@ -44,41 +48,41 @@ func NewLinkStore(host StateHost) (*LinkStore, error) {
 func (s *LinkStore) List(ctx context.Context, taskID string) ([]PullRequestLink, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	links, changed, err := s.list(ctx, taskID)
+	state, changed, err := s.load(ctx, taskID)
 	if err != nil || !changed {
-		return links, err
+		return state.Links, err
 	}
-	if err := s.save(ctx, taskID, links); err != nil {
+	if err := s.save(ctx, taskID, state); err != nil {
 		return nil, err
 	}
-	return links, nil
+	return state.Links, nil
 }
 
-func (s *LinkStore) list(ctx context.Context, taskID string) ([]PullRequestLink, bool, error) {
+func (s *LinkStore) load(ctx context.Context, taskID string) (linkState, bool, error) {
 	if taskID == "" {
-		return nil, false, fmt.Errorf("task id is required")
+		return linkState{}, false, fmt.Errorf("task id is required")
 	}
 	value, found, err := s.host.GetState(ctx, "task", taskID, taskLinkStateKey)
 	if err != nil {
-		return nil, false, fmt.Errorf("load pull request links: %w", err)
+		return linkState{}, false, fmt.Errorf("load pull request links: %w", err)
 	}
 	if !found {
-		return nil, false, nil
+		return linkState{}, false, nil
 	}
 	var stored linkState
 	if err := decodeState(value, &stored); err != nil {
-		return nil, false, fmt.Errorf("decode pull request links: %w", err)
+		return linkState{}, false, fmt.Errorf("decode pull request links: %w", err)
 	}
 	changed := false
 	for index, link := range stored.Links {
 		normalized, linkChanged, err := normalizePullRequestLink(link)
 		if err != nil {
-			return nil, false, fmt.Errorf("invalid stored pull request link: %w", err)
+			return linkState{}, false, fmt.Errorf("invalid stored pull request link: %w", err)
 		}
 		stored.Links[index] = normalized
 		changed = changed || linkChanged
 	}
-	return stored.Links, changed, nil
+	return stored, changed, nil
 }
 
 func (s *LinkStore) Link(ctx context.Context, taskID string, link PullRequestLink) ([]PullRequestLink, error) {
@@ -91,46 +95,94 @@ func (s *LinkStore) Link(ctx context.Context, taskID string, link PullRequestLin
 	if err != nil {
 		return nil, err
 	}
-	links, _, err := s.list(ctx, taskID)
+	state, _, err := s.load(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
-	for _, existing := range links {
+	wasSuppressed := containsKey(state.SuppressedKeys, normalized.Key)
+	state.SuppressedKeys = removeKey(state.SuppressedKeys, normalized.Key)
+	for _, existing := range state.Links {
 		if existing.Key == normalized.Key {
-			return links, nil
+			if wasSuppressed {
+				if err := s.save(ctx, taskID, state); err != nil {
+					return nil, err
+				}
+			}
+			return state.Links, nil
 		}
 	}
-	links = append(links, normalized)
-	if err := s.save(ctx, taskID, links); err != nil {
+	state.Links = append(state.Links, normalized)
+	if err := s.save(ctx, taskID, state); err != nil {
 		return nil, err
 	}
-	return links, nil
+	return state.Links, nil
+}
+
+// AutoLink records a branch-discovered association unless the user explicitly
+// unlinked the same pull request. A later explicit Link clears that suppression.
+func (s *LinkStore) AutoLink(ctx context.Context, taskID string, link PullRequestLink) ([]PullRequestLink, error) {
+	if taskID == "" || link.Key == "" || link.RepositoryID == "" || link.URL == "" || link.Number <= 0 {
+		return nil, fmt.Errorf("task and complete pull request link are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	normalized, _, err := normalizePullRequestLink(link)
+	if err != nil {
+		return nil, err
+	}
+	state, _, err := s.load(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if containsKey(state.SuppressedKeys, normalized.Key) {
+		return state.Links, nil
+	}
+	for _, existing := range state.Links {
+		if existing.Key == normalized.Key {
+			return state.Links, nil
+		}
+	}
+	state.Links = append(state.Links, normalized)
+	if err := s.save(ctx, taskID, state); err != nil {
+		return nil, err
+	}
+	return state.Links, nil
 }
 
 func (s *LinkStore) Unlink(ctx context.Context, taskID, key string) ([]PullRequestLink, error) {
 	if taskID == "" || key == "" {
 		return nil, fmt.Errorf("task id and pull request key are required")
 	}
+	if _, _, ok := parsePullRequestKey(key); !ok {
+		return nil, fmt.Errorf("invalid pull request key")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	links, _, err := s.list(ctx, taskID)
+	state, _, err := s.load(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
-	kept := links[:0]
-	for _, link := range links {
+	kept := state.Links[:0]
+	for _, link := range state.Links {
 		if link.Key != key {
 			kept = append(kept, link)
 		}
 	}
-	if err := s.save(ctx, taskID, kept); err != nil {
+	state.Links = kept
+	if !containsKey(state.SuppressedKeys, key) {
+		state.SuppressedKeys = append(state.SuppressedKeys, key)
+		if len(state.SuppressedKeys) > maxSuppressedPullRequests {
+			state.SuppressedKeys = state.SuppressedKeys[len(state.SuppressedKeys)-maxSuppressedPullRequests:]
+		}
+	}
+	if err := s.save(ctx, taskID, state); err != nil {
 		return nil, err
 	}
-	return kept, nil
+	return state.Links, nil
 }
 
-func (s *LinkStore) save(ctx context.Context, taskID string, links []PullRequestLink) error {
-	value, err := encodeState(linkState{Links: links})
+func (s *LinkStore) save(ctx context.Context, taskID string, state linkState) error {
+	value, err := encodeState(state)
 	if err != nil {
 		return fmt.Errorf("encode pull request links: %w", err)
 	}
@@ -138,6 +190,25 @@ func (s *LinkStore) save(ctx context.Context, taskID string, links []PullRequest
 		return fmt.Errorf("save pull request links: %w", err)
 	}
 	return nil
+}
+
+func containsKey(keys []string, key string) bool {
+	for _, candidate := range keys {
+		if candidate == key {
+			return true
+		}
+	}
+	return false
+}
+
+func removeKey(keys []string, key string) []string {
+	kept := keys[:0]
+	for _, candidate := range keys {
+		if candidate != key {
+			kept = append(kept, candidate)
+		}
+	}
+	return kept
 }
 
 func normalizePullRequestLink(link PullRequestLink) (PullRequestLink, bool, error) {

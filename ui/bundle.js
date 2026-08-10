@@ -1,4 +1,28 @@
 // ui/src/view-models.ts
+function integrationSettingsHref(workspaceId) {
+  return workspaceId ? `/settings/workspace/${encodeURIComponent(workspaceId)}/integrations/bitbucket` : "/settings/integrations/bitbucket";
+}
+function displayPullRequestAuthor(author) {
+  const value = author?.trim();
+  if (!value || /^\d+:[a-z0-9-]{20,}$/i.test(value)) return void 0;
+  return value;
+}
+function relativeTimeLabel(value, now = /* @__PURE__ */ new Date()) {
+  if (!value) return void 0;
+  const instant = new Date(value);
+  if (!Number.isFinite(instant.getTime())) return void 0;
+  const seconds = Math.floor((now.getTime() - instant.getTime()) / 1e3);
+  if (seconds < 10) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days}d ago`;
+  return instant.toLocaleDateString();
+}
 function oauthStartInput(workspaceId) {
   return { workspaceId };
 }
@@ -25,6 +49,44 @@ function number(value) {
 function array(value) {
   return Array.isArray(value) ? value : [];
 }
+function timestamp(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const date2 = new Date(value);
+    return Number.isFinite(date2.getTime()) && date2.getUTCFullYear() > 1 ? date2.toISOString() : void 0;
+  }
+  const text2 = string(value);
+  if (!text2) return void 0;
+  if (/^\d+$/.test(text2)) {
+    const date2 = new Date(Number(text2));
+    return Number.isFinite(date2.getTime()) && date2.getUTCFullYear() > 1 ? date2.toISOString() : void 0;
+  }
+  const date = new Date(text2);
+  return Number.isFinite(date.getTime()) && date.getUTCFullYear() > 1 ? text2 : void 0;
+}
+function boolean(value) {
+  return typeof value === "boolean" ? value : void 0;
+}
+function linkHref(value) {
+  const direct = string(value);
+  if (direct) return direct;
+  if (Array.isArray(value)) {
+    for (const candidate of value) {
+      const href = linkHref(candidate);
+      if (href) return href;
+    }
+    return void 0;
+  }
+  const link = record(value);
+  return string(link.href) ?? string(link.url);
+}
+function pullRequestURL(value) {
+  const links = record(value);
+  return linkHref(links.html) ?? linkHref(links.self) ?? linkHref(value);
+}
+function personLink(value, kind) {
+  const person = record(value);
+  return linkHref(record(person.links)[kind]) ?? linkHref(person[kind === "html" ? "url" : "avatarUrl"]);
+}
 function itemList(value, keys) {
   if (Array.isArray(value)) return value;
   const source = record(value);
@@ -39,19 +101,45 @@ function toCapabilities(value) {
   }
   return array(value).flatMap((entry) => typeof entry === "string" ? [entry] : []);
 }
+function normalizeTaskLinks(value, reviewKey = "") {
+  return itemList(value, ["associations", "tasks", "items", "values"]).flatMap((entry) => {
+    const source = record(entry);
+    const taskId = string(source.task_id) ?? string(source.taskId);
+    const entryReviewKey = string(source.review_key) ?? string(source.reviewKey) ?? reviewKey;
+    if (!taskId || reviewKey && entryReviewKey !== reviewKey) return [];
+    return [{
+      id: string(source.id) ?? `${entryReviewKey}:${taskId}`,
+      taskId,
+      fallbackTitle: string(source.task_title) ?? string(source.taskTitle) ?? string(source.title) ?? "Bitbucket task"
+    }];
+  });
+}
+function normalizePullRequestAssociations(value) {
+  const result = {};
+  for (const entry of itemList(value, ["associations", "items", "values"])) {
+    const source = record(entry);
+    const reviewKey = string(source.review_key) ?? string(source.reviewKey);
+    if (!reviewKey) continue;
+    const links = normalizeTaskLinks([source], reviewKey);
+    if (links.length) result[reviewKey] = [...result[reviewKey] ?? [], ...links];
+  }
+  return result;
+}
 function normalizeReviewComment(value) {
   const comment = record(value);
   const id = string(comment.id) ?? string(comment.ID) ?? string(comment.comment_id);
   if (!id) return null;
   const normalized = {
     id,
-    author: string(comment.author) ?? string(comment.Author) ?? string(record(comment.author).display_name) ?? "Unknown",
-    body: string(comment.body) ?? string(comment.Body) ?? string(comment.content) ?? ""
+    author: string(comment.author) ?? string(comment.Author) ?? string(record(comment.author).display_name) ?? string(record(comment.author).displayName) ?? "Unknown",
+    body: string(comment.body) ?? string(comment.Body) ?? string(comment.content) ?? string(record(comment.content).raw) ?? string(comment.text) ?? ""
   };
   const parentId = string(comment.parent_id) ?? string(comment.parentId) ?? string(comment.ParentID);
-  const createdAt = string(comment.created_at) ?? string(comment.createdAt) ?? string(comment.When);
+  const createdAt = timestamp(comment.created_at) ?? timestamp(comment.createdAt) ?? timestamp(comment.When);
+  const line = number(comment.line) ?? number(record(comment.inline).to) ?? number(record(comment.anchor).line);
   if (parentId) normalized.parentId = parentId;
   if (createdAt) normalized.createdAt = createdAt;
+  if (line) normalized.line = line;
   return normalized;
 }
 function statusTone(state) {
@@ -106,29 +194,6 @@ function normalizeRepositoryInspection(value) {
   }
   return repository;
 }
-function taskSupportsBitbucketRepository(taskRepositories) {
-  const providers = taskRepositories.map((repository) => {
-    const source = record(repository);
-    return string(source.provider_id) ?? string(source.providerId) ?? string(source.provider);
-  }).flatMap((provider) => provider ? [provider.toLowerCase()] : []);
-  return providers.length === 0 || providers.includes("bitbucket");
-}
-function pullRequestCreateBody(input) {
-  const body = {};
-  const title = input.title.trim();
-  const description = input.description.trim();
-  const destination = input.destination.trim();
-  if (title) body.title = title;
-  if (description) body.description = description;
-  if (destination) body.destination = destination;
-  if (input.closeSourceOnMerge) body.close_source_on_merge = true;
-  return body;
-}
-function workspacePullRequestAction(workspaceId, reviewKey, pullRequestID, operation) {
-  const body = { review_key: reviewKey, pull_request_id: pullRequestID };
-  if (operation) body.operation = operation;
-  return { workspaceId, body };
-}
 function workspaceReviewAction(workspaceId, reviewKey, pullRequestID, kind, options = {}) {
   const body = { review_key: reviewKey, pull_request_id: pullRequestID, kind };
   const comment = options.comment?.trim();
@@ -168,43 +233,131 @@ function pluginRepositoryInput(value) {
   if (repository.headBranch) body.head_branch = repository.headBranch;
   return body;
 }
+function pullRequestListRequest(repository, query, state) {
+  const parsed = parsePullRequestListQuery(query, state);
+  if (repository) {
+    return {
+      actionKey: "pullrequests.search",
+      body: { repository: pluginRepositoryInput(repository), query: parsed.query, state: parsed.state }
+    };
+  }
+  return { actionKey: "pullrequests.queue", body: { view: "queue", query: parsed.query, state: parsed.state } };
+}
+var PULL_REQUEST_STATES = /* @__PURE__ */ new Set(["open", "all", "merged", "declined"]);
+var PULL_REQUEST_STATE_TOKEN = /(^|\s)state:(open|all|merged|declined)(?=\s|$)/gi;
+function normalizedPullRequestState(value) {
+  const state = value.trim().toLowerCase();
+  return PULL_REQUEST_STATES.has(state) ? state : "open";
+}
+function pullRequestScopeQuery(state) {
+  return `state:${normalizedPullRequestState(state)}`;
+}
+function parsePullRequestListQuery(query, fallbackState) {
+  let state = normalizedPullRequestState(fallbackState);
+  const textQuery = query.replace(
+    PULL_REQUEST_STATE_TOKEN,
+    (_match, prefix, value) => {
+      state = normalizedPullRequestState(value);
+      return prefix;
+    }
+  );
+  return { query: textQuery.trim().replace(/\s+/g, " "), state };
+}
+var MAX_SAVED_QUERIES = 50;
+function normalizeSavedQueries(value) {
+  return array(value).flatMap((entry) => {
+    const source = record(entry);
+    const id = string(source.id);
+    const label = string(source.label);
+    const query = typeof source.query === "string" ? source.query.trim() : void 0;
+    const repositoryId = typeof source.repositoryId === "string" ? source.repositoryId.trim() : void 0;
+    const state = string(source.state);
+    const createdAt = string(source.createdAt);
+    if (!id || !label || query === void 0 || repositoryId === void 0 || !state || !PULL_REQUEST_STATES.has(state.toLowerCase()) || !createdAt) {
+      return [];
+    }
+    return [{ id, label, query, repositoryId, state: state.toLowerCase(), createdAt }];
+  }).slice(-MAX_SAVED_QUERIES);
+}
+function canSaveDashboardQuery(query, repositoryId) {
+  return Boolean(query.trim() || repositoryId.trim());
+}
+function newSavedQuery(input, id, createdAt) {
+  return {
+    id,
+    label: input.label.trim(),
+    query: input.query.trim(),
+    repositoryId: input.repositoryId.trim(),
+    state: normalizedPullRequestState(input.state),
+    createdAt
+  };
+}
 function normalizePullRequests(value) {
   return itemList(value, ["pull_requests", "pullRequests", "items", "values"]).map((item) => {
     const source = record(item);
     const id = string(source.id) ?? string(source.key) ?? string(source.uuid) ?? String(number(source.number) ?? number(source.id) ?? "");
     const repository = record(source.repository);
-    const repositoryId = string(source.repository_id) ?? string(source.repositoryId) ?? string(repository.id) ?? "";
+    const repositorySlug = string(repository.slug) ?? string(repository.name);
+    const repositoryNamespace = string(record(repository.project).key) ?? string(record(repository.owner).username) ?? string(record(repository.workspace).slug);
+    const repositoryId = string(source.repository_id) ?? string(source.repositoryId) ?? string(repository.full_name) ?? (repositoryNamespace && repositorySlug ? `${repositoryNamespace}/${repositorySlug}` : void 0) ?? string(repository.id) ?? "";
     const numberValue = number(source.number) ?? number(source.id) ?? 0;
     const title = string(source.title) ?? `Pull request ${numberValue || id}`;
     if (!id || !repositoryId || !numberValue) return null;
     const status = record(source.status);
     const state = string(source.state) ?? string(source.status) ?? "UNKNOWN";
+    const reviewKey = string(source.review_key) ?? string(source.reviewKey) ?? `${repositoryId}:${id}`;
+    const author = record(source.author);
+    const sourceRef = record(source.source);
+    const destinationRef = record(source.destination);
+    const fromRef = record(source.fromRef);
+    const toRef = record(source.toRef);
     return {
-      key: string(source.review_key) ?? string(source.reviewKey) ?? `${repositoryId}:${id}`,
+      key: reviewKey,
       id,
       number: numberValue,
       title,
-      url: string(source.url) ?? string(source.links) ?? "",
+      url: string(source.url) ?? pullRequestURL(source.links) ?? "",
       repositoryId,
       repositoryName: string(source.repository_name) ?? string(source.repositoryName) ?? string(repository.name) ?? repositoryId,
       state,
-      author: string(source.author) ?? string(record(source.author).display_name) ?? string(record(source.author).name),
-      updatedAt: string(source.updated_at) ?? string(source.updatedAt),
+      author: string(source.author_display_name) ?? string(source.authorDisplayName) ?? string(author.display_name) ?? string(author.displayName) ?? string(author.name) ?? string(source.author),
+      authorUrl: string(source.author_url) ?? string(source.authorUrl) ?? personLink(author, "html"),
+      authorAvatarUrl: string(source.author_avatar_url) ?? string(source.authorAvatarUrl) ?? personLink(author, "avatar"),
+      createdAt: timestamp(source.created_at) ?? timestamp(source.createdAt) ?? timestamp(source.created_on) ?? timestamp(source.createdDate),
+      updatedAt: timestamp(source.updated_at) ?? timestamp(source.updatedAt) ?? timestamp(source.updated_on) ?? timestamp(source.updatedDate),
+      mergedAt: timestamp(source.merged_at) ?? timestamp(source.mergedAt),
+      closedAt: timestamp(source.closed_at) ?? timestamp(source.closedAt),
+      sourceBranch: string(source.source_branch) ?? string(source.sourceBranch) ?? string(record(sourceRef.branch).name) ?? string(sourceRef.branch) ?? string(fromRef.displayId) ?? string(fromRef.id)?.replace(/^refs\/heads\//, ""),
+      destinationBranch: string(source.destination_branch) ?? string(source.destinationBranch) ?? string(record(destinationRef.branch).name) ?? string(destinationRef.branch) ?? string(toRef.displayId) ?? string(toRef.id)?.replace(/^refs\/heads\//, ""),
+      headCommit: string(source.head_commit) ?? string(source.headCommit) ?? string(record(sourceRef.commit).hash) ?? string(fromRef.latestCommit),
       statusLabel: string(status.label) ?? string(source.status_label) ?? string(source.statusLabel),
       statusTone: statusTone(string(status.state) ?? state),
+      tasks: normalizeTaskLinks(source.associations ?? source.tasks, reviewKey),
       capabilities: toCapabilities(source.capabilities)
     };
   }).flatMap((item) => item ? [item] : []);
+}
+function isCurrentUserParticipant(participant) {
+  const user = record(participant.user);
+  return participant.is_current_user === true || participant.isCurrentUser === true || participant.currentUser === true || user.is_current_user === true || user.isCurrentUser === true;
+}
+function normalizeViewerApproval(source, participants) {
+  const direct = boolean(source.viewer_approved) ?? boolean(source.viewerApproved) ?? boolean(source.current_user_approved) ?? boolean(source.currentUserApproved);
+  if (direct !== void 0) return direct;
+  const viewer = participants.map(record).find(isCurrentUserParticipant);
+  if (!viewer) return void 0;
+  return boolean(viewer.approved) ?? string(viewer.status)?.toUpperCase() === "APPROVED";
 }
 function normalizeReviewDetail(value) {
   const source = record(value);
   const pr = normalizePullRequests({ pull_requests: [source] })[0];
   if (!pr) return null;
+  const participantItems = itemList(source.participants ?? source.reviewers, ["items", "values"]);
   return {
     ...pr,
-    description: string(source.description),
-    sourceBranch: string(source.source_branch) ?? string(record(source.source).branch),
-    destinationBranch: string(source.destination_branch) ?? string(record(source.destination).branch),
+    description: string(source.description) ?? string(record(source.description).raw),
+    sourceBranch: pr.sourceBranch,
+    destinationBranch: pr.destinationBranch,
     files: itemList(source.files, ["items", "values"]).flatMap((entry) => {
       const file = record(entry);
       const path = string(file.path) ?? string(file.name);
@@ -215,10 +368,21 @@ function normalizeReviewDetail(value) {
       const id = string(commit.id) ?? string(commit.hash);
       return id ? [{ id, message: string(commit.message) ?? id, author: string(commit.author) ?? string(record(commit.author).name) }] : [];
     }),
-    participants: itemList(source.participants, ["items", "values"]).flatMap((entry) => {
+    participants: participantItems.flatMap((entry) => {
       const participant = record(entry);
-      const name = string(participant.name) ?? string(participant.display_name) ?? string(record(participant.user).display_name);
-      return name ? [{ name, role: string(participant.role), approved: participant.approved === true }] : [];
+      const user = record(participant.user);
+      const name = string(participant.name) ?? string(participant.display_name) ?? string(participant.displayName) ?? string(user.display_name) ?? string(user.displayName) ?? string(user.name);
+      const approved = boolean(participant.approved) ?? string(participant.status)?.toUpperCase() === "APPROVED";
+      const isCurrentUser = boolean(participant.is_current_user) ?? boolean(participant.isCurrentUser) ?? boolean(participant.currentUser) ?? boolean(user.is_current_user) ?? boolean(user.isCurrentUser);
+      return name ? [{
+        id: string(participant.id) ?? string(user.account_id) ?? string(user.slug),
+        name,
+        role: string(participant.role),
+        approved,
+        isCurrentUser,
+        url: personLink(user, "html"),
+        avatarUrl: personLink(user, "avatar")
+      }] : [];
     }),
     threads: itemList(source.threads, ["items", "values"]).flatMap((entry) => {
       const thread = record(entry);
@@ -233,20 +397,146 @@ function normalizeReviewDetail(value) {
         id,
         author: rootComment?.author ?? string(thread.author) ?? string(record(thread.author).display_name) ?? "Unknown",
         body: rootComment?.body ?? string(thread.body) ?? string(thread.content) ?? "",
-        createdAt: rootComment?.createdAt ?? string(thread.created_at) ?? string(thread.createdAt),
+        createdAt: rootComment?.createdAt ?? timestamp(thread.created_at) ?? timestamp(thread.createdAt),
         resolved: thread.resolved === true,
         file: string(thread.file) ?? string(thread.path),
         comments: comments.length > 0 ? comments : [{ id, author: string(thread.author) ?? string(record(thread.author).display_name) ?? "Unknown", body: string(thread.body) ?? string(thread.content) ?? "" }]
       }];
     }),
-    statuses: itemList(source.statuses, ["items", "values"]).flatMap((entry) => {
+    statuses: itemList(source.statuses ?? source.builds, ["items", "values"]).flatMap((entry) => {
       const status = record(entry);
       const key = string(status.key) ?? string(status.id);
       const name = string(status.name) ?? key;
       const state = string(status.state);
-      return key && name && state ? [{ key, name, state, url: string(status.url), target: string(status.target) }] : [];
-    })
+      const url = string(status.url) ?? pullRequestURL(status.links);
+      const target = string(status.target) ?? string(status.refname);
+      const output = string(status.output) ?? string(status.description);
+      const startedAt = timestamp(status.started_at) ?? timestamp(status.startedAt) ?? timestamp(status.created_on) ?? timestamp(status.createdDate);
+      const completedAt = timestamp(status.completed_at) ?? timestamp(status.completedAt) ?? timestamp(status.updated_on) ?? timestamp(status.updatedDate);
+      return key && name && state ? [{
+        key,
+        name,
+        state,
+        ...url ? { url } : {},
+        ...target ? { target } : {},
+        ...output ? { output } : {},
+        ...startedAt ? { startedAt } : {},
+        ...completedAt ? { completedAt } : {}
+      }] : [];
+    }),
+    viewerApproved: normalizeViewerApproval(source, participantItems)
   };
+}
+function hostChangeRequestState(value) {
+  const state = value.trim().toUpperCase();
+  if (state === "MERGED") return "merged";
+  if (["DECLINED", "CLOSED", "SUPERSEDED"].includes(state)) return "closed";
+  if (state === "DRAFT") return "draft";
+  return "open";
+}
+function changeRequestDetailModel(detail) {
+  const reviewers = detail.participants.filter(
+    (participant) => ["REVIEWER", "APPROVER"].includes(participant.role?.toUpperCase() ?? "REVIEWER")
+  );
+  const approved = reviewers.filter((participant) => participant.approved);
+  const requested = reviewers.filter((participant) => !participant.approved);
+  const person = (participant) => ({
+    name: participant.name,
+    ...participant.url ? { url: participant.url } : {},
+    ...participant.avatarUrl ? { avatarUrl: participant.avatarUrl } : {}
+  });
+  const comments = detail.threads.flatMap(
+    (thread) => thread.comments.map((comment) => ({
+      id: comment.id,
+      ...comment.parentId ? { parentId: comment.parentId } : {},
+      author: { name: comment.author },
+      body: comment.body,
+      ...comment.createdAt ? { createdAt: comment.createdAt } : {},
+      ...thread.file ? { path: thread.file } : {},
+      ...comment.line ? { line: comment.line } : {},
+      resolved: thread.resolved
+    }))
+  );
+  return {
+    providerId: "bitbucket",
+    reviewKey: detail.key,
+    number: detail.number,
+    title: detail.title,
+    url: detail.url,
+    state: hostChangeRequestState(detail.state),
+    ...detail.state.trim().toUpperCase() === "DRAFT" ? { draft: true } : {},
+    author: {
+      name: detail.author ?? "Unknown",
+      ...detail.authorUrl ? { url: detail.authorUrl } : {},
+      ...detail.authorAvatarUrl ? { avatarUrl: detail.authorAvatarUrl } : {}
+    },
+    ...detail.createdAt ? { createdAt: detail.createdAt } : {},
+    ...detail.mergedAt ? { mergedAt: detail.mergedAt } : {},
+    ...detail.closedAt ? { closedAt: detail.closedAt } : {},
+    sourceBranch: detail.sourceBranch ?? "source",
+    targetBranch: detail.destinationBranch ?? "destination",
+    additions: detail.files.reduce((total, file) => total + (file.additions ?? 0), 0),
+    deletions: detail.files.reduce((total, file) => total + (file.deletions ?? 0), 0),
+    ...detail.description ? { description: detail.description } : {},
+    ...approved.length > 0 ? { reviewState: "approved" } : requested.length > 0 ? { reviewState: "pending" } : {},
+    ...requested.length > 0 ? { pendingReviewCount: requested.length } : {},
+    reviews: approved.map((participant) => ({
+      id: participant.id ?? participant.name,
+      author: person(participant),
+      state: "APPROVED"
+    })),
+    requestedReviewers: requested.map(person),
+    checks: detail.statuses.map((status) => ({
+      id: status.key,
+      name: status.name,
+      state: status.state,
+      ...status.url ? { url: status.url } : {},
+      ...status.output ? { output: status.output } : {},
+      ...status.startedAt ? { startedAt: status.startedAt } : {},
+      ...status.completedAt ? { completedAt: status.completedAt } : {}
+    })),
+    comments,
+    ...detail.updatedAt ? { lastSyncedAt: detail.updatedAt } : {}
+  };
+}
+function changeRequestDetailActions(detail) {
+  if (hostChangeRequestState(detail.state) !== "open") return [];
+  const can = (capability) => detail.capabilities.includes(capability);
+  const actions = [];
+  if (can("approve")) {
+    actions.push(detail.viewerApproved ? {
+      id: "unapprove",
+      label: "Remove approval",
+      pendingLabel: "Removing approval\u2026",
+      placement: "header",
+      tone: "secondary"
+    } : {
+      id: "approve",
+      label: "Approve",
+      pendingLabel: "Approving\u2026",
+      placement: "header",
+      tone: "success"
+    });
+  }
+  if (can("merge")) {
+    actions.push({ id: "merge", label: "Merge", pendingLabel: "Merging\u2026", placement: "header" });
+  }
+  if (can("decline")) {
+    actions.push({
+      id: "decline",
+      label: "Decline",
+      pendingLabel: "Declining\u2026",
+      placement: "header",
+      tone: "danger"
+    });
+  }
+  if (can("comments")) {
+    actions.push({ id: "comment", label: "Comment", placement: "comment", input: "text" });
+  }
+  if (can("thread_replies")) {
+    actions.push({ id: "reply", label: "Reply", placement: "thread", input: "text" });
+  }
+  return actions;
 }
 function connectionIdentity(product, authMethod) {
   if (product === "cloud" && authMethod === "api_token") {
@@ -281,15 +571,71 @@ function validateCloudWorkspace(input) {
   if (input.product !== "cloud" || input.cloudWorkspace.trim()) return null;
   return "Enter Bitbucket Cloud workspace slug or ID.";
 }
-function currentWatchFilter(query, state) {
-  return { query: query.trim(), states: state === "all" ? [] : [state] };
-}
-function launchPresets() {
+function taskLaunchPresets() {
   return [
-    { id: "default", name: "Default" },
-    { id: "review", name: "Review and test" },
-    { id: "implement", name: "Implement change" }
+    {
+      id: "review",
+      label: "Review",
+      hint: "Read the diff, flag issues",
+      iconName: "eye",
+      prompt: (pullRequest) => `Review Bitbucket pull request ${pullRequest.url || pullRequest.key}. Inspect the changes, run relevant tests, and report concrete findings.`
+    },
+    {
+      id: "address-feedback",
+      label: "Address feedback",
+      hint: "Apply review comments",
+      iconName: "message",
+      prompt: (pullRequest) => `Address the review feedback on Bitbucket pull request ${pullRequest.url || pullRequest.key}. Make the requested changes, verify them, and summarize what changed.`
+    },
+    {
+      id: "fix-ci",
+      label: "Fix CI",
+      hint: "Diagnose failing checks",
+      iconName: "tool",
+      prompt: (pullRequest) => `Fix the failing CI checks on Bitbucket pull request ${pullRequest.url || pullRequest.key}. Reproduce the failures, implement the smallest correct fix, and run the relevant checks.`
+    }
   ];
+}
+function taskDialogInitialValues(pullRequest, preset, hostRepositoryId, remoteRepository) {
+  const values = {
+    title: `${preset.label}: ${pullRequest.title}`,
+    description: preset.prompt(pullRequest)
+  };
+  if (hostRepositoryId) values.repositoryId = hostRepositoryId;
+  else if (pullRequest.url) {
+    values.remoteUrl = pullRequest.url;
+    if (remoteRepository) values.remoteRepository = remoteRepository;
+  }
+  if (pullRequest.sourceBranch) {
+    values.branch = pullRequest.sourceBranch;
+    values.checkoutBranch = pullRequest.sourceBranch;
+  }
+  return values;
+}
+function usePluginTaskCreation(hostRepositoryId) {
+  return !hostRepositoryId?.trim();
+}
+function taskLaunchBody(pullRequest, payload, launchId) {
+  const task = {
+    title: string(payload.title) ?? "",
+    description: string(payload.description) ?? "",
+    workflow_id: string(payload.workflow_id) ?? "",
+    start_agent: payload.start_agent === true,
+    plan_mode: payload.plan_mode === true
+  };
+  const workflowStepID = string(payload.workflow_step_id);
+  const agentProfileID = string(payload.agent_profile_id);
+  const executorProfileID = string(payload.executor_profile_id);
+  if (workflowStepID) task.workflow_step_id = workflowStepID;
+  if (agentProfileID) task.agent_profile_id = agentProfileID;
+  if (executorProfileID) task.executor_profile_id = executorProfileID;
+  return { review_key: pullRequest.key, launch_id: launchId, task };
+}
+function taskFromLaunchResult(value) {
+  const result = record(value);
+  const taskID = string(result.task_id);
+  if (!taskID) throw new Error("Bitbucket task launch returned no task id.");
+  return { id: taskID, bitbucketLinked: result.linked === true };
 }
 function normalizeWatches(value) {
   return itemList(value, ["watches", "items", "values"]).flatMap((entry) => {
@@ -357,6 +703,100 @@ function errorMessage(error) {
   return string(source.message) ?? string(source.error) ?? "Bitbucket request failed. Try again.";
 }
 
+// ui/src/task-review-status.ts
+async function loadTaskPullRequestDetails(invokeAction, context, signal) {
+  const scope = {
+    ...context.workspaceId ? { workspaceId: context.workspaceId } : {},
+    taskId: context.taskId
+  };
+  const linkedResponse = await invokeAction(
+    "pullrequests.get",
+    { ...scope, body: { view: "task" } },
+    { signal }
+  );
+  const linked = normalizePullRequests(linkedResponse);
+  return Promise.all(linked.map(async (pullRequest) => {
+    const detailResponse = await invokeAction(
+      "pullrequests.get",
+      {
+        ...scope,
+        body: {
+          review_key: pullRequest.key,
+          pull_request_id: pullRequest.id,
+          include: ["participants", "threads", "status"]
+        }
+      },
+      { signal }
+    );
+    return normalizeReviewDetail(detailResponse) ?? pullRequest;
+  }));
+}
+function normalizePipelineState(value) {
+  const state = value.trim().toUpperCase();
+  if (["SUCCESS", "SUCCESSFUL", "PASSED", "COMPLETED"].includes(state)) return "success";
+  if (["FAILED", "FAILURE", "ERROR", "STOPPED"].includes(state)) return "failure";
+  if (["PENDING", "INPROGRESS", "IN_PROGRESS", "RUNNING"].includes(state)) return "pending";
+  return "neutral";
+}
+function pullRequestState(value) {
+  const state = value.trim().toUpperCase();
+  if (state === "MERGED") return "merged";
+  if (state === "DRAFT") return "draft";
+  if (["DECLINED", "CLOSED", "SUPERSEDED"].includes(state)) return "closed";
+  return "open";
+}
+function changeRequestStatusView(pullRequest, refreshedAt = Date.now()) {
+  const checks = (pullRequest.statuses ?? []).map((status) => ({
+    id: status.key,
+    label: status.name,
+    state: normalizePipelineState(status.state),
+    ...status.target ? { detail: status.target } : {},
+    ...status.url ? { url: status.url } : {}
+  }));
+  const states = checks.map((row) => row.state);
+  const reviewers = "participants" in pullRequest && Array.isArray(pullRequest.participants) ? pullRequest.participants.filter(
+    (participant) => ["REVIEWER", "APPROVER"].includes(participant.role?.toUpperCase() ?? "REVIEWER")
+  ) : [];
+  const approved = reviewers.filter((participant) => participant.approved).length;
+  const requested = reviewers.length - approved;
+  const unresolvedComments = "threads" in pullRequest && Array.isArray(pullRequest.threads) ? pullRequest.threads.filter((thread) => !thread.resolved).length : 0;
+  const providerUpdatedAt = pullRequest.updatedAt ? Date.parse(pullRequest.updatedAt) : Number.NaN;
+  const updatedAt = Number.isFinite(providerUpdatedAt) ? providerUpdatedAt : refreshedAt;
+  const pipelineState = states.includes("failure") ? "failure" : states.includes("pending") ? "pending" : states.length > 0 && states.every((state) => state === "success") ? "success" : "neutral";
+  return {
+    number: pullRequest.number,
+    state: pullRequestState(pullRequest.state),
+    pipelineState,
+    checks,
+    ...reviewers.length > 0 ? {
+      review: {
+        state: approved > 0 ? "approved" : "pending",
+        approved,
+        ...requested > 0 ? { requested } : {}
+      }
+    } : {},
+    ...unresolvedComments > 0 ? { unresolvedComments } : {},
+    updatedAt
+  };
+}
+function reviewSummaryForPullRequest(pullRequest, refreshedAt = Date.now()) {
+  return {
+    providerId: "bitbucket",
+    reviewKey: pullRequest.key,
+    title: pullRequest.title,
+    url: pullRequest.url,
+    repositoryId: pullRequest.repositoryId,
+    state: pullRequest.state,
+    ...pullRequest.statusLabel ? {
+      statusBadge: {
+        label: pullRequest.statusLabel,
+        ...pullRequest.statusTone ? { tone: pullRequest.statusTone } : {}
+      }
+    } : {},
+    taskStatus: changeRequestStatusView(pullRequest, refreshedAt)
+  };
+}
+
 // ui/src/bundle.ts
 var PLUGIN_ID = "kandev-plugin-bitbucket";
 var action = {
@@ -367,14 +807,14 @@ var action = {
   repositoriesList: "repositories.list",
   repositoriesBranches: "repositories.branches",
   repositoriesInspect: "repositories.inspect",
-  pullRequestsQueue: "pullrequests.queue",
   pullRequestsGet: "pullrequests.get",
+  pullRequestsAssociations: "pullrequests.associations",
   pullRequestsInspect: "pullrequests.inspect",
-  pullRequestsLaunch: "pullrequests.launch",
   pullRequestsLink: "pullrequests.link",
-  pullRequestsUnlink: "pullrequests.unlink",
   pullRequestsCreate: "pullrequests.create",
+  pullRequestsUnlink: "pullrequests.unlink",
   reviewsAction: "reviews.action",
+  tasksLaunch: "tasks.launch",
   watchesGet: "watches.get",
   watchesUpdate: "watches.update",
   watchesRun: "watches.run",
@@ -393,18 +833,7 @@ var reviewStore = /* @__PURE__ */ (() => {
       return snapshots.get(taskId) ?? [];
     },
     set(taskId, pullRequests) {
-      snapshots.set(
-        taskId,
-        pullRequests.map((pullRequest) => ({
-          providerId: "bitbucket",
-          reviewKey: pullRequest.key,
-          title: pullRequest.title,
-          url: pullRequest.url,
-          repositoryId: pullRequest.repositoryId,
-          state: pullRequest.state,
-          statusBadge: pullRequest.statusLabel ? { label: pullRequest.statusLabel, tone: pullRequest.statusTone } : void 0
-        }))
-      );
+      snapshots.set(taskId, pullRequests.map((pullRequest) => reviewSummaryForPullRequest(pullRequest)));
       listeners.get(taskId)?.forEach((listener) => listener());
     },
     subscribe(taskId, listener) {
@@ -423,6 +852,57 @@ var reviewStore = /* @__PURE__ */ (() => {
     }
   };
 })();
+var associationStore = /* @__PURE__ */ (() => {
+  const snapshots = /* @__PURE__ */ new Map();
+  const listeners = /* @__PURE__ */ new Map();
+  return {
+    get(workspaceId) {
+      return snapshots.get(workspaceId) ?? [];
+    },
+    set(workspaceId, value) {
+      const associations = normalizePullRequestAssociations(value);
+      snapshots.set(
+        workspaceId,
+        Object.entries(associations).flatMap(
+          ([reviewKey, tasks]) => tasks.map((task) => ({ providerId: "bitbucket", taskId: task.taskId, reviewKey }))
+        )
+      );
+      listeners.get(workspaceId)?.forEach((listener) => listener());
+    },
+    subscribe(workspaceId, listener) {
+      const workspaceListeners = listeners.get(workspaceId) ?? /* @__PURE__ */ new Set();
+      workspaceListeners.add(listener);
+      listeners.set(workspaceId, workspaceListeners);
+      return () => {
+        workspaceListeners.delete(listener);
+        if (workspaceListeners.size === 0) listeners.delete(workspaceId);
+      };
+    },
+    clear() {
+      snapshots.clear();
+      listeners.forEach(
+        (workspaceListeners) => workspaceListeners.forEach((listener) => listener())
+      );
+      listeners.clear();
+    }
+  };
+})();
+async function refreshAssociationStore(host, workspaceId, signal) {
+  const response = await host.api.invokeAction(
+    action.pullRequestsAssociations,
+    { workspaceId },
+    { signal }
+  );
+  if (!signal.aborted) associationStore.set(workspaceId, response);
+}
+async function refreshReviewStore(host, taskId, signal, workspaceId) {
+  const pullRequests = await loadTaskPullRequestDetails(
+    (key, input, options) => host.api.invokeAction(key, input, options),
+    { taskId, ...workspaceId ? { workspaceId } : {} },
+    signal
+  );
+  if (!signal.aborted) reviewStore.set(taskId, pullRequests);
+}
 function record2(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
@@ -441,6 +921,65 @@ function useActiveWorkspaceId(host) {
   }, [host]);
   return activeWorkspaceId;
 }
+var SAVED_QUERIES_KEY = "dashboard-saved-queries";
+function useSavedQueries(host, workspaceId) {
+  const { React } = host;
+  const [queries, setQueries] = React.useState([]);
+  const load = async () => {
+    if (!workspaceId) {
+      setQueries([]);
+      return;
+    }
+    const entry = await host.storage.get("workspace", workspaceId, SAVED_QUERIES_KEY);
+    setQueries(normalizeSavedQueries(entry?.value));
+  };
+  React.useEffect(() => {
+    if (!workspaceId) {
+      setQueries([]);
+      return;
+    }
+    let active = true;
+    const sync = async () => {
+      const entry = await host.storage.get("workspace", workspaceId, SAVED_QUERIES_KEY);
+      if (active) setQueries(normalizeSavedQueries(entry?.value));
+    };
+    void sync();
+    const unsubscribe = host.storage.subscribe(
+      { scope: "workspace", scopeId: workspaceId, key: SAVED_QUERIES_KEY },
+      () => void sync()
+    );
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [host, workspaceId]);
+  const persist = async (next) => {
+    if (!workspaceId) return;
+    const normalized = normalizeSavedQueries(next);
+    setQueries(normalized);
+    try {
+      await host.storage.set("workspace", workspaceId, SAVED_QUERIES_KEY, normalized);
+    } catch (error) {
+      await load();
+      throw error;
+    }
+  };
+  return {
+    queries,
+    async save(input) {
+      const created = newSavedQuery(
+        input,
+        `saved-${globalThis.crypto.randomUUID()}`,
+        (/* @__PURE__ */ new Date()).toISOString()
+      );
+      await persist([...queries, created]);
+      return created;
+    },
+    remove(id) {
+      void persist(queries.filter((query) => query.id !== id));
+    }
+  };
+}
 function requestBody(input) {
   if (!input) return void 0;
   return JSON.parse(JSON.stringify(input));
@@ -452,13 +991,14 @@ function usePluginQuery(host, key, input, enabled = true) {
   const [state, setState] = React.useState({
     data: null,
     loading: enabled,
-    error: null
+    error: null,
+    lastFetchedAt: null
   });
   React.useEffect(() => {
     let active = true;
     const controller = new AbortController();
     if (!enabled) {
-      setState({ data: null, loading: false, error: null });
+      setState({ data: null, loading: false, error: null, lastFetchedAt: null });
       return () => {
         active = false;
         controller.abort();
@@ -468,7 +1008,7 @@ function usePluginQuery(host, key, input, enabled = true) {
     void host.api.invokeAction(key, requestBody(JSON.parse(serializedInput)), {
       signal: controller.signal
     }).then((data) => {
-      if (active) setState({ data, loading: false, error: null });
+      if (active) setState({ data, loading: false, error: null, lastFetchedAt: /* @__PURE__ */ new Date() });
     }).catch((error) => {
       if (active) setState((previous) => ({ ...previous, loading: false, error: errorMessage(error) }));
     });
@@ -513,11 +1053,6 @@ function isAbortError(reason) {
 }
 function icon(h2, name) {
   const paths = {
-    bitbucket: "M5 4h14l-1.6 15H6.6L5 4Zm4 4 1.2 7h3.6L15 8H9Z",
-    filter: "M4 6h16M7 12h10m-7 6h4",
-    plus: "M12 5v14M5 12h14",
-    link: "M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1",
-    refresh: "M20 11a8 8 0 1 0 2 5.2M20 4v7h-7",
     watch: "M3 12s3.2-5 9-5 9 5 9 5-3.2 5-9 5-9-5-9-5Zm9 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
     back: "m15 18-6-6 6-6"
   };
@@ -534,7 +1069,19 @@ function icon(h2, name) {
       strokeLinejoin: "round",
       "aria-hidden": true
     },
-    h2("path", { d: paths[name] ?? paths.bitbucket })
+    h2("path", { d: paths[name] ?? paths.back })
+  );
+}
+function pullRequestStateIcon(host, pullRequest) {
+  const normalized = pullRequest.state.toLowerCase();
+  const merged = normalized === "merged";
+  const closed = normalized === "declined" || normalized === "closed";
+  return host.jsx(
+    host.ui.IntegrationIcon,
+    {
+      name: merged ? "merged" : closed ? "pull-request-closed" : "pull-request",
+      className: `h-4 w-4 ${merged ? "text-purple-600 dark:text-purple-400" : closed ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`
+    }
   );
 }
 function Badge(host, label, tone = "neutral") {
@@ -722,12 +1269,10 @@ function ConnectionHealth({ host, workspaceId: scopedWorkspaceId }) {
     ),
     h2(
       ui.CardContent,
-      { className: "bb-card-actions" },
+      { className: "bb-settings-form" },
       connection.loading ? h2(ui.Spinner, { "aria-label": "Checking Bitbucket connection" }) : null,
       connection.error ? h2("p", { className: "bb-error", role: "alert" }, connection.error) : null,
       message ? h2("p", { className: "bb-message", role: "status" }, message) : null,
-      h2(ui.Button, { type: "button", variant: "outline", className: "min-h-11", disabled: saving, onClick: saveConnection }, "Check connection"),
-      h2(ui.Button, { type: "button", variant: "outline", className: "min-h-11", disabled: saving || !scopedWorkspaceId, onClick: openDisconnectConfirmation }, "Disconnect Bitbucket"),
       h2(ui.Label, { htmlFor: "bitbucket-product" }, "Bitbucket product"),
       h2(ui.Select, { value: product, onValueChange: (next) => {
         setProduct(next);
@@ -753,6 +1298,13 @@ function ConnectionHealth({ host, workspaceId: scopedWorkspaceId }) {
       identityField ? h2("div", { className: "bb-field" }, h2(ui.Label, { htmlFor: "bitbucket-connection-identity" }, identityField.label), h2(ui.Input, { id: "bitbucket-connection-identity", "data-testid": "bitbucket-connection-identity", type: identityField.inputType, className: "min-h-11", autoComplete: identityField.inputType === "email" ? "email" : "username", value: identity, onChange: (event) => setIdentity(event.target.value), "aria-describedby": "bitbucket-connection-identity-help" }), h2("p", { id: "bitbucket-connection-identity-help", className: "bb-capability-note" }, identityField.help)) : null,
       authMethod === "oauth" ? h2("section", { className: "bb-oauth-registration", "aria-label": "OAuth client registration" }, oauthRegistration.configured ? h2("p", { className: "bb-capability-note", role: "status" }, "OAuth app registration is configured. Enter both values only to replace it.") : null, h2("div", { className: "bb-field" }, h2(ui.Label, { htmlFor: "bitbucket-oauth-client-id" }, oauthRegistration.configured ? "OAuth client ID (optional to replace)" : "OAuth client ID"), h2(ui.Input, { id: "bitbucket-oauth-client-id", "data-testid": "bitbucket-oauth-client-id", className: "min-h-11", autoComplete: "off", value: oauthClientId, onChange: (event) => setOAuthClientId(event.target.value) })), h2("div", { className: "bb-field" }, h2(ui.Label, { htmlFor: "bitbucket-oauth-client-secret" }, oauthRegistration.configured ? "OAuth client secret (optional to replace)" : "OAuth client secret"), h2(ui.Input, { id: "bitbucket-oauth-client-secret", "data-testid": "bitbucket-oauth-client-secret", type: "password", className: "min-h-11", autoComplete: "off", value: oauthClientSecret, onChange: (event) => setOAuthClientSecret(event.target.value), "aria-describedby": "bitbucket-oauth-client-secret-help" }), h2("p", { id: "bitbucket-oauth-client-secret-help", className: "bb-capability-note" }, "Stored only by Bitbucket secret handling. Existing secrets are never displayed.")), h2("div", { className: "bb-field" }, h2(ui.Label, { htmlFor: "bitbucket-oauth-callback-url" }, "OAuth callback URL"), h2(ui.Input, { id: "bitbucket-oauth-callback-url", "data-testid": "bitbucket-oauth-callback-url", type: "url", className: "min-h-11", readOnly: true, value: oauthCallbackUrl, "aria-describedby": "bitbucket-oauth-callback-url-help" }), h2("p", { id: "bitbucket-oauth-callback-url-help", className: "bb-capability-note" }, "Copy this Kandev callback URL into your OAuth app. It is derived from this Kandev origin."))) : null,
       authMethod === "oauth" ? h2(ui.Button, { type: "button", className: "min-h-11", disabled: saving || !oauthReady, onClick: startOauth }, "Connect with OAuth") : null,
+      h2(ui.Separator, null),
+      h2(
+        "div",
+        { className: "bb-settings-actions" },
+        h2(ui.Button, { type: "button", variant: "outline", className: "min-h-11", disabled: saving, onClick: saveConnection }, "Check connection"),
+        h2(ui.Button, { type: "button", variant: "destructive", className: "bb-settings-disconnect min-h-11", disabled: saving || !scopedWorkspaceId, onClick: openDisconnectConfirmation }, "Disconnect Bitbucket")
+      ),
       responsive.isMobile && scopedWorkspaceId ? h2(
         ui.Drawer,
         { open: disconnectOpen, onOpenChange: (open) => setDisconnectOpen(open) },
@@ -766,305 +1318,140 @@ function ConnectionHealth({ host, workspaceId: scopedWorkspaceId }) {
     )
   );
 }
-function QueueList({
-  host,
-  pullRequests,
-  selectedKey,
-  onSelect
-}) {
-  const { jsx: h2 } = host;
-  return h2(
-    "ul",
-    { className: "bb-queue", "data-testid": "bitbucket-pr-queue" },
-    ...pullRequests.map(
-      (pullRequest) => h2(
-        "li",
-        { key: pullRequest.key },
-        h2(
-          "button",
-          {
-            type: "button",
-            className: `bb-queue-row ${selectedKey === pullRequest.key ? "is-selected" : ""}`,
-            "aria-current": selectedKey === pullRequest.key ? "page" : void 0,
-            onClick: () => onSelect(pullRequest)
-          },
-          h2("span", { className: "bb-queue-title" }, `#${pullRequest.number} ${pullRequest.title}`),
-          h2("span", { className: "bb-queue-meta" }, `${pullRequest.repositoryName} \xB7 ${pullRequest.author ?? "Unknown"}`),
-          h2("span", { className: "bb-queue-status" }, Badge(host, pullRequest.statusLabel ?? pullRequest.state, pullRequest.statusTone))
-        )
-      )
-    )
-  );
-}
-function RepositoryBrowser({ host, workspaceId, onChoose }) {
-  const { jsx: h2, ui } = host;
-  const query = usePluginQuery(host, action.repositoriesList, workspaceId ? { workspaceId } : void 0, Boolean(workspaceId));
-  const repositories = normalizeRepositories(query.data);
-  return h2(
-    ui.Card,
-    { className: "bb-repositories", "data-testid": "bitbucket-repository-browser" },
-    h2(ui.CardHeader, null, h2(ui.CardTitle, null, "Repositories"), h2(ui.CardDescription, null, "Browse connected Bitbucket repositories or filter the pull-request queue.")),
-    h2(
-      ui.CardContent,
-      { className: "bb-card-actions" },
-      query.error ? h2("p", { className: "bb-error", role: "alert" }, query.error) : null,
-      query.loading ? h2(ui.Spinner, { "aria-label": "Loading Bitbucket repositories" }) : null,
-      !query.loading && !repositories.length ? h2("p", { className: "bb-capability-note" }, "No repositories available for this connection.") : null,
-      repositories.length ? h2(
-        "ul",
-        { className: "bb-repository-list" },
-        ...repositories.map(
-          (repository) => h2(
-            "li",
-            { key: repository.repositoryId },
-            h2(
-              ui.Button,
-              { type: "button", variant: "ghost", className: "min-h-11", onClick: () => onChoose(repository.repositoryName) },
-              h2("span", null, `${repository.ownerOrProject}/${repository.repositoryName}`),
-              repository.defaultBranch ? h2("small", null, repository.defaultBranch) : null
-            )
-          )
-        )
-      ) : null
-    )
-  );
-}
-function PullRequestActions({ host, pullRequest, workspaceId, taskId, onChanged }) {
-  const { jsx: h2, ui, React } = host;
-  const [working, setWorking] = React.useState(null);
-  const [error, setError] = React.useState(null);
-  const [comment, setComment] = React.useState("");
-  const request = useAbortableAction(host);
-  const invoke = async (key, resourceInput) => {
-    if (!workspaceId) return;
-    setWorking(key);
-    setError(null);
-    try {
-      await request.invoke(key, resourceInput);
-      onChanged();
-      if (key === action.reviewsAction) setComment("");
-    } catch (reason) {
-      if (!isAbortError(reason)) setError(errorMessage(reason));
-    } finally {
-      setWorking(null);
-    }
-  };
-  const runTaskAction = (key) => {
-    if (!workspaceId) return;
-    return invoke(key, key === action.pullRequestsLink ? { workspaceId, taskId, body: { review_key: pullRequest.key, pull_request_id: pullRequest.id } } : workspacePullRequestAction(workspaceId, pullRequest.key, pullRequest.id));
-  };
-  const runReviewAction = (kind, nextComment) => {
-    if (!workspaceId) return;
-    return invoke(
-      action.reviewsAction,
-      workspaceReviewAction(workspaceId, pullRequest.key, pullRequest.id, kind, { comment: nextComment })
-    );
-  };
-  const can = (capability) => pullRequest.capabilities.includes(capability);
-  const isMobile = host.useResponsiveBreakpoint().isMobile;
-  const stopWaiting = () => h2(ui.Button, { type: "button", variant: "outline", className: "min-h-11", onClick: request.cancel }, "Stop waiting");
-  const secondaryActions = h2(
-    "div",
-    { className: "bb-secondary-actions" },
-    isMobile && working ? stopWaiting() : null,
-    taskId && can("link") ? h2(ui.Button, { type: "button", variant: "outline", className: "min-h-11", disabled: Boolean(working), onClick: () => void runTaskAction(action.pullRequestsLink) }, "Link to task") : null,
-    can("approve") ? h2(ui.Button, { type: "button", variant: "outline", className: "min-h-11", disabled: Boolean(working), onClick: () => void runReviewAction("approve") }, "Approve") : null,
-    can("approve") ? h2(ui.Button, { type: "button", variant: "ghost", className: "min-h-11", disabled: Boolean(working), onClick: () => void runReviewAction("unapprove") }, "Remove approval") : null,
-    can("merge") ? h2(ui.Button, { type: "button", variant: "outline", className: "min-h-11", disabled: Boolean(working), onClick: () => void runReviewAction("merge") }, "Merge") : null,
-    can("decline") ? h2(ui.Button, { type: "button", variant: "ghost", className: "min-h-11", disabled: Boolean(working), onClick: () => void runReviewAction("decline") }, "Decline") : null
-  );
-  return h2(
-    "div",
-    { className: "bb-review-actions" },
-    error ? h2("p", { className: "bb-error", role: "alert" }, error) : null,
-    working ? stopWaiting() : null,
-    can("launch_task") ? h2(ui.Button, { type: "button", className: "min-h-11", disabled: Boolean(working), onClick: () => void runTaskAction(action.pullRequestsLaunch) }, working === action.pullRequestsLaunch ? "Launching\u2026" : "Launch task") : null,
-    isMobile ? h2(ui.Drawer, null, h2(ui.DrawerTrigger, { asChild: true }, h2(ui.Button, { type: "button", variant: "outline", className: "min-h-11" }, "Review actions")), h2(ui.DrawerContent, { className: "bb-actions-drawer" }, h2(ui.DrawerHeader, null, h2(ui.DrawerTitle, null, "Pull request actions"), h2(ui.DrawerDescription, null, "Actions available for this Bitbucket pull request.")), h2("div", { className: "bb-drawer-scroll" }, secondaryActions))) : secondaryActions,
-    can("comments") ? h2("form", { className: "bb-review-comment", onSubmit: (event) => {
-      event.preventDefault();
-      if (comment.trim()) void runReviewAction("add_comment", comment);
-    } }, h2(ui.Label, { htmlFor: `bitbucket-comment-${pullRequest.id}` }, "Add review comment"), h2(ui.Textarea, { id: `bitbucket-comment-${pullRequest.id}`, className: "min-h-11", value: comment, onChange: (event) => setComment(event.target.value) }), h2(ui.Button, { type: "submit", variant: "outline", className: "min-h-11", disabled: Boolean(working) || !comment.trim() }, "Comment")) : null,
-    !pullRequest.capabilities.length ? h2("p", { className: "bb-capability-note" }, "This Bitbucket server did not report available review actions.") : null
-  );
-}
-function ThreadReply({ host, workspaceId, pullRequest, threadId, onChanged }) {
-  const { jsx: h2, ui, React } = host;
-  const [comment, setComment] = React.useState("");
-  const [error, setError] = React.useState(null);
-  const [working, setWorking] = React.useState(false);
-  const request = useAbortableAction(host);
+function taskCreateContext(state, workspaceId) {
   if (!workspaceId) return null;
-  const submit = async () => {
-    if (!comment.trim()) return;
-    setWorking(true);
-    setError(null);
-    try {
-      await request.invoke(action.reviewsAction, workspaceReviewAction(
-        workspaceId,
-        pullRequest.key,
-        pullRequest.id,
-        "reply",
-        { comment, parentCommentId: threadId }
-      ));
-      setComment("");
-      onChanged();
-    } catch (reason) {
-      if (!isAbortError(reason)) setError(errorMessage(reason));
-    } finally {
-      setWorking(false);
-    }
-  };
-  return h2("form", { className: "bb-thread-reply", onSubmit: (event) => {
-    event.preventDefault();
-    void submit();
-  } }, error ? h2("p", { className: "bb-error", role: "alert" }, error) : null, h2(ui.Label, { htmlFor: `bitbucket-reply-${threadId}` }, "Reply"), h2(ui.Textarea, { id: `bitbucket-reply-${threadId}`, className: "min-h-11", value: comment, onChange: (event) => setComment(event.target.value) }), h2(ui.Button, { type: "submit", variant: "outline", className: "min-h-11", disabled: working || !comment.trim() }, working ? "Replying\u2026" : "Reply"), working ? h2(ui.Button, { type: "button", variant: "ghost", className: "min-h-11", onClick: request.cancel }, "Stop waiting") : null);
+  const workflowState = record2(state.workflows);
+  const workflows = Array.isArray(workflowState.items) ? workflowState.items.map(record2) : [];
+  const activeWorkflowId = text(workflowState.activeId);
+  const workflow = workflows.find((candidate) => text(candidate.id) === activeWorkflowId && text(candidate.workspaceId) === workspaceId) ?? workflows.find((candidate) => text(candidate.workspaceId) === workspaceId || text(candidate.workspace_id) === workspaceId);
+  const workflowId = text(workflow?.id);
+  if (!workflowId) return null;
+  const kanban = record2(state.kanban);
+  const snapshots = record2(record2(state.kanbanMulti).snapshots);
+  const snapshot = record2(snapshots[workflowId]);
+  const rawSteps = text(kanban.workflowId) === workflowId && Array.isArray(kanban.steps) ? kanban.steps : Array.isArray(snapshot.steps) ? snapshot.steps : [];
+  const steps = rawSteps.map(record2).sort((left, right) => Number(left.position ?? 0) - Number(right.position ?? 0)).map((step) => ({ id: text(step.id), title: text(step.title) || text(step.name), ...record2(step.events) ? { events: record2(step.events) } : {} })).filter((step) => step.id && step.title);
+  if (!steps[0]) return null;
+  const repositoryState = record2(state.repositories);
+  const byWorkspace = record2(repositoryState.itemsByWorkspaceId);
+  const repositories = Array.isArray(byWorkspace[workspaceId]) ? byWorkspace[workspaceId].map(record2) : [];
+  return { workflowId, defaultStepId: steps[0].id, steps, repositories };
 }
-function ReviewDetailPanel({ host, workspaceId: scopedWorkspaceId, taskId, reviewKey, onBack }) {
+function matchingHostRepositoryId(repositories, pullRequest) {
+  const match = repositories.find((repository) => {
+    if (text(repository.provider).toLowerCase() !== "bitbucket") return false;
+    return text(repository.provider_repo_id) === pullRequest.repositoryId || pullRequest.url && text(repository.remote_url) && pullRequest.url.includes(text(repository.provider_owner)) && pullRequest.url.includes(text(repository.provider_name));
+  });
+  return match ? text(match.id) || void 0 : void 0;
+}
+function DashboardPullRequestList({ host, pullRequests, loading, error, tasksByReview, onStartTask }) {
+  const { jsx: h2, ui } = host;
+  const presets = taskLaunchPresets();
+  return h2(
+    "div",
+    { "data-testid": "bitbucket-pr-queue" },
+    h2(
+      ui.ChangeRequestList,
+      { loading, error, emptyMessage: "No pull requests match this filter.", isEmpty: pullRequests.length === 0 },
+      ...pullRequests.map((pullRequest) => {
+        const author = displayPullRequestAuthor(pullRequest.author);
+        const opened = relativeTimeLabel(pullRequest.createdAt);
+        const metadata = h2(
+          "span",
+          { className: "bb-change-request-metadata" },
+          h2("span", null, `${pullRequest.repositoryId}#${pullRequest.number}`),
+          author ? h2("span", null, ` \xB7 by ${author}`) : null,
+          opened ? h2("span", null, ` \xB7 opened ${opened}`) : null,
+          pullRequest.sourceBranch && pullRequest.destinationBranch ? h2("span", null, ` \xB7 ${pullRequest.sourceBranch} \u2192 ${pullRequest.destinationBranch}`) : null,
+          h2("span", null, " \xB7 "),
+          Badge(host, pullRequest.statusLabel ?? pullRequest.state, pullRequest.statusTone)
+        );
+        const tasks = tasksByReview[pullRequest.key] ?? pullRequest.tasks;
+        return h2(ui.ChangeRequestRow, {
+          key: pullRequest.key,
+          stateIcon: pullRequestStateIcon(host, pullRequest),
+          title: pullRequest.title,
+          href: pullRequest.url,
+          metadata,
+          taskIndicator: h2(ui.TaskRowIndicator, { tasks, testIdPrefix: `bitbucket-pr-${pullRequest.number}-task` }),
+          action: pullRequest.capabilities.includes("launch_task") ? h2(ui.IntegrationStartTaskMenu, {
+            presets,
+            onSelect: (selected) => {
+              const preset = presets.find((candidate) => candidate.id === selected.id);
+              if (preset) onStartTask(pullRequest, preset);
+            },
+            triggerTestId: "bitbucket-start-task-trigger",
+            itemTestId: "bitbucket-start-task-preset"
+          }) : null,
+          testId: "bitbucket-pr-row",
+          dataAttributes: { "data-pr-number": pullRequest.number }
+        });
+      })
+    )
+  );
+}
+function ReviewDetailPanel({
+  host,
+  workspaceId: scopedWorkspaceId,
+  taskId,
+  reviewKey,
+  presentation
+}) {
   const { jsx: h2, ui, React } = host;
   const review = usePluginQuery(
     host,
     taskId ? action.pullRequestsGet : action.pullRequestsInspect,
-    taskId ? { taskId, body: { review_key: reviewKey, include: ["files", "commits", "participants", "threads", "status"] } } : scopedWorkspaceId ? { workspaceId: scopedWorkspaceId, body: { review_key: reviewKey, include: ["files", "commits", "participants", "threads", "status"] } } : void 0,
+    taskId ? {
+      taskId,
+      body: {
+        review_key: reviewKey,
+        include: ["files", "commits", "participants", "threads", "status"]
+      }
+    } : scopedWorkspaceId ? {
+      workspaceId: scopedWorkspaceId,
+      body: {
+        review_key: reviewKey,
+        include: ["files", "commits", "participants", "threads", "status"]
+      }
+    } : void 0,
     Boolean((taskId || scopedWorkspaceId) && reviewKey)
   );
-  const [tab, setTab] = React.useState("files");
   const detail = normalizeReviewDetail(review.data);
-  if (review.loading && !detail) return h2("div", { className: "bb-detail-loading" }, h2(ui.Spinner, { "aria-label": "Loading pull request" }));
-  if (review.error) return EmptyState(host, "Could not load pull request", review.error, "Retry", review.refresh);
-  if (!detail) return EmptyState(host, "Select a pull request", "Choose a Bitbucket pull request from the queue to inspect its review.");
-  return h2(
-    "section",
-    { className: "bb-review-detail", "data-testid": "bitbucket-review-detail" },
-    onBack ? h2(ui.Button, { type: "button", variant: "ghost", className: "bb-back min-h-11", onClick: onBack, "aria-label": "Back to pull request queue" }, icon(h2, "back"), "Queue") : null,
-    h2("header", { className: "bb-detail-header" }, h2("div", null, h2("p", { className: "bb-eyebrow" }, `${detail.repositoryName} \xB7 #${detail.number}`), h2("h1", null, detail.title), detail.description ? h2("p", null, detail.description) : null), Badge(host, detail.statusLabel ?? detail.state, detail.statusTone)),
-    h2("p", { className: "bb-branches" }, `${detail.sourceBranch ?? "source"} \u2192 ${detail.destinationBranch ?? "destination"}`),
-    h2(PullRequestActions, { host, pullRequest: detail, workspaceId: scopedWorkspaceId, taskId, onChanged: review.refresh }),
-    h2(
-      ui.Tabs,
-      { value: tab, onValueChange: setTab, className: "bb-review-tabs" },
-      h2(ui.TabsList, { className: "bb-tabs-list min-h-11", "aria-label": "Pull request detail" }, h2(ui.TabsTrigger, { value: "files", className: "min-h-11" }, `Files (${detail.files.length})`), h2(ui.TabsTrigger, { value: "commits", className: "min-h-11" }, `Commits (${detail.commits.length})`), h2(ui.TabsTrigger, { value: "people", className: "min-h-11" }, `People (${detail.participants.length})`), h2(ui.TabsTrigger, { value: "threads", className: "min-h-11" }, `Threads (${detail.threads.length})`), h2(ui.TabsTrigger, { value: "builds", className: "min-h-11" }, `Builds (${detail.statuses.length})`)),
-      h2(
-        ui.TabsContent,
-        { value: "files" },
-        h2(
-          "ul",
-          { className: "bb-detail-list" },
-          ...detail.files.map(
-            (file) => h2(
-              "li",
-              { key: file.path },
-              h2("strong", null, file.path),
-              h2("span", null, `${file.status}${file.additions !== void 0 ? ` \xB7 +${file.additions}` : ""}${file.deletions !== void 0 ? ` / -${file.deletions}` : ""}`),
-              file.patch ? h2("pre", { className: "bb-patch" }, file.patch) : null
-            )
-          )
-        )
-      ),
-      h2(
-        ui.TabsContent,
-        { value: "commits" },
-        h2(
-          "ul",
-          { className: "bb-detail-list" },
-          ...detail.commits.map(
-            (commit) => h2("li", { key: commit.id }, h2("strong", null, commit.message), h2("span", null, `${commit.id.slice(0, 8)}${commit.author ? ` \xB7 ${commit.author}` : ""}`))
-          )
-        )
-      ),
-      h2(
-        ui.TabsContent,
-        { value: "people" },
-        h2(
-          "ul",
-          { className: "bb-detail-list" },
-          ...detail.participants.map(
-            (person) => h2("li", { key: person.name }, h2("strong", null, person.name), h2("span", null, `${person.role ?? "participant"}${person.approved ? " \xB7 approved" : ""}`))
-          )
-        )
-      ),
-      h2(
-        ui.TabsContent,
-        { value: "threads" },
-        h2(
-          "ul",
-          { className: "bb-detail-list" },
-          ...detail.threads.map(
-            (thread) => h2(
-              "li",
-              { key: thread.id },
-              thread.file ? h2("span", null, thread.file) : null,
-              ...thread.comments.map(
-                (comment) => h2(
-                  "article",
-                  { key: comment.id, className: "bb-thread-comment" },
-                  h2("strong", null, comment.author),
-                  h2("p", null, comment.body)
-                )
-              ),
-              Badge(host, thread.resolved ? "Resolved" : "Open", thread.resolved ? "success" : "warning"),
-              detail.capabilities.includes("thread_replies") ? h2(ThreadReply, {
-                host,
-                workspaceId: scopedWorkspaceId,
-                pullRequest: detail,
-                threadId: thread.id,
-                onChanged: review.refresh
-              }) : null
-            )
-          )
-        )
-      ),
-      h2(
-        ui.TabsContent,
-        { value: "builds" },
-        h2(
-          "ul",
-          { className: "bb-detail-list" },
-          ...detail.statuses.map(
-            (status) => h2(
-              "li",
-              { key: status.key },
-              h2("strong", null, status.name),
-              status.target ? h2("span", null, status.target) : null,
-              Badge(host, status.state, statusTone(status.state)),
-              status.url ? h2("a", { href: status.url, target: "_blank", rel: "noreferrer" }, "Open build") : null
-            )
-          )
-        )
-      )
-    )
-  );
-}
-function LaunchPresets({ host, workspaceId: scopedWorkspaceId, pullRequest }) {
-  const { jsx: h2, ui, React } = host;
-  const presets = launchPresets();
-  const [preset, setPreset] = React.useState("default");
-  const [message, setMessage] = React.useState(null);
-  const launch = async () => {
-    if (!scopedWorkspaceId || !pullRequest || !preset) return;
+  const [busyActionId, setBusyActionId] = React.useState(null);
+  const [actionError, setActionError] = React.useState(null);
+  const request = useAbortableAction(host);
+  const runAction = async (requestValue) => {
+    if (!detail || !scopedWorkspaceId || busyActionId) return;
+    const kind = requestValue.actionId === "comment" ? "add_comment" : requestValue.actionId;
+    setBusyActionId(requestValue.actionId);
+    setActionError(null);
     try {
-      await host.api.invokeAction(action.pullRequestsLaunch, { workspaceId: scopedWorkspaceId, body: { review_key: pullRequest.key, preset } });
-      setMessage("Task launch requested.");
-    } catch (error) {
-      setMessage(errorMessage(error));
+      await request.invoke(
+        action.reviewsAction,
+        workspaceReviewAction(scopedWorkspaceId, detail.key, detail.id, kind, {
+          ...requestValue.body ? { comment: requestValue.body } : {},
+          ...requestValue.threadId ? { parentCommentId: requestValue.threadId } : {}
+        })
+      );
+      review.refresh();
+    } catch (reason) {
+      if (!isAbortError(reason)) setActionError(errorMessage(reason));
+    } finally {
+      setBusyActionId(null);
     }
   };
-  return h2(
-    ui.Card,
-    { className: "bb-launch" },
-    h2(ui.CardHeader, null, h2(ui.CardTitle, null, "Launch preset"), h2(ui.CardDescription, null, "Choose how Kandev should start work from this pull request.")),
-    h2(
-      ui.CardContent,
-      { className: "bb-card-actions" },
-      h2(
-        ui.Select,
-        { value: preset, onValueChange: setPreset },
-        h2(ui.SelectTrigger, { className: "min-h-11" }, h2(ui.SelectValue, { placeholder: "Launch preset" })),
-        h2(ui.SelectContent, null, ...presets.map((candidate) => h2(ui.SelectItem, { value: candidate.id, key: candidate.id }, candidate.name)))
-      ),
-      h2(ui.Button, { type: "button", className: "min-h-11", disabled: !pullRequest || !preset, onClick: () => void launch() }, "Launch task"),
-      message ? h2("p", { role: "status", className: "bb-message" }, message) : null
-    )
-  );
+  return h2(ui.ChangeRequestDetail, {
+    detail: detail ? changeRequestDetailModel(detail) : null,
+    presentation: presentation ?? "desktop",
+    loading: review.loading,
+    error: review.error,
+    onRefresh: review.refresh,
+    onRetry: review.refresh,
+    actions: detail ? changeRequestDetailActions(detail) : [],
+    busyActionId,
+    onAction: runAction,
+    notice: actionError ? h2("p", { className: "bb-error", role: "alert" }, actionError) : null
+  });
 }
 function watchPreviewTaskCount(value) {
   const response = record2(value);
@@ -1102,7 +1489,7 @@ function WatchConfirmation({ host, pending, disabled, confirm, cancel }) {
     )
   );
 }
-function Watches({ host, workspaceId: scopedWorkspaceId, filter }) {
+function Watches({ host, workspaceId: scopedWorkspaceId, filter, showCreate = true }) {
   const { jsx: h2, ui, React } = host;
   const watches = usePluginQuery(host, action.watchesGet, scopedWorkspaceId ? { workspaceId: scopedWorkspaceId } : void 0, Boolean(scopedWorkspaceId));
   const [working, setWorking] = React.useState(null);
@@ -1149,179 +1536,312 @@ function Watches({ host, workspaceId: scopedWorkspaceId, filter }) {
       error ? h2("p", { className: "bb-error", role: "alert" }, error) : null,
       watchItems.length ? h2("ul", { className: "bb-watch-list" }, ...watchItems.map((watch) => h2(WatchRow, { host, watch, disabled: Boolean(working), run, preview: (kind, watchId) => void preview(kind, watchId) }))) : h2("p", null, "No saved watches."),
       pending ? h2(WatchConfirmation, { host, pending, disabled: Boolean(working), confirm: () => void confirm(), cancel: () => setPending(null) }) : null,
-      h2(ui.Button, { type: "button", variant: "outline", className: "min-h-11", disabled: Boolean(working), onClick: () => void invoke(action.watchesUpdate, { enabled: true, filter }) }, icon(h2, "watch"), "Add current filter watch")
+      showCreate ? h2(ui.Button, { type: "button", variant: "outline", className: "min-h-11", disabled: Boolean(working), onClick: () => void invoke(action.watchesUpdate, { enabled: true, filter }) }, icon(h2, "watch"), "Add current filter watch") : null
     )
   );
 }
-function QueueFilters({ host, mobile, search, setSearch, state, setState }) {
+function repositoryFilter(host, repositories, repository, setRepository) {
   const { jsx: h2, ui } = host;
-  const controls = h2(
-    "div",
-    { className: "bb-filters" },
-    h2(ui.Label, { htmlFor: "bitbucket-search" }, "Search pull requests"),
-    h2(ui.Input, { id: "bitbucket-search", className: "min-h-11", value: search, onChange: (event) => setSearch(event.target.value), placeholder: "Title, author, or repository" }),
-    h2(ui.Label, { htmlFor: "bitbucket-state" }, "State"),
-    h2(ui.Select, { value: state, onValueChange: setState }, h2(ui.SelectTrigger, { id: "bitbucket-state", className: "min-h-11" }, h2(ui.SelectValue, null)), h2(ui.SelectContent, null, h2(ui.SelectItem, { value: "open" }, "Open"), h2(ui.SelectItem, { value: "all" }, "All"), h2(ui.SelectItem, { value: "merged" }, "Merged"), h2(ui.SelectItem, { value: "declined" }, "Declined")))
-  );
-  if (!mobile) return controls;
   return h2(
-    ui.Drawer,
-    null,
-    h2(ui.DrawerTrigger, { asChild: true }, h2(ui.Button, { type: "button", variant: "outline", className: "min-h-11", "aria-label": "Filter pull requests" }, icon(h2, "filter"), "Filters")),
+    ui.Select,
+    { value: repository || "__all__", onValueChange: (value) => setRepository(value === "__all__" ? "" : value) },
+    h2(ui.SelectTrigger, { id: "bitbucket-repository-filter", className: "bb-repository-filter", "aria-label": "Repository" }, h2(ui.SelectValue, { placeholder: "All repositories" })),
+    h2(ui.SelectContent, null, h2(ui.SelectItem, { value: "__all__" }, "All repositories"), ...repositories.map((candidate) => h2(ui.SelectItem, { key: candidate.repositoryId, value: candidate.repositoryId }, `${candidate.ownerOrProject}/${candidate.repositoryName}`)))
+  );
+}
+function StateScopeBar({
+  host,
+  selection,
+  savedQueries,
+  onSelect,
+  onDeleteSaved,
+  canSaveCurrent,
+  onSaveCurrent
+}) {
+  const { jsx: h2, ui } = host;
+  const presets = [
+    { value: "open", label: "Open", iconName: "pull-request", group: "inbox" },
+    { value: "all", label: "All", iconName: "filter", group: "inbox" },
+    { value: "merged", label: "Merged", iconName: "merged", group: "created" },
+    { value: "declined", label: "Declined", iconName: "pull-request-closed", group: "created" }
+  ];
+  return h2(ui.IntegrationScopeBar, {
+    testId: "bitbucket-scope-bar",
+    savedMenuTestId: "bitbucket-saved-filters",
+    kinds: [{ value: "pull_requests", label: "Pull requests" }],
+    selected: selection,
+    onSelect,
+    presetsByKind: () => presets,
+    savedPresets: savedQueries.map((query) => ({
+      id: query.id,
+      kind: "pull_requests",
+      label: query.label
+    })),
+    onDeleteSaved,
+    canSaveCurrent,
+    onSaveCurrent
+  });
+}
+function MobileFilters({ host, repositories, repository, setRepository, ...scope }) {
+  const { jsx: h2, ui, React } = host;
+  const [open, setOpen] = React.useState(false);
+  const mobileScope = {
+    ...scope,
+    onSelect(selection) {
+      scope.onSelect(selection);
+      setOpen(false);
+    },
+    onSaveCurrent() {
+      setOpen(false);
+      scope.onSaveCurrent();
+    }
+  };
+  return h2(
+    ui.Sheet,
+    { open, onOpenChange: setOpen },
+    h2(ui.SheetTrigger, { asChild: true }, h2(ui.Button, { type: "button", variant: "outline", className: "min-h-11", "aria-label": "Open Bitbucket filters" }, h2(ui.IntegrationIcon, { name: "filter", className: "h-4 w-4" }), "Filters")),
     h2(
-      ui.DrawerContent,
-      { className: "bb-filter-drawer" },
-      h2(ui.DrawerHeader, null, h2(ui.DrawerTitle, null, "Queue filters"), h2(ui.DrawerDescription, null, "Narrow Bitbucket pull requests without leaving the queue.")),
-      h2("div", { className: "bb-drawer-scroll" }, controls),
-      h2(ui.DrawerFooter, { className: "bb-safe-drawer-footer" }, h2(ui.DrawerClose, { asChild: true }, h2(ui.Button, { type: "button", className: "min-h-11" }, "Done")))
+      ui.SheetContent,
+      { side: "left", className: "bb-filter-sheet" },
+      h2(ui.SheetHeader, null, h2(ui.SheetTitle, null, "Bitbucket filters"), h2(ui.SheetDescription, null, "Narrow pull requests by repository and state.")),
+      h2(
+        "div",
+        { className: "bb-mobile-filter-fields" },
+        h2(StateScopeBar, { host, ...mobileScope }),
+        h2(ui.Label, { htmlFor: "bitbucket-repository-filter" }, "Repository"),
+        repositoryFilter(host, repositories, repository, setRepository)
+      )
     )
   );
+}
+function useHostStoreState(host) {
+  const { React } = host;
+  const [state, setState] = React.useState(() => host.store.getState());
+  React.useEffect(() => host.store.subscribe(() => setState(host.store.getState())), [host]);
+  return state;
+}
+function ConnectionNotice({ host, connection, workspaceId }) {
+  const { jsx: h2, ui } = host;
+  if (connection.loading) return h2("div", { className: "bb-connection-loading" }, h2(ui.Spinner, { "aria-label": "Checking Bitbucket connection" }));
+  const state = connectionState(record2(connection.data));
+  if (state === "connected") return null;
+  const checking = state === "checking";
+  const message = connection.error ?? (checking ? "Kandev is verifying the saved connection." : "Connect Bitbucket for this workspace to load pull requests.");
+  return h2(ui.Alert, { className: "bb-connection-notice" }, h2(ui.AlertTitle, null, checking ? "Checking Bitbucket connection" : "Bitbucket needs attention"), h2(ui.AlertDescription, { className: "bb-notice-content" }, h2("span", null, message), checking ? null : h2(ui.Button, { type: "button", variant: "outline", className: "min-h-11", onClick: () => host.navigate(integrationSettingsHref(workspaceId)) }, "Configure Bitbucket")));
 }
 function BitbucketPage({ host }) {
   const { jsx: h2, ui, React } = host;
   const responsive = host.useResponsiveBreakpoint();
   const activeWorkspaceId = useActiveWorkspaceId(host);
-  const [search, setSearch] = React.useState("");
+  const hostState = useHostStoreState(host);
+  const initialQuery = pullRequestScopeQuery("open");
+  const [searchDraft, setSearchDraft] = React.useState(initialQuery);
+  const [search, setSearch] = React.useState(initialQuery);
   const [state, setState] = React.useState("open");
-  const [selectedKey, setSelectedKey] = React.useState(null);
-  const queue = usePluginQuery(
+  const [repository, setRepository] = React.useState("");
+  const [scopeSelection, setScopeSelection] = React.useState({
+    kind: "pull_requests",
+    source: "preset",
+    id: "open"
+  });
+  const [saveDialogOpen, setSaveDialogOpen] = React.useState(false);
+  const savedQueries = useSavedQueries(host, activeWorkspaceId);
+  const [launch, setLaunch] = React.useState(null);
+  const pluginCreatedTaskIDs = React.useRef(/* @__PURE__ */ new Set());
+  const connection = usePluginQuery(
     host,
-    action.pullRequestsQueue,
-    activeWorkspaceId ? { workspaceId: activeWorkspaceId, body: { view: "queue", query: search, state } } : void 0,
+    action.connectionGet,
+    activeWorkspaceId ? { workspaceId: activeWorkspaceId } : void 0,
     Boolean(activeWorkspaceId)
   );
+  const connected = connectionState(record2(connection.data)) === "connected";
+  const repositoriesQuery = usePluginQuery(host, action.repositoriesList, activeWorkspaceId ? { workspaceId: activeWorkspaceId } : void 0, Boolean(activeWorkspaceId && connected));
+  const repositories = normalizeRepositories(repositoriesQuery.data);
+  const selectedRepository = repositories.find((candidate) => candidate.repositoryId === repository) ?? null;
+  const queueRequest = pullRequestListRequest(selectedRepository, search, state);
+  const queue = usePluginQuery(
+    host,
+    queueRequest.actionKey,
+    activeWorkspaceId ? { workspaceId: activeWorkspaceId, body: queueRequest.body } : void 0,
+    Boolean(activeWorkspaceId && connected)
+  );
   const pullRequests = normalizePullRequests(queue.data);
-  const watchFilter = currentWatchFilter(search, state);
-  const selected = pullRequests.find((pullRequest) => pullRequest.key === selectedKey) ?? null;
-  const select = (pullRequest) => setSelectedKey(pullRequest.key);
+  const associations = usePluginQuery(
+    host,
+    action.pullRequestsAssociations,
+    activeWorkspaceId ? { workspaceId: activeWorkspaceId, body: { review_keys: pullRequests.map((pullRequest) => pullRequest.key) } } : void 0,
+    Boolean(activeWorkspaceId && connected && pullRequests.length)
+  );
+  const tasksByReview = normalizePullRequestAssociations(associations.data);
+  const createContext = taskCreateContext(hostState, activeWorkspaceId);
   const noWorkspace = !activeWorkspaceId;
-  const desktop = !responsive.isMobile;
-  const queueContent = queue.loading && pullRequests.length === 0 ? h2("div", { className: "bb-loading" }, h2(ui.Spinner, { "aria-label": "Loading Bitbucket pull request queue" })) : queue.error ? EmptyState(host, "Queue unavailable", queue.error, "Retry", queue.refresh) : pullRequests.length === 0 ? EmptyState(host, "No pull requests", "Adjust filters or connect a Bitbucket workspace.") : h2(QueueList, { host, pullRequests, selectedKey, onSelect: select });
+  const commitSearch = () => {
+    const committed = searchDraft.trim();
+    setSearch(committed);
+    setState(parsePullRequestListQuery(committed, state).state);
+  };
+  const selectScopeState = (nextState) => {
+    const query = pullRequestScopeQuery(nextState);
+    setState(nextState);
+    setSearchDraft(query);
+    setSearch(query);
+    setScopeSelection({ kind: "pull_requests", source: "preset", id: nextState });
+  };
+  const selectDashboardScope = (selection) => {
+    if (selection.source === "preset") {
+      selectScopeState(selection.id);
+      return;
+    }
+    const saved = savedQueries.queries.find((query) => query.id === selection.id);
+    if (!saved) return;
+    setScopeSelection(selection);
+    setSearchDraft(saved.query);
+    setSearch(saved.query);
+    setState(saved.state);
+    setRepository(saved.repositoryId);
+  };
+  const deleteSavedQuery = (id) => {
+    savedQueries.remove(id);
+    if (scopeSelection.source === "saved" && scopeSelection.id === id) selectScopeState("open");
+  };
+  const saveCurrentQuery = async (label, defaultRepositoryId) => {
+    const query = searchDraft.trim();
+    const parsed = parsePullRequestListQuery(query, state);
+    const created = await savedQueries.save({
+      label,
+      query,
+      repositoryId: defaultRepositoryId,
+      state: parsed.state
+    });
+    setSearch(query);
+    setState(parsed.state);
+    setScopeSelection({ kind: "pull_requests", source: "saved", id: created.id });
+    setRepository(defaultRepositoryId);
+  };
+  const canSaveCurrent = canSaveDashboardQuery(searchDraft, repository);
+  const scopeProps = {
+    selection: scopeSelection,
+    savedQueries: savedQueries.queries,
+    onSelect: selectDashboardScope,
+    onDeleteSaved: deleteSavedQuery,
+    canSaveCurrent,
+    onSaveCurrent: () => {
+      if (canSaveCurrent) setSaveDialogOpen(true);
+    }
+  };
+  const finishTaskCreation = async (taskValue) => {
+    const taskId = text(record2(taskValue).id);
+    if (!activeWorkspaceId || !launch || !taskId) return;
+    const linkedByLaunch = pluginCreatedTaskIDs.current.delete(taskId);
+    try {
+      if (!linkedByLaunch) {
+        await host.api.invokeAction(action.pullRequestsLink, {
+          workspaceId: activeWorkspaceId,
+          taskId,
+          body: { review_key: launch.pullRequest.key, pull_request_id: launch.pullRequest.id }
+        });
+      }
+      associations.refresh();
+    } catch {
+    } finally {
+      setLaunch(null);
+      host.navigate(`/tasks/${encodeURIComponent(taskId)}`);
+    }
+  };
+  const selectedHostRepositoryId = launch && createContext ? matchingHostRepositoryId(createContext.repositories, launch.pullRequest) : void 0;
+  const launchRemoteRepository = launch ? repositories.find((candidate) => candidate.repositoryId === launch.pullRequest.repositoryId) : void 0;
+  const createBitbucketTask = async (payload) => {
+    if (!activeWorkspaceId || !launch) throw new Error("Bitbucket task launch is unavailable.");
+    const result = await host.api.invokeAction(action.tasksLaunch, {
+      workspaceId: activeWorkspaceId,
+      body: taskLaunchBody(launch.pullRequest, payload, launch.launchId)
+    });
+    const task = taskFromLaunchResult(result);
+    const taskId = text(task.id);
+    if (task.bitbucketLinked === true) pluginCreatedTaskIDs.current.add(taskId);
+    associations.refresh();
+    return task;
+  };
+  const taskDialog = launch && createContext ? h2(ui.TaskCreateDialog, {
+    open: true,
+    onOpenChange: (open) => {
+      if (!open) setLaunch(null);
+    },
+    mode: "create",
+    workspaceId: activeWorkspaceId ?? null,
+    workflowId: createContext.workflowId,
+    defaultStepId: createContext.defaultStepId,
+    steps: createContext.steps,
+    initialValues: taskDialogInitialValues(
+      launch.pullRequest,
+      launch.preset,
+      selectedHostRepositoryId,
+      launchRemoteRepository
+    ),
+    createTask: usePluginTaskCreation(selectedHostRepositoryId) ? createBitbucketTask : void 0,
+    onSuccess: (task) => void finishTaskCreation(task)
+  }) : null;
+  const filter = responsive.isMobile ? h2(MobileFilters, { host, repositories, repository, setRepository, ...scopeProps }) : repositoryFilter(host, repositories, repository, setRepository);
+  const workbenchBody = !connected ? null : [
+    responsive.isMobile ? null : h2(StateScopeBar, { host, ...scopeProps }),
+    h2(ui.IntegrationListToolbar, {
+      title: "Pull requests",
+      count: pullRequests.length,
+      loading: queue.loading,
+      lastFetchedAt: queue.lastFetchedAt,
+      customQuery: searchDraft,
+      committedQuery: search,
+      onCustomQueryChange: setSearchDraft,
+      onCommitCustomQuery: commitSearch,
+      onRefresh: queue.refresh,
+      filter,
+      queryPlaceholder: 'Custom query \u2014 press Enter. e.g. "state:open fix login"',
+      titleTestId: "bitbucket-list-toolbar",
+      queryTestId: "bitbucket-list-query",
+      refreshTestId: "bitbucket-list-refresh"
+    }),
+    h2(
+      "section",
+      { className: "bb-results", "data-testid": "bitbucket-results", "aria-label": "Pull request results" },
+      h2(DashboardPullRequestList, {
+        host,
+        pullRequests,
+        loading: queue.loading,
+        error: queue.error,
+        tasksByReview,
+        onStartTask: (pullRequest, preset) => setLaunch({
+          pullRequest,
+          preset,
+          launchId: globalThis.crypto.randomUUID()
+        })
+      })
+    ),
+    taskDialog,
+    h2(ui.IntegrationSaveQueryDialog, {
+      open: saveDialogOpen,
+      onOpenChange: setSaveDialogOpen,
+      description: "Save this Bitbucket pull-request search for the current workspace.",
+      suggestedLabel: searchDraft.trim() || (repository ? "Repository pull requests" : "Saved query"),
+      query: searchDraft,
+      repositoryId: repository,
+      repositoryOptions: repositories.map((candidate) => ({
+        value: candidate.repositoryId,
+        label: `${candidate.ownerOrProject}/${candidate.repositoryName}`
+      })),
+      onSave: saveCurrentQuery
+    })
+  ];
   return h2(
     "main",
-    { className: `bb-workbench ${desktop ? "bb-desktop" : "bb-mobile"}`, "data-testid": "bitbucket-workbench" },
-    h2("header", { className: "bb-toolbar" }, h2("div", { className: "bb-toolbar-title" }, icon(h2, "bitbucket"), h2("div", null, h2("h1", null, "Bitbucket"), h2("p", null, "Pull request queue and native reviews"))), h2("div", { className: "bb-toolbar-actions" }, h2(QueueFilters, { host, mobile: responsive.isMobile, search, setSearch, state, setState }), h2(ui.Button, { type: "button", variant: "ghost", className: "min-h-11", onClick: queue.refresh, "aria-label": "Refresh pull request queue" }, icon(h2, "refresh"), "Refresh"))),
-    noWorkspace ? EmptyState(host, "Choose a workspace", "Open Bitbucket from a workspace to connect and browse pull requests.") : desktop ? h2("div", { className: "bb-desktop-panes" }, h2("aside", { className: "bb-pane bb-queue-pane" }, h2(ConnectionHealth, { host, workspaceId: activeWorkspaceId }), h2(RepositoryBrowser, { host, workspaceId: activeWorkspaceId, onChoose: setSearch }), queueContent, h2(LaunchPresets, { host, workspaceId: activeWorkspaceId, pullRequest: selected }), h2(Watches, { host, workspaceId: activeWorkspaceId, filter: watchFilter })), h2("section", { className: "bb-pane bb-detail-pane" }, selected ? h2(ReviewDetailPanel, { host, workspaceId: activeWorkspaceId, reviewKey: selected.key }) : EmptyState(host, "Select a pull request", "The detail pane shows files, commits, participants, threads, and available actions."))) : h2("div", { className: "bb-mobile-focus" }, selected ? h2(ReviewDetailPanel, { host, workspaceId: activeWorkspaceId, reviewKey: selected.key, onBack: () => setSelectedKey(null) }) : h2("div", { className: "bb-mobile-list" }, h2(ConnectionHealth, { host, workspaceId: activeWorkspaceId }), h2(RepositoryBrowser, { host, workspaceId: activeWorkspaceId, onChoose: setSearch }), queueContent, h2(LaunchPresets, { host, workspaceId: activeWorkspaceId, pullRequest: null }), h2(Watches, { host, workspaceId: activeWorkspaceId, filter: watchFilter })))
+    { className: `bb-workbench ${responsive.isMobile ? "bb-mobile" : "bb-desktop"}`, "data-testid": "bitbucket-workbench" },
+    noWorkspace ? EmptyState(host, "Choose a workspace", "Open Bitbucket from a workspace to connect and browse pull requests.") : [h2(ConnectionNotice, { host, connection, workspaceId: activeWorkspaceId }), workbenchBody]
   );
-}
-function makeLinkPullRequestModal(host, context) {
-  return function LinkPullRequestModal() {
-    const { jsx: h2, ui, React } = host;
-    const [reference, setReference] = React.useState("");
-    const [result, setResult] = React.useState(null);
-    const run = async () => {
-      const body = linkPullRequestBody(reference);
-      if (!body) {
-        setResult("Enter a Bitbucket pull request key or URL.");
-        return;
-      }
-      try {
-        await host.api.invokeAction(action.pullRequestsLink, { workspaceId: context.workspaceId, taskId: context.taskId, body });
-        setResult("Pull request linked.");
-      } catch (error) {
-        setResult(errorMessage(error));
-      }
-    };
-    return h2("form", { className: "bb-task-modal", onSubmit: (event) => {
-      event.preventDefault();
-      void run();
-    } }, h2(ui.Label, { htmlFor: "bitbucket-review-reference" }, "Pull request key or Bitbucket URL"), h2(ui.Input, { id: "bitbucket-review-reference", className: "min-h-11", value: reference, onChange: (event) => setReference(event.target.value), placeholder: "workspace/repository#42" }), h2("p", { className: "bb-capability-note" }, "Paste a key or Cloud/Data Center pull request URL."), result ? h2("p", { role: "status" }, result) : null, h2(ui.Button, { type: "submit", className: "min-h-11", disabled: !reference.trim() }, "Link pull request"));
-  };
-}
-function taskContextValue(context, key) {
-  const source = record2(context);
-  const task = record2(source.task);
-  return text(task[key]) || text(source[key]);
-}
-function makeUnlinkPullRequestModal(host, context) {
-  return function UnlinkPullRequestModal() {
-    const { jsx: h2, ui, React } = host;
-    const linked = usePluginQuery(host, action.pullRequestsGet, { workspaceId: context.workspaceId, taskId: context.taskId }, true);
-    const pullRequests = normalizePullRequests(linked.data);
-    const [reviewKey, setReviewKey] = React.useState("");
-    const [result, setResult] = React.useState(null);
-    React.useEffect(() => {
-      if (!reviewKey && pullRequests[0]) setReviewKey(pullRequests[0].key);
-    }, [pullRequests, reviewKey]);
-    const run = async () => {
-      if (!reviewKey) return;
-      try {
-        await host.api.invokeAction(action.pullRequestsUnlink, { workspaceId: context.workspaceId, taskId: context.taskId, body: { review_key: reviewKey } });
-        setResult("Pull request unlinked.");
-        linked.refresh();
-      } catch (error) {
-        setResult(errorMessage(error));
-      }
-    };
-    if (linked.loading) return h2("p", { className: "bb-capability-note", role: "status" }, "Loading linked pull requests\u2026");
-    if (linked.error) return h2("p", { className: "bb-error", role: "alert" }, linked.error);
-    if (!pullRequests.length) return h2("p", { className: "bb-capability-note", role: "status" }, "No Bitbucket pull requests linked to this task.");
-    return h2(
-      "form",
-      { className: "bb-task-modal", onSubmit: (event) => {
-        event.preventDefault();
-        void run();
-      } },
-      h2(ui.Label, { htmlFor: "bitbucket-linked-review" }, "Linked pull request"),
-      h2(
-        ui.Select,
-        { value: reviewKey, onValueChange: setReviewKey },
-        h2(ui.SelectTrigger, { id: "bitbucket-linked-review", className: "min-h-11" }, h2(ui.SelectValue, { placeholder: "Choose linked pull request" })),
-        h2(ui.SelectContent, null, ...pullRequests.map((pullRequest) => h2(ui.SelectItem, { key: pullRequest.key, value: pullRequest.key }, `${pullRequest.repositoryName} \xB7 #${pullRequest.number} \xB7 ${pullRequest.title}`)))
-      ),
-      result ? h2("p", { role: "status" }, result) : null,
-      h2(ui.Button, { type: "submit", className: "min-h-11", disabled: !reviewKey }, "Unlink pull request")
-    );
-  };
-}
-function makeCreatePullRequestModal(host, context) {
-  return function CreatePullRequestModal() {
-    const { jsx: h2, ui, React } = host;
-    const [title, setTitle] = React.useState(taskContextValue(context, "title"));
-    const [description, setDescription] = React.useState(taskContextValue(context, "description"));
-    const [destination, setDestination] = React.useState("");
-    const [closeSourceOnMerge, setCloseSourceOnMerge] = React.useState(false);
-    const [result, setResult] = React.useState(null);
-    const run = async () => {
-      try {
-        await host.api.invokeAction(action.pullRequestsCreate, {
-          workspaceId: context.workspaceId,
-          taskId: context.taskId,
-          body: pullRequestCreateBody({ title, description, destination, closeSourceOnMerge })
-        });
-        setResult("Pull request created.");
-      } catch (error) {
-        setResult(errorMessage(error));
-      }
-    };
-    return h2(
-      "form",
-      { className: "bb-task-modal", onSubmit: (event) => {
-        event.preventDefault();
-        void run();
-      } },
-      h2("p", { className: "bb-capability-note" }, "Kandev derives repository and source branch from this task's verified checkout."),
-      h2("p", { className: "bb-capability-note" }, "Leave fields blank to use task title, description, and destination defaults."),
-      h2(ui.Label, { htmlFor: "bitbucket-pr-title" }, "Pull request title"),
-      h2(ui.Input, { id: "bitbucket-pr-title", className: "min-h-11", value: title, onChange: (event) => setTitle(event.target.value) }),
-      h2(ui.Label, { htmlFor: "bitbucket-pr-description" }, "Description"),
-      h2(ui.Textarea, { id: "bitbucket-pr-description", className: "min-h-11", value: description, onChange: (event) => setDescription(event.target.value) }),
-      h2(ui.Label, { htmlFor: "bitbucket-pr-destination" }, "Destination branch"),
-      h2(ui.Input, { id: "bitbucket-pr-destination", className: "min-h-11", value: destination, onChange: (event) => setDestination(event.target.value), placeholder: "Task base branch (default)" }),
-      h2("label", { className: "bb-check" }, h2("input", { type: "checkbox", checked: closeSourceOnMerge, onChange: (event) => setCloseSourceOnMerge(event.target.checked) }), "Close source branch after merge"),
-      result ? h2("p", { role: "status", className: "bb-message" }, result) : null,
-      h2(ui.Button, { type: "submit", className: "min-h-11" }, "Create pull request")
-    );
-  };
-}
-function taskActionPresentation(context) {
-  return context.presentation === "mobile" ? "drawer" : "dialog";
 }
 function registerNativeIntegrations(registry, host) {
   registry.registerRepositoryProvider({
     id: "bitbucket",
     label: "Bitbucket",
-    icon: "puzzle",
+    icon: "bitbucket",
     async listRepositories({ workspaceId: scopedWorkspaceId, signal }) {
       const response = await host.api.invokeAction(action.repositoriesList, { workspaceId: scopedWorkspaceId }, { signal });
       if (signal.aborted) return [];
@@ -1339,71 +1859,124 @@ function registerNativeIntegrations(registry, host) {
     async inspectURL({ workspaceId: scopedWorkspaceId, url, signal }) {
       const response = await host.api.invokeAction(action.repositoriesInspect, { workspaceId: scopedWorkspaceId, body: { url } }, { signal });
       return signal.aborted ? null : normalizeRepositoryInspection(response);
+    },
+    supportsDraft: false,
+    async createChangeRequest({
+      workspaceId,
+      taskId,
+      repositoryId,
+      title,
+      body,
+      baseBranch,
+      signal
+    }) {
+      const response = await host.api.invokeAction(
+        action.pullRequestsCreate,
+        {
+          workspaceId,
+          taskId,
+          repositoryId,
+          body: {
+            title,
+            description: body,
+            ...baseBranch ? { destination: baseBranch } : {}
+          }
+        },
+        { signal }
+      );
+      void Promise.all([
+        refreshReviewStore(host, taskId, new AbortController().signal, workspaceId),
+        refreshAssociationStore(host, workspaceId, new AbortController().signal)
+      ]).catch(() => void 0);
+      return {
+        url: text(response.url),
+        provider: "bitbucket"
+      };
     }
   });
   registry.registerTaskAction({
     id: "link-pull-request",
-    label: "Link Bitbucket Pull Request",
-    icon: "link",
+    label: "Bitbucket Pull Request",
+    icon: "bitbucket",
     placement: "link",
     async run(context) {
-      host.openModal({ title: "Link Bitbucket pull request", size: "md", presentation: taskActionPresentation(context), content: makeLinkPullRequestModal(host, context) });
-    }
-  });
-  registry.registerTaskAction({
-    id: "open-pull-request-review",
-    label: "Open Bitbucket Review",
-    icon: "bitbucket",
-    placement: "action",
-    async run() {
-      host.navigate("/bitbucket");
-    }
-  });
-  registry.registerTaskAction({
-    id: "unlink-pull-request",
-    label: "Unlink Bitbucket Pull Request",
-    icon: "link",
-    placement: "action",
-    async run(context) {
-      host.openModal({ title: "Unlink Bitbucket pull request", size: "sm", presentation: taskActionPresentation(context), content: makeUnlinkPullRequestModal(host, context) });
-    }
-  });
-  registry.registerTaskAction({
-    id: "create-pull-request",
-    label: "Create Bitbucket Pull Request",
-    icon: "plus",
-    placement: "action",
-    visible(context) {
-      return taskSupportsBitbucketRepository(context.repositories);
-    },
-    async run(context) {
-      host.openModal({ title: "Create Bitbucket pull request", size: "md", presentation: taskActionPresentation(context), content: makeCreatePullRequestModal(host, context) });
+      host.openTaskLinkDialog({
+        title: "Link Bitbucket pull request",
+        description: "Use a Bitbucket pull request URL or canonical key for this task.",
+        inputLabel: "Pull request",
+        placeholder: "workspace/repository#42",
+        emptyError: "Enter a Bitbucket pull request URL or key.",
+        failureMessage: "Failed to link Bitbucket pull request.",
+        successMessage: "Bitbucket pull request linked",
+        inputTestId: "bitbucket-review-reference",
+        errorTestId: "bitbucket-review-reference-error",
+        submitTestId: "bitbucket-review-reference-submit",
+        async onSubmit(reference) {
+          const body = linkPullRequestBody(reference);
+          if (!body) throw new Error("Enter a Bitbucket pull request URL or key.");
+          await host.api.invokeAction(action.pullRequestsLink, {
+            workspaceId: context.workspaceId,
+            taskId: context.taskId,
+            body
+          });
+          void refreshReviewStore(
+            host,
+            context.taskId,
+            new AbortController().signal,
+            context.workspaceId
+          ).catch(() => void 0);
+          void refreshAssociationStore(
+            host,
+            context.workspaceId,
+            new AbortController().signal
+          ).catch(() => void 0);
+        }
+      });
     }
   });
   registry.registerReviewProvider({
     id: "bitbucket",
     label: "Bitbucket",
-    icon: "puzzle",
+    icon: "bitbucket",
     changeRequestNoun: "pull request",
     order: 30,
     getSnapshot: (taskId) => reviewStore.get(taskId),
     subscribe: (taskId, listener) => reviewStore.subscribe(taskId, listener),
     async refresh(taskId, signal) {
-      const response = await host.api.invokeAction(action.pullRequestsGet, { taskId, body: { view: "task" } }, { signal });
-      if (!signal.aborted) reviewStore.set(taskId, normalizePullRequests(response));
+      await refreshReviewStore(host, taskId, signal);
+    },
+    getAssociationSnapshot: (workspaceId) => associationStore.get(workspaceId),
+    subscribeAssociations: (workspaceId, listener) => associationStore.subscribe(workspaceId, listener),
+    async refreshAssociations(workspaceId, signal) {
+      await refreshAssociationStore(host, workspaceId, signal);
+    },
+    async unlink({ workspaceId, taskId, reviewKey, signal }) {
+      await host.api.invokeAction(
+        action.pullRequestsUnlink,
+        { workspaceId, taskId, body: { review_key: reviewKey } },
+        { signal }
+      );
     },
     ReviewPanel: (props = {}) => h(ReviewDetailPanel, {
       host,
       workspaceId: text(props.workspaceId) || void 0,
       taskId: text(props.taskId) || void 0,
-      reviewKey: text(props.reviewKey)
+      reviewKey: text(props.reviewKey),
+      presentation: text(props.presentation) === "mobile" ? "mobile" : "desktop"
     })
   });
 }
-function makeSettingsHealth(host) {
-  return function SettingsHealth(props = {}) {
-    const scopedWorkspaceId = useActiveWorkspaceId(host);
-    return host.jsx(ConnectionHealth, { host, workspaceId: scopedWorkspaceId, status: record2(props.slotProps).status });
+function makeIntegrationSettings(host) {
+  return function IntegrationSettings(props = {}) {
+    const activeWorkspaceId = useActiveWorkspaceId(host);
+    const scopedWorkspaceId = text(props.workspaceId) || activeWorkspaceId;
+    return host.jsx("div", { className: "bb-plugin-settings" }, host.jsx(ConnectionHealth, { host, workspaceId: scopedWorkspaceId }), host.jsx(Watches, { host, workspaceId: scopedWorkspaceId, filter: {}, showCreate: false }));
+  };
+}
+function makeTopbarActions(host) {
+  return function TopbarActions() {
+    const activeWorkspaceId = useActiveWorkspaceId(host);
+    return host.jsx(host.ui.Button, { type: "button", variant: "ghost", size: "sm", className: "bb-topbar-settings", "aria-label": "Open Bitbucket settings", onClick: () => host.navigate(integrationSettingsHref(activeWorkspaceId)) }, "Settings");
   };
 }
 var h = (type, props, ...children) => currentHost?.jsx(type, props, ...children);
@@ -1411,13 +1984,20 @@ var currentHost = null;
 window.registerKandevPlugin(PLUGIN_ID, {
   initialize(registry, host) {
     currentHost = host;
-    registry.registerNavItem({ id: "bitbucket", label: "Bitbucket", path: "/bitbucket", icon: "puzzle", section: "integrations" });
-    registry.registerRoute("/bitbucket", () => host.jsx(BitbucketPage, { host }), { topbar: false });
-    registry.registerComponent("plugin-settings", makeSettingsHealth(host));
+    registry.registerNavItem({ id: "bitbucket", label: "Bitbucket", path: "/bitbucket", icon: "bitbucket", section: "integrations" });
+    registry.registerRoute("/bitbucket", () => host.jsx(BitbucketPage, { host }), { topbar: { title: "Bitbucket", subtitle: "Pull requests", icon: "bitbucket", actions: makeTopbarActions(host) } });
+    registry.registerIntegrationSettings({
+      id: "bitbucket",
+      label: "Bitbucket",
+      description: "Connect Bitbucket Cloud or Data Center for this workspace.",
+      icon: "bitbucket",
+      Component: makeIntegrationSettings(host)
+    });
     registerNativeIntegrations(registry, host);
   },
   destroy() {
     reviewStore.clear();
+    associationStore.clear();
     currentHost = null;
   }
 });

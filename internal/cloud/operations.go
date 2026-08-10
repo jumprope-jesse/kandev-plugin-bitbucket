@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"kandev-plugin-bitbucket/internal/domain"
 )
@@ -80,15 +81,20 @@ func (c *Client) GetReview(ctx context.Context, repository domain.Repository, nu
 	if err != nil {
 		return domain.Review{}, err
 	}
-	if !isPathSegment(pr.Destination.Commit) {
-		return domain.Review{}, fmt.Errorf("Cloud pull request destination commit is invalid")
+	if !isPathSegment(pr.Source.Commit) {
+		return domain.Review{}, fmt.Errorf("Cloud pull request source commit is invalid")
 	}
-	statuses, err := c.reviewStatuses(ctx, repository, pr.Destination.Commit)
+	statuses, err := c.reviewStatuses(ctx, repository, pr.Source.Commit)
+	if err != nil {
+		return domain.Review{}, err
+	}
+	viewerID, err := c.currentUserID(ctx)
 	if err != nil {
 		return domain.Review{}, err
 	}
 	return domain.Review{
 		PullRequest:  pr,
+		ViewerID:     viewerID,
 		Diff:         diff,
 		Files:        files,
 		Commits:      commits,
@@ -148,6 +154,21 @@ func (c *Client) Health(ctx context.Context) error {
 	endpoint.Path = path.Join(endpoint.Path, "user")
 	var value map[string]any
 	return c.getJSON(ctx, &endpoint, &value)
+}
+
+func (c *Client) currentUserID(ctx context.Context) (string, error) {
+	endpoint := *c.apiBase
+	endpoint.Path = path.Join(endpoint.Path, "user")
+	var value struct {
+		AccountID string `json:"account_id"`
+	}
+	if err := c.getJSON(ctx, &endpoint, &value); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(value.AccountID) == "" {
+		return "", fmt.Errorf("Cloud current user omitted an account id")
+	}
+	return value.AccountID, nil
 }
 func (c *Client) ResolveGitCredential(ctx context.Context) (domain.GitCredential, error) {
 	if c.tokenSource == nil {
@@ -351,7 +372,7 @@ func (c *Client) pullRequestPageEndpoint(query domain.PullRequestQuery, state st
 	endpoint := c.repositoryEndpoint(query.Repository, "pullrequests")
 	parameters := endpoint.Query()
 	parameters.Set("state", state)
-	parameters.Set("pagelen", fmt.Sprint(min(query.Limit, maxPageLength)))
+	parameters.Set("pagelen", fmt.Sprint(min(query.Limit, maxPullRequestPageLength)))
 	if query.Text != "" {
 		parameters.Set("q", fmt.Sprintf("title~%q", query.Text))
 	}
@@ -373,7 +394,7 @@ func (c *Client) listPullRequestsForState(ctx context.Context, repository domain
 	endpoint := c.repositoryEndpoint(repository, "pullrequests")
 	query := endpoint.Query()
 	query.Set("state", state)
-	query.Set("pagelen", fmt.Sprint(min(limit, maxPageLength)))
+	query.Set("pagelen", fmt.Sprint(min(limit, maxPullRequestPageLength)))
 	if search != "" {
 		query.Set("q", fmt.Sprintf("title~%q", search))
 	}
@@ -434,12 +455,14 @@ type pullRequestPage struct {
 }
 
 type pullRequestPayload struct {
-	ID          int    `json:"id"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	State       string `json:"state"`
+	ID          int       `json:"id"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	State       string    `json:"state"`
+	CreatedAt   time.Time `json:"created_on"`
 	Author      struct {
-		AccountID string `json:"account_id"`
+		AccountID   string `json:"account_id"`
+		DisplayName string `json:"display_name"`
 	} `json:"author"`
 	Links struct {
 		HTML struct {
@@ -473,6 +496,7 @@ type pullRequestPayload struct {
 
 type cloudRepositoryReference struct {
 	Slug      string `json:"slug"`
+	FullName  string `json:"full_name"`
 	Workspace struct {
 		Slug string `json:"slug"`
 	} `json:"workspace"`
@@ -500,8 +524,9 @@ type reviewCommitPage struct {
 
 type reviewCommentPage struct {
 	Values []struct {
-		ID     int `json:"id"`
-		Parent struct {
+		ID        int       `json:"id"`
+		CreatedOn time.Time `json:"created_on"`
+		Parent    struct {
 			ID int `json:"id"`
 		} `json:"parent"`
 		Content struct {
@@ -893,16 +918,18 @@ func mapPullRequest(repository domain.Repository, payload pullRequestPayload) (d
 		return domain.PullRequest{}, err
 	}
 	return domain.PullRequest{
-		Repository:       repository,
-		SourceRepository: sourceRepository,
-		Number:           payload.ID,
-		Title:            payload.Title,
-		Description:      payload.Description,
-		State:            payload.State,
-		Author:           payload.Author.AccountID,
-		URL:              payload.Links.HTML.Href,
-		Source:           domain.Branch{Name: payload.Source.Branch.Name, Commit: payload.Source.Commit.Hash},
-		Destination:      domain.Branch{Name: payload.Destination.Branch.Name, Commit: payload.Destination.Commit.Hash},
+		Repository:        repository,
+		SourceRepository:  sourceRepository,
+		Number:            payload.ID,
+		Title:             payload.Title,
+		Description:       payload.Description,
+		State:             payload.State,
+		Author:            payload.Author.AccountID,
+		AuthorDisplayName: payload.Author.DisplayName,
+		CreatedAt:         payload.CreatedAt,
+		URL:               payload.Links.HTML.Href,
+		Source:            domain.Branch{Name: payload.Source.Branch.Name, Commit: payload.Source.Commit.Hash},
+		Destination:       domain.Branch{Name: payload.Destination.Branch.Name, Commit: payload.Destination.Commit.Hash},
 	}, nil
 }
 
@@ -910,15 +937,22 @@ func mapSourceRepository(payload *cloudRepositoryReference, fallback domain.Repo
 	if payload == nil {
 		return fallback, nil
 	}
-	if !isPathSegment(payload.Workspace.Slug) || !isPathSegment(payload.Slug) {
+	namespace, slug := payload.Workspace.Slug, payload.Slug
+	if !isPathSegment(namespace) || !isPathSegment(slug) {
+		parts := strings.Split(payload.FullName, "/")
+		if len(parts) == 2 {
+			namespace, slug = parts[0], parts[1]
+		}
+	}
+	if !isPathSegment(namespace) || !isPathSegment(slug) {
 		return domain.Repository{}, fmt.Errorf("Cloud pull request source repository is incomplete")
 	}
 	cloneURL, err := url.Parse("https://bitbucket.org")
 	if err != nil {
 		return domain.Repository{}, err
 	}
-	cloneURL.Path = "/" + path.Join(payload.Workspace.Slug, payload.Slug+".git")
-	return domain.Repository{Namespace: payload.Workspace.Slug, Slug: payload.Slug, CloneURL: cloneURL}, nil
+	cloneURL.Path = "/" + path.Join(namespace, slug+".git")
+	return domain.Repository{Namespace: namespace, Slug: slug, CloneURL: cloneURL}, nil
 }
 
 func validatePullRequestURL(raw string, repository domain.Repository, number int) error {
@@ -958,7 +992,7 @@ func mapReviewThreads(page reviewCommentPage) []domain.Thread {
 		}
 		id := fmt.Sprint(value.ID)
 		byRoot[id] = len(threads)
-		threads = append(threads, domain.Thread{ID: id, Comments: []domain.Comment{{ID: id, Author: value.User.DisplayName, Body: value.Content.Raw}}})
+		threads = append(threads, domain.Thread{ID: id, Comments: []domain.Comment{{ID: id, Author: value.User.DisplayName, Body: value.Content.Raw, When: value.CreatedOn}}})
 	}
 	for _, value := range page.Values {
 		if value.Parent.ID == 0 {
@@ -971,7 +1005,7 @@ func mapReviewThreads(page reviewCommentPage) []domain.Thread {
 			byRoot[parentID] = index
 			threads = append(threads, domain.Thread{ID: parentID})
 		}
-		threads[index].Comments = append(threads[index].Comments, domain.Comment{ID: fmt.Sprint(value.ID), ParentID: parentID, Author: value.User.DisplayName, Body: value.Content.Raw})
+		threads[index].Comments = append(threads[index].Comments, domain.Comment{ID: fmt.Sprint(value.ID), ParentID: parentID, Author: value.User.DisplayName, Body: value.Content.Raw, When: value.CreatedOn})
 	}
 	return threads
 }

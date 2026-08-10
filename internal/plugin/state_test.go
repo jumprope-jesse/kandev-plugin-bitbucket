@@ -35,14 +35,35 @@ func TestLinkStore_UnlinkNeverDeletesLinkedTask(t *testing.T) {
 	host := &stateRecordingHost{values: make(map[string]map[string]any)}
 	links, err := NewLinkStore(host)
 	require.NoError(t, err)
-	linked, err := links.Link(context.Background(), "manual-task", PullRequestLink{Key: "repo#42", RepositoryID: "repo", URL: "https://bitbucket.org/ws/repo/pull-requests/42", Number: 42})
+	linked, err := links.Link(context.Background(), "manual-task", PullRequestLink{Key: "ws/repo#42", RepositoryID: "ws/repo", URL: "https://bitbucket.org/ws/repo/pull-requests/42", Number: 42})
 	require.NoError(t, err)
 	require.Len(t, linked, 1)
 
-	remaining, err := links.Unlink(context.Background(), "manual-task", "repo#42")
+	remaining, err := links.Unlink(context.Background(), "manual-task", "ws/repo#42")
 	require.NoError(t, err)
 	require.Empty(t, remaining)
 	require.Empty(t, host.deletedScopes, "unlink must not invoke task deletion")
+}
+
+func TestLinkStore_ExplicitUnlinkSuppressesAutoLinkUntilManualRelink(t *testing.T) {
+	host := &stateRecordingHost{values: make(map[string]map[string]any)}
+	links, err := NewLinkStore(host)
+	require.NoError(t, err)
+	link := PullRequestLink{
+		Key: "ws/repo#42", RepositoryID: "ws/repo",
+		URL: "https://bitbucket.org/ws/repo/pull-requests/42", Number: 42,
+	}
+	_, err = links.AutoLink(context.Background(), "task-1", link)
+	require.NoError(t, err)
+	_, err = links.Unlink(context.Background(), "task-1", link.Key)
+	require.NoError(t, err)
+	automatic, err := links.AutoLink(context.Background(), "task-1", link)
+	require.NoError(t, err)
+	require.Empty(t, automatic)
+
+	manual, err := links.Link(context.Background(), "task-1", link)
+	require.NoError(t, err)
+	require.Len(t, manual, 1)
 }
 
 func TestLinkStore_ConcurrentLinksDoNotLoseUpdates(t *testing.T) {

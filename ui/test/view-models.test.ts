@@ -1,22 +1,36 @@
 import {
   activeWorkspaceIdFromState,
+  changeRequestDetailActions,
+  changeRequestDetailModel,
   connectionActionBody,
   connectionIdentity,
   connectionOAuthRegistration,
   connectionSaveBody,
   currentWatchFilter,
   deriveOAuthCallbackURL,
+  displayPullRequestAuthor,
   disconnectConnectionInput,
+  integrationSettingsHref,
   linkPullRequestBody,
   normalizeRepositoryInspection,
   normalizeRepositories,
   normalizePullRequests,
+  normalizePullRequestAssociations,
+  normalizeSavedQueries,
+  newSavedQuery,
+  canSaveDashboardQuery,
   normalizeReviewDetail,
   normalizeWatches,
-  launchPresets,
+  taskDialogInitialValues,
+  taskFromLaunchResult,
+  taskLaunchBody,
+  taskLaunchPresets,
+  usePluginTaskCreation,
   oauthStartInput,
   pullRequestCreateBody,
   pluginRepositoryInput,
+  pullRequestListRequest,
+  relativeTimeLabel,
   statusTone,
   taskSupportsBitbucketRepository,
   taskRepositoryDescriptor,
@@ -36,6 +50,20 @@ describe("Bitbucket view models", () => {
     expect(activeWorkspaceIdFromState({ activeWorkspaceId: "legacy-wrong-shape" })).toBeUndefined();
   });
 
+  it("builds workspace-scoped integration settings links with a global fallback", () => {
+    expect(integrationSettingsHref("workspace one")).toBe(
+      "/settings/workspace/workspace%20one/integrations/bitbucket",
+    );
+    expect(integrationSettingsHref()).toBe("/settings/integrations/bitbucket");
+  });
+
+  it("shows readable authors but hides provider-opaque Cloud identities", () => {
+    expect(displayPullRequestAuthor("Ari Almeida")).toBe("Ari Almeida");
+    expect(displayPullRequestAuthor("dev-user")).toBe("dev-user");
+    expect(displayPullRequestAuthor("712020:49e8a296-5268-4c02-a6b3-20a4b8e60149")).toBeUndefined();
+    expect(displayPullRequestAuthor("  ")).toBeUndefined();
+  });
+
   it("normalizes queue data without leaking provider payload shape into components", () => {
     expect(
       normalizePullRequests({
@@ -45,8 +73,13 @@ describe("Bitbucket view models", () => {
             title: "Improve mobile review",
             repository: { id: "repo-1", name: "mobile" },
             state: "OPEN",
-            author: { display_name: "Ari" },
+            source_branch: "feature/mobile-review",
+            destination_branch: "main",
+            author: "712020:49e8a296-5268-4c02-a6b3-20a4b8e60149",
+            author_display_name: "Ari",
+            created_at: "2026-08-06T08:00:00Z",
             capabilities: "merge, decline",
+            associations: [{ id: "link-1", task_id: "task-1", title: "Review mobile" }],
           },
         ],
       }),
@@ -56,9 +89,82 @@ describe("Bitbucket view models", () => {
         number: 42,
         repositoryName: "mobile",
         author: "Ari",
+        createdAt: "2026-08-06T08:00:00Z",
+        sourceBranch: "feature/mobile-review",
+        destinationBranch: "main",
+        tasks: [{ id: "link-1", taskId: "task-1", fallbackTitle: "Review mobile" }],
         capabilities: ["merge", "decline"],
       }),
     ]);
+  });
+
+  it("extracts provider links without coercing Bitbucket link objects", () => {
+    const cloud = normalizePullRequests({
+      values: [{
+        id: 42,
+        title: "Cloud link",
+        repository: { id: "acme/cloud", name: "cloud" },
+        state: "OPEN",
+        links: { html: { href: "https://bitbucket.org/acme/cloud/pull-requests/42" } },
+      }],
+    });
+    const dataCenter = normalizePullRequests({
+      values: [{
+        id: 7,
+        title: "Data Center link",
+        repository: { id: "ENG/widgets", name: "widgets" },
+        state: "OPEN",
+        links: { self: [{ href: "https://bitbucket.example.test/projects/ENG/repos/widgets/pull-requests/7" }] },
+      }],
+    });
+
+    expect(cloud[0]?.url).toBe("https://bitbucket.org/acme/cloud/pull-requests/42");
+    expect(dataCenter[0]?.url).toBe(
+      "https://bitbucket.example.test/projects/ENG/repos/widgets/pull-requests/7",
+    );
+    expect(cloud[0]?.url).not.toBe("[object Object]");
+  });
+
+  it("formats opened time without exposing invalid provider timestamps", () => {
+    expect(relativeTimeLabel("2026-08-06T09:59:55Z", new Date("2026-08-06T10:00:00Z"))).toBe("just now");
+    expect(relativeTimeLabel("2026-08-06T09:59:30Z", new Date("2026-08-06T10:00:00Z"))).toBe("30s ago");
+    expect(relativeTimeLabel("2026-08-06T08:00:00Z", new Date("2026-08-06T10:00:00Z"))).toBe("2h ago");
+    expect(relativeTimeLabel("2026-08-05T08:00:00Z", new Date("2026-08-06T10:00:00Z"))).toBe("yesterday");
+    expect(relativeTimeLabel("2026-08-02T08:00:00Z", new Date("2026-08-06T10:00:00Z"))).toBe("4d ago");
+    expect(relativeTimeLabel("2026-07-01T08:00:00Z", new Date("2026-08-06T10:00:00Z"))).toBe(new Date("2026-07-01T08:00:00Z").toLocaleDateString());
+    expect(relativeTimeLabel("not-a-date", new Date("2026-08-06T10:00:00Z"))).toBeUndefined();
+  });
+
+  it("groups task associations by canonical review key", () => {
+    expect(normalizePullRequestAssociations({
+      associations: [{ review_key: "acme/widgets#42", task_id: "task-1", task_title: "Review mobile" }],
+    })).toEqual({
+      "acme/widgets#42": [{
+        id: "acme/widgets#42:task-1",
+        taskId: "task-1",
+        fallbackTitle: "Review mobile",
+      }],
+    });
+  });
+
+  it("validates, bounds, and creates workspace saved queries from committed filters", () => {
+    expect(normalizeSavedQueries([
+      { id: "saved-1", label: "Needs review", query: "state:open reviewer:me", repositoryId: "repo-1", state: "open", createdAt: "2026-08-10T10:00:00Z" },
+      { id: "invalid", label: "", query: 42 },
+    ])).toEqual([
+      { id: "saved-1", label: "Needs review", query: "state:open reviewer:me", repositoryId: "repo-1", state: "open", createdAt: "2026-08-10T10:00:00Z" },
+    ]);
+    expect(canSaveDashboardQuery("state:open reviewer:me", "")).toBe(true);
+    expect(canSaveDashboardQuery("", "repo-1")).toBe(true);
+    expect(canSaveDashboardQuery("", "")).toBe(false);
+    expect(newSavedQuery({ label: " Needs review ", query: "state:open", repositoryId: "repo-1", state: "open" }, "saved-2", "2026-08-10T11:00:00Z")).toEqual({
+      id: "saved-2",
+      label: "Needs review",
+      query: "state:open",
+      repositoryId: "repo-1",
+      state: "open",
+      createdAt: "2026-08-10T11:00:00Z",
+    });
   });
 
   it("maps Bitbucket repository descriptors between plugin snake case and host camel case", () => {
@@ -93,6 +199,34 @@ describe("Bitbucket view models", () => {
       name: "widgets",
       clone_url: "https://bitbucket.org/acme/widgets.git",
       default_branch: "main",
+    });
+  });
+
+  it("uses the repository-scoped search action instead of filtering the 25-item workspace queue", () => {
+    const repository = {
+      providerId: "bitbucket",
+      providerHost: "bitbucket.org",
+      ownerOrProject: "acme",
+      repositoryId: "repository-26",
+      repositoryName: "selected",
+      cloneUrl: "https://bitbucket.org/acme/selected.git",
+    };
+
+    expect(pullRequestListRequest(repository, "fix", "open")).toEqual({
+      actionKey: "pullrequests.search",
+      body: {
+        repository: pluginRepositoryInput(repository),
+        query: "fix",
+        state: "open",
+      },
+    });
+    expect(pullRequestListRequest(null, "fix", "open")).toEqual({
+      actionKey: "pullrequests.queue",
+      body: { view: "queue", query: "fix", state: "open" },
+    });
+    expect(pullRequestListRequest(null, "fix login state:merged", "open")).toEqual({
+      actionKey: "pullrequests.queue",
+      body: { view: "queue", query: "fix login", state: "merged" },
     });
   });
 
@@ -181,6 +315,221 @@ describe("Bitbucket view models", () => {
         ],
       },
     ]);
+  });
+
+  it("preserves real comment timestamps and omits Go zero times", () => {
+    const detail = normalizeReviewDetail({
+      id: "42",
+      number: 42,
+      title: "Show honest comment ages",
+      repository_id: "ENG/widgets",
+      repository_name: "widgets",
+      state: "OPEN",
+      threads: [{
+        id: "10",
+        comments: [
+          { ID: "10", Author: "Ada", Body: "Timed", When: "2026-07-31T12:01:00Z" },
+          { ID: "11", ParentID: "10", Author: "Bob", Body: "Untimed", When: "0001-01-01T00:00:00Z" },
+        ],
+      }],
+    });
+
+    expect(detail?.threads[0]?.comments).toEqual([
+      { id: "10", author: "Ada", body: "Timed", createdAt: "2026-07-31T12:01:00Z" },
+      { id: "11", parentId: "10", author: "Bob", body: "Untimed" },
+    ]);
+  });
+
+  it("maps Bitbucket review data into the host-owned change-request detail model", () => {
+    const review = normalizeReviewDetail({
+      id: "42",
+      review_key: "acme/widgets#42",
+      number: 42,
+      title: "Use shared review UI",
+      url: "https://bitbucket.org/acme/widgets/pull-requests/42",
+      repository_id: "acme/widgets",
+      repository_name: "widgets",
+      state: "OPEN",
+      author_display_name: "Ada",
+      created_at: "2026-08-06T08:00:00Z",
+      source_branch: "feature/shared-review",
+      destination_branch: "main",
+      description: "One host-owned review surface.",
+      files: [
+        { path: "ui.tsx", status: "modified", additions: 12, deletions: 3 },
+        { path: "ui.test.tsx", status: "added", additions: 8, deletions: 0 },
+      ],
+      participants: [
+        { name: "Grace", role: "REVIEWER", approved: true },
+        { name: "Linus", role: "REVIEWER", approved: false },
+      ],
+      statuses: [{ key: "pipeline", name: "Pipelines", state: "SUCCESSFUL" }],
+      threads: [{
+        id: "10",
+        file: "ui.tsx",
+        comments: [
+          { id: "10", author: "Grace", body: "Please reuse the host." },
+          { id: "11", parent_id: "10", author: "Ada", body: "Done." },
+        ],
+      }],
+    });
+
+    expect(review && changeRequestDetailModel(review)).toEqual({
+      providerId: "bitbucket",
+      reviewKey: "acme/widgets#42",
+      number: 42,
+      title: "Use shared review UI",
+      url: "https://bitbucket.org/acme/widgets/pull-requests/42",
+      state: "open",
+      author: { name: "Ada" },
+      createdAt: "2026-08-06T08:00:00Z",
+      sourceBranch: "feature/shared-review",
+      targetBranch: "main",
+      additions: 20,
+      deletions: 3,
+      description: "One host-owned review surface.",
+      reviewState: "approved",
+      pendingReviewCount: 1,
+      reviews: [{ id: "Grace", author: { name: "Grace" }, state: "APPROVED" }],
+      requestedReviewers: [{ name: "Linus" }],
+      checks: [{ id: "pipeline", name: "Pipelines", state: "SUCCESSFUL" }],
+      comments: [
+        { id: "10", author: { name: "Grace" }, body: "Please reuse the host.", path: "ui.tsx", resolved: false },
+        { id: "11", parentId: "10", author: { name: "Ada" }, body: "Done.", path: "ui.tsx", resolved: false },
+      ],
+    });
+  });
+
+  it("normalizes Cloud identity, head checks, and viewer approval for shared host UI", () => {
+    const review = normalizeReviewDetail({
+      id: 42,
+      title: "Cloud review",
+      state: "OPEN",
+      links: { html: { href: "https://bitbucket.org/acme/widgets/pull-requests/42" } },
+      repository: { full_name: "acme/widgets", name: "widgets" },
+      author: {
+        display_name: "Ada Cloud",
+        links: {
+          html: { href: "https://bitbucket.org/ada" },
+          avatar: { href: "https://avatar.example.test/ada.png" },
+        },
+      },
+      created_on: "2026-08-06T08:00:00Z",
+      updated_on: "2026-08-06T09:00:00Z",
+      source: { branch: { name: "feature/cloud" }, commit: { hash: "cloud-head" } },
+      destination: { branch: { name: "main" } },
+      participants: [{
+        user: { display_name: "Ada Cloud" },
+        role: "REVIEWER",
+        approved: true,
+        is_current_user: true,
+      }],
+      statuses: {
+        values: [{
+          key: "pipeline",
+          name: "Pipelines",
+          state: "SUCCESSFUL",
+          url: "https://bitbucket.org/acme/widgets/pipelines/results/7",
+          description: "Cloud pipeline",
+          created_on: "2026-08-06T08:10:00Z",
+          updated_on: "2026-08-06T08:12:00Z",
+        }],
+      },
+    });
+
+    expect(review).toMatchObject({
+      key: "acme/widgets:42",
+      repositoryId: "acme/widgets",
+      author: "Ada Cloud",
+      authorUrl: "https://bitbucket.org/ada",
+      authorAvatarUrl: "https://avatar.example.test/ada.png",
+      createdAt: "2026-08-06T08:00:00Z",
+      updatedAt: "2026-08-06T09:00:00Z",
+      sourceBranch: "feature/cloud",
+      destinationBranch: "main",
+      headCommit: "cloud-head",
+      viewerApproved: true,
+      statuses: [{
+        key: "pipeline",
+        name: "Pipelines",
+        state: "SUCCESSFUL",
+        url: "https://bitbucket.org/acme/widgets/pipelines/results/7",
+        output: "Cloud pipeline",
+        startedAt: "2026-08-06T08:10:00Z",
+        completedAt: "2026-08-06T08:12:00Z",
+      }],
+    });
+    expect(review && changeRequestDetailModel(review)).toMatchObject({
+      author: {
+        name: "Ada Cloud",
+        url: "https://bitbucket.org/ada",
+        avatarUrl: "https://avatar.example.test/ada.png",
+      },
+      checks: [{
+        id: "pipeline",
+        name: "Pipelines",
+        state: "SUCCESSFUL",
+        output: "Cloud pipeline",
+        startedAt: "2026-08-06T08:10:00Z",
+        completedAt: "2026-08-06T08:12:00Z",
+      }],
+    });
+  });
+
+  it("normalizes Data Center aliases into the same shared detail model", () => {
+    const review = normalizeReviewDetail({
+      id: 7,
+      title: "Data Center review",
+      state: "DECLINED",
+      links: { self: [{ href: "https://bitbucket.example.test/projects/ENG/repos/widgets/pull-requests/7" }] },
+      repository: { slug: "widgets", project: { key: "ENG" } },
+      author: { displayName: "Dana DC", slug: "dana" },
+      createdDate: 1786003200000,
+      updatedDate: 1786006800000,
+      fromRef: { displayId: "feature/dc", latestCommit: "dc-head" },
+      toRef: { displayId: "main" },
+      reviewers: [{
+        user: { displayName: "Dana DC", slug: "dana" },
+        role: "REVIEWER",
+        status: "UNAPPROVED",
+        currentUser: true,
+      }],
+      builds: { values: [{ key: "build-7", name: "CI", state: "FAILED", url: "https://ci.example.test/7" }] },
+    });
+
+    expect(review).toMatchObject({
+      repositoryId: "ENG/widgets",
+      state: "DECLINED",
+      author: "Dana DC",
+      sourceBranch: "feature/dc",
+      destinationBranch: "main",
+      headCommit: "dc-head",
+      viewerApproved: false,
+      statuses: [{ key: "build-7", name: "CI", state: "FAILED", url: "https://ci.example.test/7" }],
+    });
+    expect(review && changeRequestDetailModel(review)).toMatchObject({ state: "closed" });
+  });
+
+  it("exposes only terminal-safe, capability- and viewer-aware shared detail actions", () => {
+    const base = normalizeReviewDetail({
+      id: 42,
+      review_key: "acme/widgets#42",
+      number: 42,
+      title: "Review actions",
+      repository_id: "acme/widgets",
+      repository_name: "widgets",
+      state: "OPEN",
+      capabilities: ["approve", "merge", "decline", "comments", "thread_replies"],
+    })!;
+
+    expect(changeRequestDetailActions({ ...base, viewerApproved: false }).map(({ id }) => id)).toEqual([
+      "approve", "merge", "decline", "comment", "reply",
+    ]);
+    expect(changeRequestDetailActions({ ...base, viewerApproved: true }).map(({ id }) => id)).toEqual([
+      "unapprove", "merge", "decline", "comment", "reply",
+    ]);
+    expect(changeRequestDetailActions({ ...base, state: "MERGED" })).toEqual([]);
+    expect(changeRequestDetailActions({ ...base, capabilities: ["comments"] }).map(({ id }) => id)).toEqual(["comment"]);
   });
 
   it("turns current queue filters into an exact watch filter", () => {
@@ -290,12 +639,122 @@ describe("Bitbucket view models", () => {
     expect(disconnectConnectionInput("workspace-1")).toEqual({ workspaceId: "workspace-1" });
   });
 
-  it("offers only server-supported launch presets", () => {
-    expect(launchPresets()).toEqual([
-      { id: "default", name: "Default" },
-      { id: "review", name: "Review and test" },
-      { id: "implement", name: "Implement change" },
+  it("offers the native GitHub/GitLab task presets", () => {
+    expect(taskLaunchPresets().map(({ id, label, hint, iconName }) => ({ id, label, hint, iconName }))).toEqual([
+      { id: "review", label: "Review", hint: "Read the diff, flag issues", iconName: "eye" },
+      { id: "address-feedback", label: "Address feedback", hint: "Apply review comments", iconName: "message" },
+      { id: "fix-ci", label: "Fix CI", hint: "Diagnose failing checks", iconName: "tool" },
     ]);
+  });
+
+  it("prefills native task creation from the Bitbucket pull request", () => {
+    const pullRequest = normalizePullRequests({
+      pull_requests: [{
+        id: 42,
+        review_key: "acme/widgets#42",
+        title: "Improve mobile review",
+        url: "https://bitbucket.org/acme/widgets/pull-requests/42",
+        repository_id: "acme/widgets",
+        repository_name: "widgets",
+        source_branch: "feature/mobile-review",
+        destination_branch: "main",
+      }],
+    })[0]!;
+    const review = taskLaunchPresets()[0]!;
+
+    expect(taskDialogInitialValues(pullRequest, review)).toEqual({
+      title: "Review: Improve mobile review",
+      description: expect.stringContaining("https://bitbucket.org/acme/widgets/pull-requests/42"),
+      remoteUrl: "https://bitbucket.org/acme/widgets/pull-requests/42",
+      branch: "feature/mobile-review",
+      checkoutBranch: "feature/mobile-review",
+    });
+  });
+
+  it("passes an authorized repository descriptor to the native task dialog", () => {
+    const pullRequest = normalizePullRequests({
+      pull_requests: [{
+        id: 42,
+        title: "Improve mobile review",
+        url: "https://bitbucket.org/acme/widgets/pull-requests/42",
+        repository_id: "widgets",
+        repository_name: "widgets",
+      }],
+    })[0]!;
+    const review = taskLaunchPresets()[0]!;
+    const repository = {
+      providerId: "bitbucket",
+      providerHost: "https://bitbucket.org",
+      ownerOrProject: "acme",
+      repositoryId: "widgets",
+      repositoryName: "widgets",
+      cloneUrl: "https://bitbucket.org/acme/widgets.git",
+      defaultBranch: "main",
+    };
+
+    expect(taskDialogInitialValues(pullRequest, review, undefined, repository)).toMatchObject({
+      remoteUrl: "https://bitbucket.org/acme/widgets/pull-requests/42",
+      remoteRepository: repository,
+    });
+  });
+
+  it("maps the native task dialog payload to the narrow authenticated launch action", () => {
+    const pullRequest = normalizePullRequests({
+      pull_requests: [{
+        id: 42,
+        review_key: "acme/widgets#42",
+        title: "Improve mobile review",
+        repository_id: "acme/widgets",
+        repository_name: "widgets",
+      }],
+    })[0]!;
+
+    expect(taskLaunchBody(pullRequest, {
+      workspace_id: "workspace-1",
+      workflow_id: "workflow-1",
+      workflow_step_id: "step-2",
+      title: "Review: Improve mobile review",
+      description: "Inspect the diff",
+      repositories: [{ remote_url: "https://bitbucket.org/acme/widgets/pull-requests/42" }],
+      state: "IN_PROGRESS",
+      start_agent: true,
+      agent_profile_id: "agent-1",
+      executor_id: "executor-runtime-1",
+      executor_profile_id: "executor-profile-1",
+      plan_mode: true,
+      attachments: [{ type: "image", data: "not-forwarded", mime_type: "image/png" }],
+    }, "launch-123")).toEqual({
+      review_key: "acme/widgets#42",
+      launch_id: "launch-123",
+      task: {
+        title: "Review: Improve mobile review",
+        description: "Inspect the diff",
+        workflow_id: "workflow-1",
+        workflow_step_id: "step-2",
+        agent_profile_id: "agent-1",
+        executor_profile_id: "executor-profile-1",
+        start_agent: true,
+        plan_mode: true,
+      },
+    });
+  });
+
+  it("keeps persisted host repositories on the native REST task transport", () => {
+    expect(usePluginTaskCreation("host-repository-1")).toBe(false);
+    expect(usePluginTaskCreation()).toBe(true);
+  });
+
+  it("returns a task-shaped launch result only after the pull request link persists", () => {
+    expect(taskFromLaunchResult({ task_id: "task-1", linked: true })).toEqual({
+      id: "task-1",
+      bitbucketLinked: true,
+    });
+    expect(taskFromLaunchResult({
+      task_id: "task-1",
+      linked: false,
+      association_error: "task association could not be saved",
+    })).toEqual({ id: "task-1", bitbucketLinked: false });
+    expect(() => taskFromLaunchResult({ linked: true })).toThrow("no task id");
   });
 
   it("normalizes watch controls without exposing persisted internals", () => {

@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	defaultMaxResponseBytes int64 = 1 << 20
-	maxPageLength                 = 100
+	defaultMaxResponseBytes  int64 = 1 << 20
+	maxPageLength                  = 100
+	maxPullRequestPageLength       = 50
 )
 
 // TokenSource provides an OAuth access token or API token without exposing persistence.
@@ -284,9 +285,14 @@ func mapRepository(workspace string, payload repositoryPayload) (domain.Reposito
 		}
 		cloneURL, err := url.Parse(clone.Href)
 		expectedPath := "/" + path.Join(workspace, payload.Slug+".git")
-		if err != nil || cloneURL.Scheme != "https" || cloneURL.User != nil || cloneURL.Host != "bitbucket.org" || cloneURL.RawQuery != "" || cloneURL.Fragment != "" || cloneURL.Path != expectedPath {
+		if err != nil || cloneURL.Scheme != "https" || cloneURL.Host != "bitbucket.org" || cloneURL.RawQuery != "" || cloneURL.Fragment != "" || cloneURL.Path != expectedPath {
 			return domain.Repository{}, fmt.Errorf("Cloud repository has invalid HTTPS clone URL")
 		}
+		// Bitbucket Cloud currently includes the authenticated account name as
+		// URL userinfo in otherwise canonical HTTPS clone links. Never propagate
+		// it into host repository data; reconstruct the validated credential-free
+		// URL instead.
+		cloneURL = &url.URL{Scheme: "https", Host: "bitbucket.org", Path: expectedPath}
 		return domain.Repository{Namespace: workspace, Slug: payload.Slug, CloneURL: cloneURL, DefaultBranch: payload.MainBranch.Name}, nil
 	}
 	return domain.Repository{}, fmt.Errorf("Cloud repository has no HTTPS clone URL")

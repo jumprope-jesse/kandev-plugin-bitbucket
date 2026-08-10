@@ -468,7 +468,7 @@ func (r *ConnectionResolver) matchesTaskRepositoryScope(ctx context.Context, set
 			cloneURL, parseErr := url.Parse(repository.RemoteURL)
 			if parseErr != nil || cloneURL.Scheme != "https" || cloneURL.User != nil || cloneURL.RawPath != "" ||
 				cloneURL.RawQuery != "" || cloneURL.Fragment != "" || !strings.EqualFold(cloneURL.Host, scope.Host) ||
-				!strings.EqualFold(repository.ProviderHost, cloneURL.Host) {
+				!providerHostMatches(repository.ProviderHost, cloneURL) {
 				return false
 			}
 			owner, name, valid := repositoryIdentity(settings, cloneURL)
@@ -482,6 +482,24 @@ func (r *ConnectionResolver) matchesTaskRepositoryScope(ctx context.Context, set
 		}
 		page.Cursor = info.NextCursor
 	}
+}
+
+// providerHostMatches accepts the current host contract (an HTTPS origin)
+// plus the pre-origin legacy hostname while rejecting paths and credentials.
+func providerHostMatches(raw string, cloneURL *url.URL) bool {
+	value := strings.TrimSpace(raw)
+	if value == "" || cloneURL == nil {
+		return false
+	}
+	if !strings.Contains(value, "://") {
+		return strings.EqualFold(value, cloneURL.Host)
+	}
+	origin, err := url.Parse(value)
+	if err != nil || origin.Scheme != "https" || origin.User != nil || origin.Host == "" ||
+		(origin.Path != "" && origin.Path != "/") || origin.RawPath != "" || origin.RawQuery != "" || origin.Fragment != "" {
+		return false
+	}
+	return strings.EqualFold(origin.Host, cloneURL.Host)
 }
 
 func repositoryIdentity(settings ConnectionSettings, cloneURL *url.URL) (string, string, bool) {
@@ -1002,6 +1020,14 @@ type hostTokenSource struct {
 type repositorySearchProvider struct {
 	domain.Provider
 	workspace string
+}
+
+func (p repositorySearchProvider) SearchPullRequestsPage(ctx context.Context, query domain.PullRequestQuery) (domain.PullRequestPage, error) {
+	if pager, ok := p.Provider.(domain.PullRequestPager); ok {
+		return pager.SearchPullRequestsPage(ctx, query)
+	}
+	pullRequests, err := p.Provider.SearchPullRequests(ctx, query)
+	return domain.PullRequestPage{PullRequests: pullRequests}, err
 }
 
 func (p repositorySearchProvider) ListRepositories(ctx context.Context, query string, limit int) ([]domain.Repository, error) {

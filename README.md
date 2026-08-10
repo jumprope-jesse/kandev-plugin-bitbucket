@@ -13,6 +13,11 @@ service or an integration built into the Kandev host.
 - Bitbucket Cloud: API-token or OAuth 2.0 connections.
 - Bitbucket Data Center: personal, project, repository, or OAuth credentials.
 - Native Kandev repository provider, task-menu actions, and review panel.
+- Native Create PR transport after Kandev pushes the task branch, with exact
+  persisted-repository selection for multi-repository tasks.
+- Shared task-list PR indicators, CI/review status, and unlink controls on
+  desktop and mobile.
+- Workspace-persisted dashboard queries using Kandev's shared saved-query UI.
 - Authenticated manifest-declared actions for connection management,
   repositories, pull requests, reviews, task links, and watches.
 - Workspace-scoped connection state and encrypted plugin-owned secrets.

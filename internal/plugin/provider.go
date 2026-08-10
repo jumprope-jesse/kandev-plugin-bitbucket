@@ -233,13 +233,20 @@ func remoteRepositoryFromDomain(repository domain.Repository, baseBranch, headBr
 	host := ""
 	if repository.CloneURL != nil {
 		cloneURL = repository.CloneURL.String()
-		host = repository.CloneURL.Host
+		host = repositoryProviderHost(repository.CloneURL)
 	}
 	return watches.RemoteRepository{
 		ProviderID: "bitbucket", ProviderHost: host, OwnerOrProject: repository.Namespace,
 		ProviderRepositoryID: repository.Namespace + "/" + repository.Slug, Name: repository.Slug,
 		CloneURL: cloneURL, BaseBranch: baseBranch, HeadBranch: headBranch,
 	}
+}
+
+func repositoryProviderHost(value *url.URL) string {
+	if value == nil || value.Scheme == "" || value.Host == "" {
+		return ""
+	}
+	return value.Scheme + "://" + value.Host
 }
 
 func containsFold(values []string, value string) bool {
