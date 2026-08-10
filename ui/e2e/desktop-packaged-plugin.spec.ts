@@ -1,9 +1,13 @@
 import { expect, test } from "@playwright/test";
 
 async function openFirstLinkedTask(page: import("@playwright/test").Page) {
-  const taskIndicator = page.locator(
-    '[data-testid^="bitbucket-pr-"][data-testid$="-task-single"], [data-testid^="bitbucket-pr-"][data-testid$="-task-multi"]',
-  ).first();
+  const taskIndicator = page
+    .getByTestId("bitbucket-pr-row")
+    .filter({ hasText: "Success pipeline · approved" })
+    .locator(
+      '[data-testid^="bitbucket-pr-"][data-testid$="-task-single"], [data-testid^="bitbucket-pr-"][data-testid$="-task-multi"]',
+    )
+    .first();
   await expect(taskIndicator).toBeVisible();
   const testId = await taskIndicator.getAttribute("data-testid");
   await taskIndicator.click();
@@ -73,7 +77,9 @@ test("matches GitHub's list-first hierarchy and keeps review inside tasks", asyn
     .locator('[data-testid="bitbucket-start-task-preset"][data-preset-id="review"]')
     .click();
   await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByTestId("task-title-input")).toHaveValue(/^Review:/);
+  await expect(
+    page.getByPlaceholder("Write a prompt for the agent... (@ to insert a saved prompt)"),
+  ).toHaveValue(/^Review Bitbucket pull request/);
 });
 
 test("commits scope filters into the visible query and uses host semantic icons", async ({ page }) => {
@@ -110,11 +116,13 @@ test("saves, restores, and deletes a workspace query with the shared host dialog
 
   await page.reload();
   await page.getByTestId("bitbucket-saved-filters").click();
-  await page.getByRole("menuitem", { name: "Needs my review" }).click();
+  const savedItem = page.getByRole("menuitem", { name: "Needs my review" });
+  await savedItem.click();
+  await expect(savedItem).toBeHidden();
   await expect(query).toHaveValue("state:open reviewer:me");
 
   await page.getByTestId("bitbucket-saved-filters").click();
-  const savedItem = page.getByRole("menuitem", { name: "Needs my review" });
+  await expect(savedItem).toBeVisible();
   await savedItem.hover();
   await savedItem.getByTitle("Delete saved query").click();
   await expect(page.getByRole("menuitem", { name: "Needs my review" })).toHaveCount(0);
@@ -133,16 +141,17 @@ test("feeds shared topbar, composer CI, and review detail surfaces", async ({ pa
 
   await topbarStatus.hover();
   await expect(page.getByTestId("integration-change-request-status-popover")).toBeVisible();
-  await expect(page.getByText("Checks", { exact: true })).toBeVisible();
+  await expect(page.getByText("Pass rate", { exact: true })).toBeVisible();
+  await expect(page.getByText("2/2 (100%)", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /Unlink pull request/ })).toBeVisible();
 
   await topbarStatus.click();
   const detail = page.getByTestId("change-request-detail");
   await expect(detail).toBeVisible();
   await expect(detail).toHaveAttribute("data-presentation", "desktop");
-  await expect(detail.getByText("Reviews", { exact: true })).toBeVisible();
-  await expect(detail.getByText("Checks", { exact: true })).toBeVisible();
-  await expect(detail.getByText("Comments", { exact: true })).toBeVisible();
+  await expect(detail.getByRole("button", { name: /Reviews — 1 approved/ })).toBeVisible();
+  await expect(detail.getByRole("button", { name: /CI Checks — 2 passed/ })).toBeVisible();
+  await expect(detail.getByRole("button", { name: /Comments \(2\)/ })).toBeVisible();
   await expect(detail.getByRole("tablist")).toHaveCount(0);
   await expect(detail.locator('a[href*="bitbucket"]').first()).toBeVisible();
 

@@ -311,6 +311,7 @@ describe("Bitbucket plugin registrations", () => {
     await repositoryProviders[0]?.createChangeRequest?.({
       workspaceId: "workspace-1",
       taskId: "task-1",
+      sessionId: "session-1",
       repositoryId: "repository-1",
       title: "Native title",
       body: "Native body",
@@ -323,6 +324,7 @@ describe("Bitbucket plugin registrations", () => {
       input: {
         workspaceId: "workspace-1",
         taskId: "task-1",
+        sessionId: "session-1",
         repositoryId: "repository-1",
         body: { title: "Native title", description: "Native body", destination: "main" },
       },

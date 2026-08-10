@@ -19,7 +19,8 @@ func (w *Workflows) createPullRequestFromTask(ctx context.Context, action plugin
 	if err != nil || task == nil || task.ID != action.TaskID || task.WorkspaceID != action.WorkspaceID {
 		return nil, domain.Repository{}, "", "", "", "", fmt.Errorf("verified task is unavailable")
 	}
-	repositories, err := taskBitbucketRepositories(ctx, w.host, *task)
+	verifiedTask := taskWithVerifiedHeadBranch(*task, action)
+	repositories, err := taskBitbucketRepositories(ctx, w.host, verifiedTask)
 	if err != nil {
 		return nil, domain.Repository{}, "", "", "", "", err
 	}
@@ -66,6 +67,22 @@ func (w *Workflows) createPullRequestFromTask(ctx context.Context, action plugin
 		description = task.Description
 	}
 	return provider, repository, source, destination, title, description, nil
+}
+
+func taskWithVerifiedHeadBranch(task pluginsdk.Task, action pluginsdk.VerifiedActionContext) pluginsdk.Task {
+	repositoryID := strings.TrimSpace(action.RepositoryID)
+	headBranch := strings.TrimSpace(action.HeadBranch)
+	if repositoryID == "" || headBranch == "" {
+		return task
+	}
+	task.Repositories = append([]pluginsdk.TaskRepository(nil), task.Repositories...)
+	for i := range task.Repositories {
+		if task.Repositories[i].RepositoryID == repositoryID {
+			task.Repositories[i].CheckoutBranch = headBranch
+			break
+		}
+	}
+	return task
 }
 
 func selectTaskBitbucketRepository(repositories []taskRepositoryCandidate, repositoryID string) (taskRepositoryCandidate, error) {

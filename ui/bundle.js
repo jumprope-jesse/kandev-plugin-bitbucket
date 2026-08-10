@@ -1864,6 +1864,7 @@ function registerNativeIntegrations(registry, host) {
     async createChangeRequest({
       workspaceId,
       taskId,
+      sessionId,
       repositoryId,
       title,
       body,
@@ -1875,6 +1876,7 @@ function registerNativeIntegrations(registry, host) {
         {
           workspaceId,
           taskId,
+          sessionId,
           repositoryId,
           body: {
             title,

@@ -55,7 +55,13 @@ type ElementFactory = (type: unknown, props?: Record<string, unknown> | null, ..
 type Component = (props?: Record<string, unknown>) => unknown;
 
 type ResponsiveBreakpoint = { isMobile: boolean; usesDesktopWorkbench?: boolean };
-type ActionInput = { workspaceId?: string; taskId?: string; repositoryId?: string; body?: unknown };
+type ActionInput = {
+  workspaceId?: string;
+  taskId?: string;
+  sessionId?: string;
+  repositoryId?: string;
+  body?: unknown;
+};
 type TaskContext = {
   workspaceId: string;
   taskId: string;
@@ -147,6 +153,7 @@ type PluginRegistry = {
     createChangeRequest?(context: {
       workspaceId: string;
       taskId: string;
+      sessionId: string;
       repositoryId: string;
       title: string;
       body: string;
@@ -1368,6 +1375,7 @@ function registerNativeIntegrations(registry: PluginRegistry, host: PluginHost) 
     async createChangeRequest({
       workspaceId,
       taskId,
+      sessionId,
       repositoryId,
       title,
       body,
@@ -1379,6 +1387,7 @@ function registerNativeIntegrations(registry: PluginRegistry, host: PluginHost) 
         {
           workspaceId,
           taskId,
+          sessionId,
           repositoryId,
           body: {
             title,

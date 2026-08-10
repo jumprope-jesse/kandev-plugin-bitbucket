@@ -618,6 +618,36 @@ func TestWorkflows_CreatePullRequestDerivesRepositoryAndSourceFromVerifiedTask(t
 	require.Error(t, err, "browser input cannot select a source checkout")
 }
 
+func TestWorkflows_CreatePullRequestUsesVerifiedSessionHeadBranch(t *testing.T) {
+	host := newTaskHost()
+	host.tasks.task = &pluginsdk.Task{
+		ID: "task-1", WorkspaceID: "workspace-1", Title: "Host task title",
+		Repositories: []pluginsdk.TaskRepository{{RepositoryID: "repository-1", BaseBranch: "main"}},
+	}
+	defaultBranch := "main"
+	host.repositories.repositories = []pluginsdk.Repository{{
+		ID: "repository-1", WorkspaceID: "workspace-1", Name: "repo", SourceType: "provider", ProviderID: "bitbucket",
+		ProviderHost: "bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-uuid",
+		RemoteURL: "https://bitbucket.org/workspace/repo.git", DefaultBranch: &defaultBranch,
+	}}
+	provider := &workflowProvider{pullRequest: testPullRequest()}
+	workflows, err := NewWorkflows(host, staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	_, err = workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.create",
+		Context: pluginsdk.VerifiedActionContext{
+			WorkspaceID: "workspace-1", TaskID: "task-1", SessionID: "session-1",
+			RepositoryID: "repository-1", HeadBranch: "refs/heads/feature/native-create",
+		},
+		Body: []byte(`{}`),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "feature/native-create", provider.createdPullRequest.Source)
+	require.Equal(t, "main", provider.createdPullRequest.Destination)
+}
+
 func TestWorkflows_CreatePullRequestSelectsVerifiedRepositoryIDForMultiRepoTask(t *testing.T) {
 	host := newTaskHost()
 	host.tasks.task = &pluginsdk.Task{

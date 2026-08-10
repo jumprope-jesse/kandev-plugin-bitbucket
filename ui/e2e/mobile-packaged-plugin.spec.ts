@@ -27,10 +27,24 @@ async function expectContainedInViewport(page: Page, selector: string) {
     .toBe(true);
 }
 
+async function waitForFiniteAnimations(page: Page) {
+  await page.evaluate(async () => {
+    const animations = document.getAnimations().filter((animation) => {
+      const iterations = animation.effect?.getComputedTiming().iterations;
+      return typeof iterations === "number" && Number.isFinite(iterations);
+    });
+    await Promise.all(animations.map((animation) => animation.finished.catch(() => undefined)));
+  });
+}
+
 async function openFirstLinkedTask(page: Page) {
-  const taskIndicator = page.locator(
-    '[data-testid^="bitbucket-pr-"][data-testid$="-task-single"], [data-testid^="bitbucket-pr-"][data-testid$="-task-multi"]',
-  ).first();
+  const taskIndicator = page
+    .getByTestId("bitbucket-pr-row")
+    .filter({ hasText: "Success pipeline · approved" })
+    .locator(
+      '[data-testid^="bitbucket-pr-"][data-testid$="-task-single"], [data-testid^="bitbucket-pr-"][data-testid$="-task-multi"]',
+    )
+    .first();
   await expect(taskIndicator).toBeVisible();
   const testId = await taskIndicator.getAttribute("data-testid");
   await taskIndicator.tap();
@@ -87,7 +101,8 @@ test("contains native scope and saved-query controls in the mobile sheet", async
   await expect(saveDialog).toBeVisible();
   await saveDialog.getByLabel("Name").fill("Merged queue");
   const saveButton = saveDialog.getByRole("button", { name: "Save" });
-  expect((await saveButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await waitForFiniteAnimations(page);
+  expect((await saveButton.boundingBox())?.height).toBeCloseTo(44, 0);
   await saveButton.tap();
   await expect(saveDialog).toBeHidden();
   await expect(filterTrigger).toBeVisible();
@@ -106,7 +121,9 @@ test("opens native task creation directly from a preset", async ({ page }) => {
   expect((await reviewPreset.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   await reviewPreset.tap();
   await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByTestId("task-title-input")).toHaveValue(/^Review:/);
+  await expect(
+    page.getByPlaceholder("Write a prompt for the agent... (@ to insert a saved prompt)"),
+  ).toHaveValue(/^Review Bitbucket pull request/);
 });
 
 test("keeps mobile connection settings and watches reachable through one scroll owner", async ({ page }) => {
@@ -129,14 +146,14 @@ test("uses shared mobile CI drawer and native Review detail", async ({ page }) =
 
   const topbarStatus = page.getByTestId("integration-change-request-status-trigger");
   const composerStatus = page.getByTestId("integration-change-request-status-chip");
-  await expect(topbarStatus).toBeVisible({ timeout: 15_000 });
+  await expect(topbarStatus).toHaveCount(0);
   await expect(composerStatus).toBeVisible({ timeout: 15_000 });
-  expect((await composerStatus.boundingBox())?.height).toBeGreaterThanOrEqual(44);
 
   await composerStatus.tap();
   const drawer = page.getByTestId("integration-change-request-status-drawer");
   await expect(drawer).toBeVisible();
-  await expect(drawer.getByText("Checks", { exact: true })).toBeVisible();
+  await expect(drawer.getByText("Pass rate", { exact: true })).toBeVisible();
+  await expect(drawer.getByText("2/2 (100%)", { exact: true })).toBeVisible();
   const unlink = drawer.getByRole("button", { name: /Unlink pull request/ });
   await expect(unlink).toBeVisible();
   expect((await unlink.boundingBox())?.height).toBeGreaterThanOrEqual(44);
@@ -146,9 +163,9 @@ test("uses shared mobile CI drawer and native Review detail", async ({ page }) =
   const detail = page.getByTestId("change-request-detail");
   await expect(detail).toBeVisible();
   await expect(detail).toHaveAttribute("data-presentation", "mobile");
-  await expect(detail.getByText("Reviews", { exact: true })).toBeVisible();
-  await expect(detail.getByText("Checks", { exact: true })).toBeVisible();
-  await expect(detail.getByText("Comments", { exact: true })).toBeVisible();
+  await expect(detail.getByRole("button", { name: /Reviews — 1 approved/ })).toBeVisible();
+  await expect(detail.getByRole("button", { name: /CI Checks — 2 passed/ })).toBeVisible();
+  await expect(detail.getByRole("button", { name: /Comments \(2\)/ })).toBeVisible();
   await expect(detail.getByRole("tablist")).toHaveCount(0);
   await expectNoDocumentHorizontalOverflow(page);
 });
