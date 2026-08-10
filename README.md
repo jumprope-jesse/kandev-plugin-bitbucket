@@ -66,12 +66,14 @@ package` cross-compiles every executable declared in `manifest.yaml`. Both
 produce `kandev-plugin-bitbucket-<version>.tar.gz` and generate its internal
 `checksums.txt`. Do not author that file by hand.
 
-`make e2e` is deliberately fail-fast: it requires
-`KANDEV_PLUGIN_E2E_URL` to name a fresh, disposable compatible Kandev host that
-accepts test package uploads. The runner installs and activates the freshly
-built host package, then checks the native desktop and mobile plugin surfaces.
-It does not skip when that setup is absent, because a skipped test would not
-prove the packaged artifact can load.
+`make e2e` is deliberately fail-fast: it requires `KANDEV_PLUGIN_E2E_URL` to
+name a fresh, disposable compatible Kandev host that accepts test package
+uploads. The runner installs and activates the freshly built host package,
+then checks the native desktop and mobile plugin surfaces. Pull-request CI runs
+this external-host contract when that repository secret is configured and
+emits an explicit notice otherwise; package, checksum, type, unit, and build
+gates always run. Tag releases remain fail-fast and cannot publish without the
+packaged-host contract.
 
 ### Configured live acceptance
 
@@ -144,10 +146,11 @@ and task Git limitations in [Integrations](https://kandev.dev/docs/integrations)
 ## Package and release policy
 
 Pull-request CI validates formatting, Go tests/vet, UI typecheck/build/tests,
-archive contents, and generated checksums. Same-repository pull requests also
-run the disposable-host packaged-plugin contract; forks cannot receive that
-host secret and retain the non-secret checks instead. The tag release workflow
-always runs the packaged-plugin contract before it uploads
+archive contents, and generated checksums. Pull requests also run the
+disposable-host packaged-plugin contract when `KANDEV_PLUGIN_E2E_URL` is
+configured; forks and repositories without that secret retain the non-secret
+gates plus an explicit notice. The tag release workflow always runs the
+packaged-plugin contract before it uploads
 `<id>-<version>.tar.gz` on a matching `v<version>` tag.
 
 The initial release intentionally follows Kandev's current unsigned marketplace
