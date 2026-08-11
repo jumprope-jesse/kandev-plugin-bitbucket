@@ -52,7 +52,7 @@ func TestCloudListsBranchesAndPullRequestsWithV2QueryPagination(t *testing.T) {
 	require.Len(t, gotPullRequests, 1)
 	require.Equal(t, "acme/widgets#42", gotPullRequests[0].Key())
 	require.Equal(t, "feature/race", gotPullRequests[0].Source.Name)
-	require.Equal(t, domain.Repository{Namespace: "forker", Slug: "forked-widgets", CloneURL: mustURL(t, "https://bitbucket.org/forker/forked-widgets.git")}, gotPullRequests[0].SourceRepository)
+	require.Equal(t, domain.Repository{ID: "{repo-forked-widgets}", ProviderScope: "https://bitbucket.org", Namespace: "forker", Slug: "forked-widgets", CloneURL: mustURL(t, "https://bitbucket.org/forker/forked-widgets.git")}, gotPullRequests[0].SourceRepository)
 	require.Equal(t, "main", gotPullRequests[0].Repository.DefaultBranch)
 	require.Equal(t, "https://bitbucket.org/acme/widgets.git", gotPullRequests[0].Repository.CloneURL.String())
 }
@@ -218,7 +218,7 @@ func TestCloudGetReviewMapsGoldenReviewData(t *testing.T) {
 		{Path: "README.md", Status: "added", Additions: 1, Patch: "diff --git a/README.md b/README.md\nnew file mode 100644\n--- /dev/null\n+++ b/README.md\n@@ -0,0 +1 @@\n+safe usage\n"},
 	}, review.Files)
 	require.Equal(t, "main", review.PullRequest.Repository.DefaultBranch)
-	require.Equal(t, domain.Repository{Namespace: "forker", Slug: "forked-widgets", CloneURL: mustURL(t, "https://bitbucket.org/forker/forked-widgets.git")}, review.PullRequest.SourceRepository)
+	require.Equal(t, domain.Repository{ID: "{repo-forked-widgets}", ProviderScope: "https://bitbucket.org", Namespace: "forker", Slug: "forked-widgets", CloneURL: mustURL(t, "https://bitbucket.org/forker/forked-widgets.git")}, review.PullRequest.SourceRepository)
 }
 
 func TestMapParticipantsPreservesChangesRequestedVerdict(t *testing.T) {

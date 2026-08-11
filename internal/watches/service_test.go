@@ -143,6 +143,35 @@ func TestRecover_FinalizesCreatingReservationAfterRestart(t *testing.T) {
 	require.Equal(t, ReservationCreated, watch.Reservations["repo-1#42"].State)
 }
 
+func TestDelete_ReconcilesTaskCreatedBeforeCrashWithoutExplicitRecover(t *testing.T) {
+	repository := &memoryRepository{snapshots: map[string]Snapshot{
+		"workspace-1": {Watches: map[string]Watch{
+			"watch-1": {
+				ID: "watch-1", WorkspaceID: "workspace-1", Status: StatusRunning,
+				Reservations: map[string]Reservation{
+					"repo-1#42": {
+						Token: "created-before-crash", State: ReservationCreating,
+						Link: TaskLink{PullRequestKey: "repo-1#42", ProviderID: "bitbucket"},
+					},
+				},
+			},
+		}},
+	}}
+	tasks := &recordingTasks{
+		findTaskID:  "task-created-before-crash",
+		deletedTree: []string{"task-created-before-crash"},
+	}
+	service, err := NewService(Options{Repository: repository, Provider: staticProvider{}, Tasks: tasks})
+	require.NoError(t, err)
+
+	result, err := service.Delete(context.Background(), "workspace-1", "watch-1")
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"task-created-before-crash"}, result.DeletedTaskIDs)
+	require.Equal(t, []string{"task-created-before-crash"}, tasks.deleted)
+	require.NotContains(t, repository.snapshots["workspace-1"].Watches, "watch-1")
+}
+
 func TestRun_RetainsCreatingReservationWhenTaskCreationFails(t *testing.T) {
 	repository := &memoryRepository{snapshots: map[string]Snapshot{
 		"workspace-1": {Watches: map[string]Watch{

@@ -2,8 +2,10 @@ package plugin
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"kandev-plugin-bitbucket/internal/domain"
@@ -14,7 +16,10 @@ import (
 
 func requireCapability(provider domain.Provider, capability domain.Capability) error {
 	if !provider.Capabilities().Supports(capability) {
-		return fmt.Errorf("Bitbucket connection does not support %s", capability)
+		return pluginsdk.CategorizeActionError(
+			pluginsdk.ActionErrorInvalidArgument,
+			fmt.Errorf("Bitbucket connection does not support %s", capability),
+		)
 	}
 	return nil
 }
@@ -26,13 +31,13 @@ func decodeAction(body []byte, target any) error {
 	decoder := json.NewDecoder(strings.NewReader(string(body)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("invalid action body: %w", err)
+		return pluginsdk.CategorizeActionError(pluginsdk.ActionErrorInvalidArgument, fmt.Errorf("invalid action body: %w", err))
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		if err == nil {
-			return fmt.Errorf("invalid action body: multiple JSON values")
+			return pluginsdk.CategorizeActionError(pluginsdk.ActionErrorInvalidArgument, fmt.Errorf("invalid action body: multiple JSON values"))
 		}
-		return fmt.Errorf("invalid action body: %w", err)
+		return pluginsdk.CategorizeActionError(pluginsdk.ActionErrorInvalidArgument, fmt.Errorf("invalid action body: %w", err))
 	}
 	return nil
 }
@@ -98,12 +103,14 @@ type searchPullRequestsInput struct {
 	Query      string                   `json:"query"`
 	State      string                   `json:"state"`
 	Limit      int                      `json:"limit"`
+	Cursor     string                   `json:"cursor"`
 }
 type queuePullRequestsInput struct {
-	Query string `json:"query"`
-	State string `json:"state"`
-	Limit int    `json:"limit"`
-	View  string `json:"view"`
+	Query  string `json:"query"`
+	State  string `json:"state"`
+	Limit  int    `json:"limit"`
+	View   string `json:"view"`
+	Cursor string `json:"cursor"`
 }
 type pullRequestAssociationsInput struct {
 	ReviewKeys *[]string `json:"review_keys"`
@@ -177,7 +184,7 @@ func connectionResponse(settings ConnectionSettings, healthy bool, err error, oa
 	state := "connected"
 	if !healthy {
 		state = "auth_required"
-		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "auth") {
+		if err != nil && !isAuthenticationFailure(err) {
 			state = "unavailable"
 		}
 	}
@@ -192,4 +199,12 @@ func connectionResponse(settings ConnectionSettings, healthy bool, err error, oa
 		"oauth_registration_configured": registrationConfigured,
 		"error":                         safeError(err),
 	}
+}
+
+func isAuthenticationFailure(err error) bool {
+	var providerError *domain.ProviderHTTPError
+	if errors.As(err, &providerError) {
+		return providerError.Status == http.StatusUnauthorized || providerError.Status == http.StatusForbidden
+	}
+	return errors.Is(err, ErrCredentialUnavailable)
 }

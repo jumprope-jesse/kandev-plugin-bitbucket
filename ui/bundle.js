@@ -1,5 +1,17 @@
 // ui/src/view-model-base.ts
 function matchingHostRepositoryId(repositories, pullRequest) {
+  const providerRepositoryID = string(pullRequest.repositoryId)?.trim();
+  const providerScope = string(pullRequest.providerScope)?.trim();
+  if (providerRepositoryID && providerScope) {
+    const scopedMatches = repositories.filter((repository) => {
+      if ((string(repository.provider) ?? "").toLowerCase() !== "bitbucket")
+        return false;
+      const repositoryScope = string(repository.provider_scope)?.trim();
+      const repositoryID = string(repository.provider_repo_id)?.trim() ?? string(repository.provider_repository_id)?.trim();
+      return repositoryScope === providerScope && repositoryID === providerRepositoryID;
+    });
+    return scopedMatches.length === 1 ? string(scopedMatches[0].id) : void 0;
+  }
   const target = canonicalRepositoryIdentity(pullRequest.repositoryId);
   if (!target) return void 0;
   const matches = repositories.filter((repository) => {
@@ -196,6 +208,7 @@ function normalizeRepository(value) {
   const repository = {
     providerId: string(source.provider_id) ?? string(source.providerId) ?? string(source.provider) ?? "bitbucket",
     providerHost: string(source.provider_host) ?? string(source.providerHost) ?? string(source.host) ?? "",
+    providerScope: string(source.provider_scope) ?? string(source.providerScope),
     ownerOrProject: string(source.owner_or_project) ?? string(source.ownerOrProject) ?? string(source.provider_owner) ?? string(source.project) ?? string(record(source.owner).username) ?? "",
     repositoryId,
     repositoryName,
@@ -275,6 +288,7 @@ function pluginRepositoryInput(value) {
   const body = {
     provider_id: repository.providerId,
     provider_host: repository.providerHost,
+    provider_scope: repository.providerScope,
     owner_or_project: repository.ownerOrProject,
     provider_repository_id: repository.repositoryId,
     name: repository.repositoryName,
@@ -285,7 +299,7 @@ function pluginRepositoryInput(value) {
   if (repository.headBranch) body.head_branch = repository.headBranch;
   return body;
 }
-function pullRequestListRequest(repository, query, state) {
+function pullRequestListRequest(repository, query, state, cursor = "", limit = 25) {
   const parsed = parsePullRequestListQuery(query, state);
   if (repository) {
     return {
@@ -293,13 +307,21 @@ function pullRequestListRequest(repository, query, state) {
       body: {
         repository: pluginRepositoryInput(repository),
         query: parsed.query,
-        state: parsed.state
+        state: parsed.state,
+        cursor,
+        limit
       }
     };
   }
   return {
     actionKey: "pullrequests.queue",
-    body: { view: "queue", query: parsed.query, state: parsed.state }
+    body: {
+      view: "queue",
+      query: parsed.query,
+      state: parsed.state,
+      cursor,
+      limit
+    }
   };
 }
 var PULL_REQUEST_STATES = /* @__PURE__ */ new Set(["open", "all", "merged", "declined"]);
@@ -369,12 +391,13 @@ function normalizePullRequests(value) {
     const repository = record(source.repository);
     const repositorySlug = string(repository.slug) ?? string(repository.name);
     const repositoryNamespace = string(record(repository.project).key) ?? string(record(repository.owner).username) ?? string(record(repository.workspace).slug);
-    const repositoryId = string(source.repository_id) ?? string(source.repositoryId) ?? string(repository.full_name) ?? (repositoryNamespace && repositorySlug ? `${repositoryNamespace}/${repositorySlug}` : void 0) ?? string(repository.id) ?? "";
+    const repositoryId = string(source.repository_id) ?? string(repository.provider_repository_id) ?? string(source.repositoryId) ?? string(repository.full_name) ?? (repositoryNamespace && repositorySlug ? `${repositoryNamespace}/${repositorySlug}` : void 0) ?? string(repository.id) ?? "";
     const numberValue = number(source.number) ?? number(source.id) ?? 0;
     const title = string(source.title) ?? `Pull request ${numberValue || id}`;
     if (!id || !repositoryId || !numberValue) return null;
     const status = record(source.status);
     const state = string(source.state) ?? string(source.status) ?? "UNKNOWN";
+    const providerScope = string(source.provider_scope) ?? string(repository.provider_scope);
     const reviewKey = string(source.review_key) ?? string(source.reviewKey) ?? `${repositoryId}:${id}`;
     const author = record(source.author);
     const sourceRef = record(source.source);
@@ -388,6 +411,7 @@ function normalizePullRequests(value) {
       title,
       url: string(source.url) ?? pullRequestURL(source.links) ?? "",
       repositoryId,
+      ...providerScope ? { providerScope } : {},
       repositoryName: string(source.repository_name) ?? string(source.repositoryName) ?? string(repository.name) ?? repositoryId,
       state,
       author: string(source.author_display_name) ?? string(source.authorDisplayName) ?? string(author.display_name) ?? string(author.displayName) ?? string(author.name) ?? string(source.author),
@@ -1018,6 +1042,82 @@ function usePluginQuery(host, key, input, enabled = true) {
       controller.abort();
     };
   }, [enabled, host.api, key, reload, serializedInput]);
+  const refresh = React.useCallback(() => setReload((value) => value + 1), []);
+  return { ...state, refresh };
+}
+async function collectPluginActionPages(api, key, input, itemKey, signal) {
+  const items = [];
+  const seenCursors = /* @__PURE__ */ new Set();
+  let cursor = "";
+  let lastPage = {};
+  for (let page = 0; page < 1e3; page += 1) {
+    const body = { ...record2(input?.body), cursor };
+    const response = await api.invokeAction(
+      key,
+      requestBody({ ...input, body }),
+      { signal }
+    );
+    if (signal.aborted) throw new DOMException("Request aborted", "AbortError");
+    lastPage = record2(response);
+    const pageItems = lastPage[itemKey];
+    if (Array.isArray(pageItems)) items.push(...pageItems);
+    const nextCursor = text(lastPage.next_cursor);
+    if (!nextCursor) return { ...lastPage, [itemKey]: items, next_cursor: "" };
+    if (seenCursors.has(nextCursor))
+      throw new Error(`${key} pagination did not advance`);
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+  throw new Error(`${key} pagination limit exceeded`);
+}
+function usePagedPluginQuery(host, key, input, itemKey, enabled = true) {
+  const { React } = host;
+  const serializedInput = JSON.stringify(input ?? {});
+  const [reload, setReload] = React.useState(0);
+  const [state, setState] = React.useState({ data: null, loading: enabled, error: null, lastFetchedAt: null });
+  React.useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    if (!enabled) {
+      setState({
+        data: null,
+        loading: false,
+        error: null,
+        lastFetchedAt: null
+      });
+      return () => {
+        active = false;
+        controller.abort();
+      };
+    }
+    setState((previous) => ({ ...previous, loading: true, error: null }));
+    void collectPluginActionPages(
+      host.api,
+      key,
+      JSON.parse(serializedInput),
+      itemKey,
+      controller.signal
+    ).then((data) => {
+      if (active)
+        setState({
+          data,
+          loading: false,
+          error: null,
+          lastFetchedAt: /* @__PURE__ */ new Date()
+        });
+    }).catch((error) => {
+      if (active)
+        setState((previous) => ({
+          ...previous,
+          loading: false,
+          error: errorMessage(error)
+        }));
+    });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [enabled, host.api, itemKey, key, reload, serializedInput]);
   const refresh = React.useCallback(() => setReload((value) => value + 1), []);
   return { ...state, refresh };
 }
@@ -1752,7 +1852,7 @@ function DashboardPullRequestList({
         const metadata = h(
           "span",
           { className: "bb-change-request-metadata" },
-          h("span", null, `${pullRequest.repositoryId}#${pullRequest.number}`),
+          h("span", null, pullRequest.key),
           author ? h("span", null, ` \xB7 by ${author}`) : null,
           opened ? h("span", null, ` \xB7 opened ${opened}`) : null,
           pullRequest.sourceBranch && pullRequest.destinationBranch ? h(
@@ -2098,34 +2198,22 @@ function Watches({
 // ui/src/dashboard-scope.ts
 function repositoryFilter(host, repositories, repository, setRepository) {
   const { jsx: h, ui } = host;
-  return h(
-    ui.Select,
-    {
-      value: repository || "__all__",
-      onValueChange: (value) => setRepository(value === "__all__" ? "" : value)
-    },
-    h(
-      ui.SelectTrigger,
-      {
-        id: "bitbucket-repository-filter",
-        className: "bb-repository-filter",
-        "aria-label": "Repository"
-      },
-      h(ui.SelectValue, { placeholder: "All repositories" })
-    ),
-    h(
-      ui.SelectContent,
-      null,
-      h(ui.SelectItem, { value: "__all__" }, "All repositories"),
-      ...repositories.map(
-        (candidate) => h(
-          ui.SelectItem,
-          { key: candidate.repositoryId, value: candidate.repositoryId },
-          `${candidate.ownerOrProject}/${candidate.repositoryName}`
-        )
-      )
-    )
-  );
+  return h(ui.IntegrationRepositoryFilter, {
+    value: repository,
+    onValueChange: setRepository,
+    options: repositories.map((candidate) => {
+      const label = `${candidate.ownerOrProject}/${candidate.repositoryName}`;
+      return { value: candidate.repositoryId, label, keywords: [label] };
+    }),
+    ariaLabel: "Filter Bitbucket pull requests by repository",
+    allLabel: "All repositories",
+    searchPlaceholder: "Filter repositories...",
+    emptyMessage: "No repositories found.",
+    triggerClassName: "min-h-11 w-full border border-input bg-background px-2 py-1.5 text-xs/relaxed hover:bg-secondary/50 md:h-8 md:min-h-0 md:w-[220px]",
+    className: "md:min-w-[360px]",
+    testId: "bitbucket-repository-filter",
+    dropdownTestId: "bitbucket-repository-filter-dropdown"
+  });
 }
 function StateScopeBar({
   host,
@@ -2304,18 +2392,30 @@ function BitbucketPage({ host }) {
     Boolean(activeWorkspaceId)
   );
   const connected = connectionState(record2(connection.data)) === "connected";
-  const repositoriesQuery = usePluginQuery(
+  const repositoriesQuery = usePagedPluginQuery(
     host,
     action.repositoriesList,
-    activeWorkspaceId ? { workspaceId: activeWorkspaceId } : void 0,
+    activeWorkspaceId ? { workspaceId: activeWorkspaceId, body: { limit: 100 } } : void 0,
+    "repositories",
     Boolean(activeWorkspaceId && connected)
   );
   const repositories = normalizeRepositories(repositoriesQuery.data);
   const selectedRepository = repositories.find((candidate) => candidate.repositoryId === repository) ?? null;
+  const queueScopeKey = JSON.stringify([
+    activeWorkspaceId ?? "",
+    selectedRepository?.repositoryId ?? "",
+    search,
+    state
+  ]);
+  const [queuePagination, setQueuePagination] = React.useState(() => ({ scopeKey: queueScopeKey, page: 1, cursors: [""] }));
+  const activeQueuePagination = queuePagination.scopeKey === queueScopeKey ? queuePagination : { scopeKey: queueScopeKey, page: 1, cursors: [""] };
+  const queueCursor = activeQueuePagination.cursors[activeQueuePagination.page - 1] ?? "";
   const queueRequest = pullRequestListRequest(
     selectedRepository,
     search,
-    state
+    state,
+    queueCursor,
+    25
   );
   const queue = usePluginQuery(
     host,
@@ -2324,6 +2424,7 @@ function BitbucketPage({ host }) {
     Boolean(activeWorkspaceId && connected)
   );
   const pullRequests = normalizePullRequests(queue.data);
+  const nextQueueCursor = text(record2(queue.data).next_cursor);
   const associations = usePluginQuery(
     host,
     action.pullRequestsAssociations,
@@ -2509,6 +2610,34 @@ function BitbucketPage({ host }) {
         })
       })
     ),
+    h(ui.IntegrationCursorPagination, {
+      page: activeQueuePagination.page,
+      itemCount: pullRequests.length,
+      hasPrevious: activeQueuePagination.page > 1,
+      hasNext: Boolean(nextQueueCursor),
+      loading: queue.loading,
+      onPrevious: () => {
+        if (activeQueuePagination.page <= 1) return;
+        setQueuePagination({
+          ...activeQueuePagination,
+          page: activeQueuePagination.page - 1
+        });
+      },
+      onNext: () => {
+        if (!nextQueueCursor) return;
+        const cursors = activeQueuePagination.cursors.slice(
+          0,
+          activeQueuePagination.page
+        );
+        cursors.push(nextQueueCursor);
+        setQueuePagination({
+          scopeKey: queueScopeKey,
+          page: activeQueuePagination.page + 1,
+          cursors
+        });
+      },
+      testId: "bitbucket-results-pagination"
+    }),
     taskDialog,
     h(ui.IntegrationSaveQueryDialog, {
       open: saveDialogOpen,

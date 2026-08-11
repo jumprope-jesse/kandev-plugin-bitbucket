@@ -48,6 +48,11 @@ func (w *Workflows) taskPullRequests(ctx context.Context, workspaceID, taskID st
 		if !ok {
 			continue
 		}
+		repository, err = hydrateRepositoryIdentity(ctx, provider, repository)
+		if err != nil {
+			unavailable = append(unavailable, map[string]any{"key": link.Key, "reason": "repository_unavailable"})
+			continue
+		}
 		seen[link.Key] = struct{}{}
 		pullRequest, getErr := provider.GetPullRequest(ctx, repository, number)
 		if getErr == nil && pullRequest.Key() == link.Key {
@@ -61,6 +66,10 @@ func (w *Workflows) taskPullRequests(ctx context.Context, workspaceID, taskID st
 		}
 		repository, number, ok := parsePullRequestKey(key)
 		if !ok {
+			continue
+		}
+		repository, err = hydrateRepositoryIdentity(ctx, provider, repository)
+		if err != nil {
 			continue
 		}
 		pullRequest, getErr := provider.GetPullRequest(ctx, repository, number)
@@ -272,8 +281,9 @@ func (w *Workflows) autoLinkTaskPullRequests(ctx context.Context, workspaceID, t
 	for _, candidate := range candidates {
 		remote := watches.RemoteRepository{
 			ProviderID: "bitbucket", ProviderHost: candidate.repository.ProviderHost,
-			OwnerOrProject: candidate.repository.OwnerOrProject, ProviderRepositoryID: candidate.repository.ProviderRepositoryID,
-			Name: providerRepositoryName(candidate.repository), CloneURL: candidate.repository.RemoteURL,
+			ProviderScope: candidate.repository.ProviderScope, OwnerOrProject: candidate.repository.OwnerOrProject,
+			ProviderRepositoryID: candidate.repository.ProviderRepositoryID,
+			Name:                 providerRepositoryName(candidate.repository), CloneURL: candidate.repository.RemoteURL,
 			DefaultBranch: stringValue(candidate.repository.DefaultBranch), BaseBranch: candidate.taskRepository.BaseBranch,
 			HeadBranch: candidate.taskRepository.CheckoutBranch,
 		}
@@ -304,7 +314,7 @@ func (w *Workflows) autoLinkTaskPullRequests(ctx context.Context, workspaceID, t
 
 func (w *Workflows) linkForPullRequest(ctx context.Context, workspaceID string, pullRequest domain.PullRequest) (PullRequestLink, error) {
 	link := PullRequestLink{
-		Key: pullRequest.Key(), RepositoryID: pullRequest.Repository.Namespace + "/" + pullRequest.Repository.Slug,
+		Key: pullRequest.Key(), RepositoryID: pullRequest.Repository.ID,
 		URL: pullRequest.URL, Number: int64(pullRequest.Number),
 	}
 	identity, bound, err := w.connectionIdentity(ctx, workspaceID)

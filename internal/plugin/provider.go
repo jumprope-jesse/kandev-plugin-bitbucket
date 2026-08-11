@@ -198,10 +198,26 @@ func filterRepositories(ctx context.Context, provider domain.Provider, filter wa
 	if len(filter.RepositoryIDs) == 0 {
 		return repositories, nil
 	}
+	immutableIDs := make(map[string]struct{}, len(filter.RepositoryIDs))
+	legacyIDs := make([]string, 0, len(filter.RepositoryIDs))
+	for _, requestedID := range filter.RepositoryIDs {
+		matched := false
+		for _, repository := range repositories {
+			if repository.ID != "" && repository.ID == requestedID {
+				immutableIDs[requestedID] = struct{}{}
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			legacyIDs = append(legacyIDs, requestedID)
+		}
+	}
 	filtered := make([]domain.Repository, 0, len(repositories))
 	for _, repository := range repositories {
-		id := repository.Namespace + "/" + repository.Slug
-		if containsFold(filter.RepositoryIDs, id) || containsFold(filter.RepositoryIDs, repository.Slug) {
+		_, immutableMatch := immutableIDs[repository.ID]
+		legacyID := repository.Namespace + "/" + repository.Slug
+		if immutableMatch || containsFold(legacyIDs, legacyID) || containsFold(legacyIDs, repository.Slug) {
 			filtered = append(filtered, repository)
 		}
 	}
@@ -239,7 +255,7 @@ func domainRepository(repository watches.RemoteRepository) (domain.Repository, e
 	if err != nil || cloneURL.Scheme != "https" || cloneURL.User != nil {
 		return domain.Repository{}, fmt.Errorf("repository clone URL must be credential-free HTTPS")
 	}
-	return domain.Repository{Namespace: repository.OwnerOrProject, Slug: repository.Name, CloneURL: cloneURL}, nil
+	return domain.Repository{ID: repository.ProviderRepositoryID, ProviderScope: repository.ProviderScope, Namespace: repository.OwnerOrProject, Slug: repository.Name, CloneURL: cloneURL}, nil
 }
 
 func remoteRepositoryFromDomain(repository domain.Repository, baseBranch, headBranch string) watches.RemoteRepository {
@@ -250,8 +266,8 @@ func remoteRepositoryFromDomain(repository domain.Repository, baseBranch, headBr
 		host = repositoryProviderHost(repository.CloneURL)
 	}
 	return watches.RemoteRepository{
-		ProviderID: "bitbucket", ProviderHost: host, OwnerOrProject: repository.Namespace,
-		ProviderRepositoryID: repository.Namespace + "/" + repository.Slug, Name: repository.Slug,
+		ProviderID: "bitbucket", ProviderHost: host, ProviderScope: repository.ProviderScope, OwnerOrProject: repository.Namespace,
+		ProviderRepositoryID: repository.ID, Name: repository.Slug,
 		CloneURL: cloneURL, BaseBranch: baseBranch, HeadBranch: headBranch,
 	}
 }

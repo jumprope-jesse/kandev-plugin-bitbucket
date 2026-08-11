@@ -188,6 +188,103 @@ export function usePluginQuery<T>(
   return { ...state, refresh };
 }
 
+export async function collectPluginActionPages(
+  api: PluginHost["api"],
+  key: string,
+  input: ActionInput | undefined,
+  itemKey: string,
+  signal: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const items: unknown[] = [];
+  const seenCursors = new Set<string>();
+  let cursor = "";
+  let lastPage: Record<string, unknown> = {};
+  for (let page = 0; page < 1000; page += 1) {
+    const body = { ...record(input?.body), cursor };
+    const response = await api.invokeAction<unknown>(
+      key,
+      requestBody({ ...input, body }),
+      { signal },
+    );
+    if (signal.aborted) throw new DOMException("Request aborted", "AbortError");
+    lastPage = record(response);
+    const pageItems = lastPage[itemKey];
+    if (Array.isArray(pageItems)) items.push(...pageItems);
+    const nextCursor = text(lastPage.next_cursor);
+    if (!nextCursor) return { ...lastPage, [itemKey]: items, next_cursor: "" };
+    if (seenCursors.has(nextCursor))
+      throw new Error(`${key} pagination did not advance`);
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+  throw new Error(`${key} pagination limit exceeded`);
+}
+
+export function usePagedPluginQuery(
+  host: PluginHost,
+  key: string,
+  input: ActionInput | undefined,
+  itemKey: string,
+  enabled = true,
+): QueryState<Record<string, unknown>> {
+  const { React } = host;
+  const serializedInput = JSON.stringify(input ?? {});
+  const [reload, setReload] = React.useState(0);
+  const [state, setState] = React.useState<{
+    data: Record<string, unknown> | null;
+    loading: boolean;
+    error: string | null;
+    lastFetchedAt: Date | null;
+  }>({ data: null, loading: enabled, error: null, lastFetchedAt: null });
+  React.useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    if (!enabled) {
+      setState({
+        data: null,
+        loading: false,
+        error: null,
+        lastFetchedAt: null,
+      });
+      return () => {
+        active = false;
+        controller.abort();
+      };
+    }
+    setState((previous) => ({ ...previous, loading: true, error: null }));
+    void collectPluginActionPages(
+      host.api,
+      key,
+      JSON.parse(serializedInput) as ActionInput,
+      itemKey,
+      controller.signal,
+    )
+      .then((data) => {
+        if (active)
+          setState({
+            data,
+            loading: false,
+            error: null,
+            lastFetchedAt: new Date(),
+          });
+      })
+      .catch((error) => {
+        if (active)
+          setState((previous) => ({
+            ...previous,
+            loading: false,
+            error: errorMessage(error),
+          }));
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [enabled, host.api, itemKey, key, reload, serializedInput]);
+  const refresh = React.useCallback(() => setReload((value) => value + 1), []);
+  return { ...state, refresh };
+}
+
 export function useAbortableAction(host: PluginHost) {
   const { React } = host;
   const activeController = React.useRef<AbortController | null>(null);

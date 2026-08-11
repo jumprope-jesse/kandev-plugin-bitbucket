@@ -35,6 +35,7 @@ func NewConnection(options ConnectionOptions) (domain.Connection, error) {
 
 	return domain.Connection{
 		Product:   domain.ProductDataCenter,
+		Scope:     base.String(),
 		APIBase:   &apiBase,
 		CloneBase: &cloneBase,
 		Capabilities: domain.Capabilities{

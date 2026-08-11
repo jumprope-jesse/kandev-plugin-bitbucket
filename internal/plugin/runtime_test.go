@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"kandev-plugin-bitbucket/internal/domain"
+	"kandev-plugin-bitbucket/internal/watches"
 
 	"github.com/kandev/kandev/pkg/pluginsdk"
 	"github.com/stretchr/testify/require"
@@ -29,7 +30,7 @@ func TestRuntime_MapsExpectedActionFailuresToDomainResponses(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, response.Status)
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(response.Body, &body))
-	require.Equal(t, "invalid_request", body["code"])
+	require.Equal(t, string(pluginsdk.ActionErrorInvalidArgument), body["code"])
 	require.NotContains(t, string(response.Body), "cannot unmarshal")
 }
 
@@ -54,5 +55,27 @@ func TestRuntime_PreservesProviderRateLimitWithoutLeakingDetails(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusTooManyRequests, response.Status)
 	require.Equal(t, "30", response.Headers["Retry-After"])
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(response.Body, &body))
+	require.Equal(t, string(pluginsdk.ActionErrorRateLimited), body["code"])
 	require.NotContains(t, string(response.Body), "secret upstream body")
+}
+
+func TestActionFailureClassificationUsesTypedWatchErrors(t *testing.T) {
+	status, code, _, _ := classifyActionFailure(categorizeWatchActionError(watches.ErrWatchNotFound))
+	require.Equal(t, http.StatusNotFound, status)
+	require.Equal(t, "not_found", code)
+
+	status, code, _, _ = classifyActionFailure(errors.New("watch not found"))
+	require.Equal(t, http.StatusBadGateway, status, "message text must not define transport semantics")
+	require.Equal(t, string(pluginsdk.ActionErrorUpstream), code)
+}
+
+func TestConnectionHealthUsesTypedProviderAuthenticationStatus(t *testing.T) {
+	settings := ConnectionSettings{Product: domain.ProductCloud}
+	auth := connectionResponse(settings, false, &domain.ProviderHTTPError{Status: http.StatusUnauthorized})
+	unavailable := connectionResponse(settings, false, &domain.ProviderHTTPError{Status: http.StatusServiceUnavailable, Err: errors.New("authorization service")})
+
+	require.Equal(t, "auth_required", auth["state"])
+	require.Equal(t, "unavailable", unavailable["state"], "error wording must not masquerade as authentication failure")
 }

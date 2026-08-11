@@ -53,7 +53,7 @@ func TestDataCenterListsBranchesAndPullRequestsWithStartLimitPagination(t *testi
 	require.Len(t, gotPullRequests, 1)
 	require.Equal(t, "ENG/widgets#42", gotPullRequests[0].Key())
 	require.Equal(t, "feature/race", gotPullRequests[0].Source.Name)
-	require.Equal(t, domain.Repository{Namespace: "FORK", Slug: "fork-widgets", CloneURL: mustURL(t, server.URL+"/bitbucket/scm/FORK/fork-widgets.git")}, gotPullRequests[0].SourceRepository)
+	require.Equal(t, domain.Repository{ID: "84", ProviderScope: server.URL + "/bitbucket", Namespace: "FORK", Slug: "fork-widgets", CloneURL: mustURL(t, server.URL+"/bitbucket/scm/FORK/fork-widgets.git")}, gotPullRequests[0].SourceRepository)
 	require.Equal(t, "main", gotPullRequests[0].Repository.DefaultBranch)
 	require.Equal(t, server.URL+"/bitbucket/scm/ENG/widgets.git", gotPullRequests[0].Repository.CloneURL.String())
 	require.Equal(t, server.URL+"/bitbucket/projects/ENG/repos/widgets/pull-requests/42", gotPullRequests[0].URL)
@@ -229,7 +229,7 @@ func TestDataCenterGetReviewMapsGoldenReviewData(t *testing.T) {
 		Patch:     "--- /dev/null\n+++ b/new.go\n@@ -0,0 +1,1 @@\n+new()\n",
 	}}, review.Files)
 	require.Equal(t, "main", review.PullRequest.Repository.DefaultBranch)
-	require.Equal(t, domain.Repository{Namespace: "FORK", Slug: "fork-widgets", CloneURL: mustURL(t, server.URL+"/bitbucket/scm/FORK/fork-widgets.git")}, review.PullRequest.SourceRepository)
+	require.Equal(t, domain.Repository{ID: "84", ProviderScope: server.URL + "/bitbucket", Namespace: "FORK", Slug: "fork-widgets", CloneURL: mustURL(t, server.URL+"/bitbucket/scm/FORK/fork-widgets.git")}, review.PullRequest.SourceRepository)
 }
 
 func TestMapParticipantsPreservesNeedsWorkVerdict(t *testing.T) {

@@ -30,6 +30,7 @@ func (w *Workflows) createPullRequestFromTask(ctx context.Context, action plugin
 	}
 	remote := watches.RemoteRepository{
 		ProviderID: "bitbucket", ProviderHost: candidate.repository.ProviderHost,
+		ProviderScope:  candidate.repository.ProviderScope,
 		OwnerOrProject: candidate.repository.OwnerOrProject, ProviderRepositoryID: candidate.repository.ProviderRepositoryID,
 		Name: providerRepositoryName(candidate.repository), CloneURL: candidate.repository.RemoteURL,
 		DefaultBranch: stringValue(candidate.repository.DefaultBranch), BaseBranch: candidate.taskRepository.BaseBranch,
@@ -138,7 +139,7 @@ func taskBitbucketRepositories(ctx context.Context, host pluginsdk.Host, task pl
 			if repository.SourceType != "provider" || repository.ProviderID != "bitbucket" {
 				continue
 			}
-			if repository.ProviderHost == "" || repository.OwnerOrProject == "" || repository.ProviderRepositoryID == "" || providerRepositoryName(repository) == "" || repository.RemoteURL == "" {
+			if repository.ProviderHost == "" || repository.ProviderScope == "" || repository.OwnerOrProject == "" || repository.ProviderRepositoryID == "" || providerRepositoryName(repository) == "" || repository.RemoteURL == "" {
 				return nil, fmt.Errorf("task Bitbucket repository origin is incomplete")
 			}
 			result = append(result, taskRepositoryCandidate{taskRepository: taskRepository, repository: repository})

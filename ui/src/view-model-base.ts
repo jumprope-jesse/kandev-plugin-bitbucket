@@ -1,12 +1,17 @@
 export type JsonRecord = Record<string, unknown>;
 
 export type ConnectionState =
-  "unconfigured" | "checking" | "connected" | "auth_required" | "unavailable";
+  | "unconfigured"
+  | "checking"
+  | "connected"
+  | "auth_required"
+  | "unavailable";
 
 /** Host RepositoryProviderRegistration contract. Never return plugin snake_case here. */
 export type RepositoryInspection = {
   providerId: string;
   providerHost: string;
+  providerScope?: string;
   ownerOrProject: string;
   repositoryId: string;
   repositoryName: string;
@@ -27,6 +32,7 @@ export type PullRequest = {
   title: string;
   url: string;
   repositoryId: string;
+  providerScope?: string;
   repositoryName: string;
   state: string;
   author?: string;
@@ -48,8 +54,25 @@ export type PullRequest = {
 /** Resolves exactly one persisted Kandev repository by canonical provider identity. */
 export function matchingHostRepositoryId(
   repositories: JsonRecord[],
-  pullRequest: Pick<PullRequest, "repositoryId">,
+  pullRequest: Pick<PullRequest, "repositoryId" | "providerScope">,
 ): string | undefined {
+  const providerRepositoryID = string(pullRequest.repositoryId)?.trim();
+  const providerScope = string(pullRequest.providerScope)?.trim();
+  if (providerRepositoryID && providerScope) {
+    const scopedMatches = repositories.filter((repository) => {
+      if ((string(repository.provider) ?? "").toLowerCase() !== "bitbucket")
+        return false;
+      const repositoryScope = string(repository.provider_scope)?.trim();
+      const repositoryID =
+        string(repository.provider_repo_id)?.trim() ??
+        string(repository.provider_repository_id)?.trim();
+      return (
+        repositoryScope === providerScope &&
+        repositoryID === providerRepositoryID
+      );
+    });
+    return scopedMatches.length === 1 ? string(scopedMatches[0].id) : undefined;
+  }
   const target = canonicalRepositoryIdentity(pullRequest.repositoryId);
   if (!target) return undefined;
   const matches = repositories.filter((repository) => {

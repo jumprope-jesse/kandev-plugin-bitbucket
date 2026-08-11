@@ -7,7 +7,10 @@ export type ElementFactory = (
   ...children: unknown[]
 ) => unknown;
 export type Component = (props?: Record<string, unknown>) => unknown;
-export type ResponsiveBreakpoint = { isMobile: boolean; usesDesktopWorkbench?: boolean };
+export type ResponsiveBreakpoint = {
+  isMobile: boolean;
+  usesDesktopWorkbench?: boolean;
+};
 
 export type ActionInput = {
   workspaceId?: string;
@@ -24,6 +27,7 @@ export type PluginHostRepository = {
   provider: string;
   provider_repo_id?: string;
   provider_host?: string;
+  provider_scope?: string;
   provider_owner?: string;
   provider_name?: string;
   remote_url?: string;
@@ -39,7 +43,9 @@ export type TaskContext = {
 };
 
 export type HostReact = {
-  useState<T>(value: T | (() => T)): [T, (next: T | ((previous: T) => T)) => void];
+  useState<T>(
+    value: T | (() => T),
+  ): [T, (next: T | ((previous: T) => T)) => void];
   useEffect(effect: () => void | (() => void), dependencies?: unknown[]): void;
   useMemo<T>(factory: () => T, dependencies?: unknown[]): T;
   useCallback<T extends (...args: never[]) => unknown>(
@@ -62,7 +68,10 @@ export type PluginHost = {
     ): Promise<T>;
   };
   useResponsiveBreakpoint(): ResponsiveBreakpoint;
-  store: { getState(): Record<string, unknown>; subscribe(listener: () => void): () => void };
+  store: {
+    getState(): Record<string, unknown>;
+    subscribe(listener: () => void): () => void;
+  };
   navigate(href: string, options?: { replace?: boolean }): void;
   openModal(options: {
     title: string;
@@ -111,7 +120,11 @@ export type ReviewTaskAssociation = {
 };
 
 export type PluginRegistry = {
-  registerRoute(path: string, component: Component, options?: Record<string, unknown>): void;
+  registerRoute(
+    path: string,
+    component: Component,
+    options?: Record<string, unknown>,
+  ): void;
   registerNavItem(item: {
     id: string;
     label: string;
@@ -138,7 +151,8 @@ export type PluginRegistry = {
       limit?: number;
       signal: AbortSignal;
     }): Promise<
-      RepositoryInspection[] | { repositories: RepositoryInspection[]; nextCursor?: string }
+      | RepositoryInspection[]
+      | { repositories: RepositoryInspection[]; nextCursor?: string }
     >;
     matchesURL(url: string): boolean;
     listBranches(context: {
@@ -188,9 +202,17 @@ export type PluginRegistry = {
     getSnapshot(taskId: string): readonly ReviewSummary[];
     subscribe(taskId: string, listener: () => void): () => void;
     refresh(taskId: string, signal: AbortSignal): Promise<void>;
-    getAssociationSnapshot?(workspaceId: string): readonly ReviewTaskAssociation[];
-    subscribeAssociations?(workspaceId: string, listener: () => void): () => void;
-    refreshAssociations?(workspaceId: string, signal: AbortSignal): Promise<void>;
+    getAssociationSnapshot?(
+      workspaceId: string,
+    ): readonly ReviewTaskAssociation[];
+    subscribeAssociations?(
+      workspaceId: string,
+      listener: () => void,
+    ): () => void;
+    refreshAssociations?(
+      workspaceId: string,
+      signal: AbortSignal,
+    ): Promise<void>;
     unlink?(context: {
       workspaceId: string;
       taskId: string;

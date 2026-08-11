@@ -217,36 +217,11 @@ func (s *Service) Recover(ctx context.Context, workspaceID string) (int, error) 
 	for _, id := range ids {
 		watch := snapshot.Watches[id]
 		normalizeWatch(&watch)
-		keys := make([]string, 0, len(watch.Reservations))
-		for key, reservation := range watch.Reservations {
-			if reservation.State == ReservationCreating && reservation.Token != "" {
-				keys = append(keys, key)
-			}
+		count, reconcileErr := s.reconcileCreatingReservations(ctx, workspaceID, &watch)
+		if reconcileErr != nil {
+			return recovered, reconcileErr
 		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			reservation := watch.Reservations[key]
-			taskID := reservation.TaskID
-			if taskID == "" {
-				var found bool
-				taskID, found, err = s.tasks.FindByReservation(ctx, workspaceID, reservation.Token)
-				if err != nil {
-					return recovered, fmt.Errorf("find creating reservation: %w", err)
-				}
-				if !found {
-					continue
-				}
-			}
-			reservation.TaskID = taskID
-			reservation.State = ReservationCreated
-			watch.Reservations[key] = reservation
-			link := reservation.Link
-			link.PullRequestKey = key
-			link.TaskID = taskID
-			link.Owned = true
-			watch.Links[key] = link
-			recovered++
-		}
+		recovered += count
 		snapshot.Watches[id] = watch
 	}
 	if recovered == 0 {
@@ -256,6 +231,44 @@ func (s *Service) Recover(ctx context.Context, workspaceID string) (int, error) 
 		return 0, fmt.Errorf("save recovered reservations: %w", err)
 	}
 	s.emit(ctx, "watch.recovered", map[string]any{"workspace_id": workspaceID, "task_count": recovered})
+	return recovered, nil
+}
+
+func (s *Service) reconcileCreatingReservations(
+	ctx context.Context, workspaceID string, watch *Watch,
+) (int, error) {
+	keys := make([]string, 0, len(watch.Reservations))
+	for key, reservation := range watch.Reservations {
+		if reservation.State == ReservationCreating && reservation.Token != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	recovered := 0
+	for _, key := range keys {
+		reservation := watch.Reservations[key]
+		taskID := reservation.TaskID
+		if taskID == "" {
+			var found bool
+			var err error
+			taskID, found, err = s.tasks.FindByReservation(ctx, workspaceID, reservation.Token)
+			if err != nil {
+				return recovered, fmt.Errorf("find creating reservation: %w", err)
+			}
+			if !found {
+				continue
+			}
+		}
+		reservation.TaskID = taskID
+		reservation.State = ReservationCreated
+		watch.Reservations[key] = reservation
+		link := reservation.Link
+		link.PullRequestKey = key
+		link.TaskID = taskID
+		link.Owned = true
+		watch.Links[key] = link
+		recovered++
+	}
 	return recovered, nil
 }
 
@@ -454,9 +467,19 @@ func (s *Service) PreviewReset(ctx context.Context, workspaceID, watchID string)
 	unlock := s.locks.lock(workspaceID)
 	defer unlock()
 
-	_, watch, err := s.loadWatch(ctx, workspaceID, watchID)
+	snapshot, watch, err := s.loadWatch(ctx, workspaceID, watchID)
 	if err != nil {
 		return ResetPreview{}, err
+	}
+	recovered, err := s.reconcileCreatingReservations(ctx, workspaceID, &watch)
+	if err != nil {
+		return ResetPreview{}, err
+	}
+	if recovered > 0 {
+		snapshot.Watches[watch.ID] = watch
+		if err := s.repository.Save(ctx, workspaceID, snapshot); err != nil {
+			return ResetPreview{}, fmt.Errorf("save reconciled reset preview: %w", err)
+		}
 	}
 	var taskIDs []string
 	for _, link := range ownedLinks(watch) {
@@ -482,6 +505,10 @@ func (s *Service) Reset(ctx context.Context, workspaceID, watchID string) (Reset
 	if err != nil {
 		return ResetResult{}, err
 	}
+	if _, err := s.reconcileCreatingReservations(ctx, workspaceID, &watch); err != nil {
+		return ResetResult{}, err
+	}
+	snapshot.Watches[watch.ID] = watch
 	var deletedTaskIDs []string
 	for _, link := range ownedLinks(watch) {
 		deleted, deleteErr := s.tasks.DeleteOwned(ctx, link.TaskID)
@@ -525,6 +552,10 @@ func (s *Service) Delete(ctx context.Context, workspaceID, watchID string) (Rese
 	if err != nil {
 		return ResetResult{}, err
 	}
+	if _, err := s.reconcileCreatingReservations(ctx, workspaceID, &watch); err != nil {
+		return ResetResult{}, err
+	}
+	snapshot.Watches[watch.ID] = watch
 	var deletedTaskIDs []string
 	for _, link := range ownedLinks(watch) {
 		deleted, deleteErr := s.tasks.DeleteOwned(ctx, link.TaskID)

@@ -171,7 +171,7 @@ func (c *Client) ListRepositoriesPage(ctx context.Context, workspace string, que
 	}
 	repositories := make([]domain.Repository, 0, min(len(payload.Values), query.Limit))
 	for _, value := range payload.Values {
-		mapped, err := mapRepository(workspace, value)
+		mapped, err := c.mapRepository(workspace, value)
 		if err != nil {
 			return domain.RepositoryPage{}, err
 		}
@@ -239,6 +239,7 @@ type repositoryPage struct {
 }
 
 type repositoryPayload struct {
+	UUID       string `json:"uuid"`
 	Slug       string `json:"slug"`
 	MainBranch struct {
 		Name string `json:"name"`
@@ -314,7 +315,7 @@ func (c *Client) nextURL(current *url.URL, rawNext string) (*url.URL, error) {
 	return next, nil
 }
 
-func mapRepository(workspace string, payload repositoryPayload) (domain.Repository, error) {
+func (c *Client) mapRepository(workspace string, payload repositoryPayload) (domain.Repository, error) {
 	if !isPathSegment(workspace) || !isPathSegment(payload.Slug) {
 		return domain.Repository{}, fmt.Errorf("Cloud repository workspace and slug must be URL path segments")
 	}
@@ -332,7 +333,10 @@ func mapRepository(workspace string, payload repositoryPayload) (domain.Reposito
 		// it into host repository data; reconstruct the validated credential-free
 		// URL instead.
 		cloneURL = &url.URL{Scheme: "https", Host: "bitbucket.org", Path: expectedPath}
-		return domain.Repository{Namespace: workspace, Slug: payload.Slug, CloneURL: cloneURL, DefaultBranch: payload.MainBranch.Name}, nil
+		if strings.TrimSpace(payload.UUID) == "" {
+			return domain.Repository{}, fmt.Errorf("Cloud repository has no immutable UUID")
+		}
+		return domain.Repository{ID: payload.UUID, ProviderScope: "https://bitbucket.org", Namespace: workspace, Slug: payload.Slug, CloneURL: cloneURL, DefaultBranch: payload.MainBranch.Name}, nil
 	}
 	return domain.Repository{}, fmt.Errorf("Cloud repository has no HTTPS clone URL")
 }

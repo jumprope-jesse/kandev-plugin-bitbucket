@@ -2,7 +2,11 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +34,15 @@ type workspacePollBackoff struct {
 	failures    int
 	nextAttempt time.Time
 }
+
+type workspacePollError struct {
+	kind       string
+	retryAfter time.Duration
+	cause      error
+}
+
+func (e *workspacePollError) Error() string { return "Bitbucket " + e.kind + " failed" }
+func (e *workspacePollError) Unwrap() error { return e.cause }
 
 func NewManager(host pluginsdk.Host, resolver ProviderResolver, watchService *watches.Service) (*Manager, error) {
 	if host == nil || resolver == nil || watchService == nil {
@@ -123,6 +136,9 @@ func (m *Manager) recordWorkspacePoll(workspaceID string, pollErr error) {
 		state.failures++
 	}
 	state.nextAttempt = m.now().Add(m.schedule.Next(state.failures))
+	if retryAfter := pollRetryAfter(pollErr, m.now()); retryAfter > state.nextAttempt.Sub(m.now()) {
+		state.nextAttempt = m.now().Add(retryAfter)
+	}
 	m.workspaceBackoff[workspaceID] = state
 }
 
@@ -149,22 +165,54 @@ func (m *Manager) PollWorkspace(ctx context.Context, workspaceID string) error {
 		return fmt.Errorf("resolve Bitbucket provider: %w", err)
 	}
 	if err := provider.Health(ctx); err != nil {
-		return fmt.Errorf("Bitbucket health check failed")
+		return &workspacePollError{kind: "health check", retryAfter: providerRetryAfter(err, m.now()), cause: err}
 	}
 	m.emit(ctx, "health.healthy", map[string]any{"workspace_id": workspaceID})
 	configured, err := m.watches.List(ctx, workspaceID)
 	if err != nil {
 		return err
 	}
+	var watchErrors []error
+	var retryAfter time.Duration
 	for _, watch := range configured {
 		if watch.Status != watches.StatusRunning {
 			continue
 		}
 		if _, err := m.watches.Run(ctx, workspaceID, watch.ID); err != nil {
 			m.emit(ctx, "watch.poll_failed", map[string]any{"workspace_id": workspaceID, "watch_id": watch.ID})
+			watchErrors = append(watchErrors, err)
+			if delay := providerRetryAfter(err, m.now()); delay > retryAfter {
+				retryAfter = delay
+			}
 		}
 	}
+	if len(watchErrors) > 0 {
+		return &workspacePollError{kind: "watch poll", retryAfter: retryAfter, cause: errors.Join(watchErrors...)}
+	}
 	return nil
+}
+
+func pollRetryAfter(err error, now time.Time) time.Duration {
+	var pollError *workspacePollError
+	if errors.As(err, &pollError) && pollError.retryAfter > 0 {
+		return pollError.retryAfter
+	}
+	return providerRetryAfter(err, now)
+}
+
+func providerRetryAfter(err error, now time.Time) time.Duration {
+	var providerError *domain.ProviderHTTPError
+	if !errors.As(err, &providerError) {
+		return 0
+	}
+	value := strings.TrimSpace(providerError.RetryAfter)
+	if seconds, parseErr := strconv.Atoi(value); parseErr == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if when, parseErr := http.ParseTime(value); parseErr == nil && when.After(now) {
+		return when.Sub(now)
+	}
+	return 0
 }
 
 func (m *Manager) emit(ctx context.Context, name string, payload map[string]any) {

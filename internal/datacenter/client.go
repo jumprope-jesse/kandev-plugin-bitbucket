@@ -300,6 +300,7 @@ type repositoryPage struct {
 }
 
 type repositoryPayload struct {
+	ID            int    `json:"id"`
 	Slug          string `json:"slug"`
 	DefaultBranch string `json:"defaultBranch"`
 	Project       struct {
@@ -386,6 +387,11 @@ func (c *Client) mapRepository(payload repositoryPayload) (domain.Repository, er
 		if err != nil || cloneURL.User != nil || cloneURL.RawQuery != "" || cloneURL.Fragment != "" || !sameOrigin(cloneURL, expectedCloneURL) || cloneURL.Path != expectedCloneURL.Path {
 			return domain.Repository{}, fmt.Errorf("Data Center repository has invalid HTTPS clone URL")
 		}
+		if payload.ID <= 0 {
+			return domain.Repository{}, fmt.Errorf("Data Center repository has no immutable ID")
+		}
+		repository.ID = strconv.Itoa(payload.ID)
+		repository.ProviderScope = c.connection.Scope
 		repository.CloneURL = expectedCloneURL
 		return repository, nil
 	}

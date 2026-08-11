@@ -102,7 +102,7 @@ export function DashboardPullRequestList({
         const metadata = h(
           "span",
           { className: "bb-change-request-metadata" },
-          h("span", null, `${pullRequest.repositoryId}#${pullRequest.number}`),
+          h("span", null, pullRequest.key),
           author ? h("span", null, ` · by ${author}`) : null,
           opened ? h("span", null, ` · opened ${opened}`) : null,
           pullRequest.sourceBranch && pullRequest.destinationBranch

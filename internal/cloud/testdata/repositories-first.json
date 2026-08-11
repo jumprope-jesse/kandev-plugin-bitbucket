@@ -2,6 +2,7 @@
   "pagelen": 2,
   "values": [
     {
+      "uuid": "{repo-widgets}",
       "name": "Widgets",
       "full_name": "acme/widgets",
       "slug": "widgets",

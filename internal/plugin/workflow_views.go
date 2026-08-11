@@ -21,7 +21,7 @@ func repositoryViews(repositories []domain.Repository) []map[string]any {
 		views = append(views, map[string]any{
 			"id": repository.Namespace + "/" + repository.Slug, "name": repository.Slug,
 			"owner_or_project": repository.Namespace, "provider_id": "bitbucket", "provider_host": host,
-			"provider_repository_id": repository.Namespace + "/" + repository.Slug, "clone_url": cloneURL,
+			"provider_scope": repository.ProviderScope, "provider_repository_id": repository.ID, "clone_url": cloneURL,
 			"default_branch": repository.DefaultBranch,
 		})
 	}
@@ -52,7 +52,8 @@ func pullRequestView(pullRequest domain.PullRequest) map[string]any {
 	return map[string]any{
 		"id": strconv.Itoa(pullRequest.Number), "review_key": pullRequest.Key(), "number": pullRequest.Number,
 		"title": pullRequest.Title, "description": pullRequest.Description, "url": pullRequest.URL,
-		"repository_id":   pullRequest.Repository.Namespace + "/" + pullRequest.Repository.Slug,
+		"repository_id":   pullRequest.Repository.ID,
+		"provider_scope":  pullRequest.Repository.ProviderScope,
 		"repository_name": pullRequest.Repository.Slug, "repository": repositoryViews([]domain.Repository{pullRequest.Repository})[0],
 		"state": pullRequest.State, "source_branch": pullRequest.Source.Name, "destination_branch": pullRequest.Destination.Name,
 		"author":              pullRequest.Author,

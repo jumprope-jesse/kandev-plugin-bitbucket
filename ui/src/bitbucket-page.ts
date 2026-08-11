@@ -22,6 +22,7 @@ import {
   useActiveWorkspaceId,
   useSavedQueries,
   usePluginQuery,
+  usePagedPluginQuery,
   EmptyState,
 } from "./ui-runtime";
 import {
@@ -68,20 +69,42 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
     Boolean(activeWorkspaceId),
   );
   const connected = connectionState(record(connection.data)) === "connected";
-  const repositoriesQuery = usePluginQuery<unknown>(
+  const repositoriesQuery = usePagedPluginQuery(
     host,
     action.repositoriesList,
-    activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
+    activeWorkspaceId
+      ? { workspaceId: activeWorkspaceId, body: { limit: 100 } }
+      : undefined,
+    "repositories",
     Boolean(activeWorkspaceId && connected),
   );
   const repositories = normalizeRepositories(repositoriesQuery.data);
   const selectedRepository =
     repositories.find((candidate) => candidate.repositoryId === repository) ??
     null;
+  const queueScopeKey = JSON.stringify([
+    activeWorkspaceId ?? "",
+    selectedRepository?.repositoryId ?? "",
+    search,
+    state,
+  ]);
+  const [queuePagination, setQueuePagination] = React.useState<{
+    scopeKey: string;
+    page: number;
+    cursors: string[];
+  }>(() => ({ scopeKey: queueScopeKey, page: 1, cursors: [""] }));
+  const activeQueuePagination =
+    queuePagination.scopeKey === queueScopeKey
+      ? queuePagination
+      : { scopeKey: queueScopeKey, page: 1, cursors: [""] };
+  const queueCursor =
+    activeQueuePagination.cursors[activeQueuePagination.page - 1] ?? "";
   const queueRequest = pullRequestListRequest(
     selectedRepository,
     search,
     state,
+    queueCursor,
+    25,
   );
   const queue = usePluginQuery<Record<string, unknown>>(
     host,
@@ -92,6 +115,7 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
     Boolean(activeWorkspaceId && connected),
   );
   const pullRequests = normalizePullRequests(queue.data);
+  const nextQueueCursor = text(record(queue.data).next_cursor);
   const associations = usePluginQuery<unknown>(
     host,
     action.pullRequestsAssociations,
@@ -300,6 +324,34 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
               }),
           }),
         ),
+        h(ui.IntegrationCursorPagination, {
+          page: activeQueuePagination.page,
+          itemCount: pullRequests.length,
+          hasPrevious: activeQueuePagination.page > 1,
+          hasNext: Boolean(nextQueueCursor),
+          loading: queue.loading,
+          onPrevious: () => {
+            if (activeQueuePagination.page <= 1) return;
+            setQueuePagination({
+              ...activeQueuePagination,
+              page: activeQueuePagination.page - 1,
+            });
+          },
+          onNext: () => {
+            if (!nextQueueCursor) return;
+            const cursors = activeQueuePagination.cursors.slice(
+              0,
+              activeQueuePagination.page,
+            );
+            cursors.push(nextQueueCursor);
+            setQueuePagination({
+              scopeKey: queueScopeKey,
+              page: activeQueuePagination.page + 1,
+              cursors,
+            });
+          },
+          testId: "bitbucket-results-pagination",
+        }),
         taskDialog,
         h(ui.IntegrationSaveQueryDialog, {
           open: saveDialogOpen,

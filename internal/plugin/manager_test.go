@@ -3,12 +3,14 @@ package plugin
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/kandev/kandev/pkg/pluginsdk"
 	"github.com/stretchr/testify/require"
 	"kandev-plugin-bitbucket/internal/domain"
+	"kandev-plugin-bitbucket/internal/watches"
 )
 
 func TestManager_PollsWorkspaceAndEmitsOnlySafeHealthEvent(t *testing.T) {
@@ -49,6 +51,36 @@ func TestManager_BackoffIsScopedToTheFailingWorkspace(t *testing.T) {
 
 	require.Equal(t, 1, broken.healthCalls, "failed workspace must observe its own backoff")
 	require.Equal(t, 2, healthy.healthCalls, "healthy workspace must keep its 90-second cadence")
+}
+
+func TestManager_WatchRateLimitControlsWorkspaceBackoff(t *testing.T) {
+	host := &managerHost{connectionHost: newConnectionHost(), workspaces: []pluginsdk.Workspace{{ID: "workspace-1"}}}
+	provider := &workflowProvider{
+		pullRequest: testPullRequest(),
+		searchErr:   &domain.ProviderHTTPError{Status: http.StatusTooManyRequests, RetryAfter: "600"},
+	}
+	resolver := staticResolver{provider: provider}
+	workflows, err := NewWorkflows(host, resolver)
+	require.NoError(t, err)
+	_, err = workflows.watches.Create(context.Background(), watches.Watch{
+		ID: "watch-1", WorkspaceID: "workspace-1", Status: watches.StatusRunning,
+	})
+	require.NoError(t, err)
+	manager, err := NewManager(host, resolver, workflows.watches)
+	require.NoError(t, err)
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	manager.schedule = domain.NewHealthSchedule(func() float64 { return 0.5 })
+
+	err = manager.pollScheduled(context.Background())
+	require.Error(t, err)
+	require.Len(t, provider.searchQueries, 1)
+	now = now.Add(3 * time.Minute)
+	_ = manager.pollScheduled(context.Background())
+	require.Len(t, provider.searchQueries, 1, "Retry-After must suppress the healthy 90-second cadence")
+	now = now.Add(7 * time.Minute)
+	_ = manager.pollScheduled(context.Background())
+	require.Len(t, provider.searchQueries, 2)
 }
 
 type workspaceProviderResolver struct {

@@ -25,6 +25,20 @@ func TestWatchProviderRequestsConfiguredPullRequestStates(t *testing.T) {
 	require.Equal(t, domain.PullRequestQuery{Repository: pullRequest.Repository, State: "MERGED", Limit: 100}, provider.searchQueries[0])
 }
 
+func TestFilterRepositoriesMatchesImmutableProviderRepositoryID(t *testing.T) {
+	provider := &workflowProvider{repositories: []domain.Repository{
+		{ID: "repo-uuid", ProviderScope: "https://bitbucket.org", Namespace: "renamed-workspace", Slug: "renamed-repo"},
+		{ID: "other-uuid", ProviderScope: "https://bitbucket.org", Namespace: "renamed-workspace", Slug: "other-repo"},
+	}}
+
+	repositories, err := filterRepositories(context.Background(), provider, watches.Filter{
+		RepositoryIDs: []string{"repo-uuid"},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []domain.Repository{provider.repositories[0]}, repositories)
+}
+
 func TestWatchProviderResumesOpaqueProviderPagesWithoutMissingPastFirstPage(t *testing.T) {
 	providerFirstPage := make([]domain.PullRequest, 0, 100)
 	for number := 1; number <= 100; number++ {

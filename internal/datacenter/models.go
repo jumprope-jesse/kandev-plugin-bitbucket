@@ -48,6 +48,7 @@ type pullRequestPayload struct {
 }
 
 type dataCenterRepositoryReference struct {
+	ID      int    `json:"id"`
 	Slug    string `json:"slug"`
 	Project struct {
 		Key string `json:"key"`

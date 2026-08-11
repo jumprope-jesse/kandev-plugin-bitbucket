@@ -69,9 +69,17 @@ func (w *Workflows) handleRepositoryAction(ctx context.Context, request *plugins
 		}
 		repository, err := provider.InspectRepositoryURL(input.URL)
 		if err == nil {
+			repository, err = hydrateRepositoryIdentity(ctx, provider, repository)
+			if err != nil {
+				return nil, fmt.Errorf("Bitbucket repository is unavailable")
+			}
 			return actionResponse(repositoryViews([]domain.Repository{repository})[0])
 		}
 		locator, inspectErr := provider.InspectPullRequestURL(input.URL)
+		if inspectErr != nil {
+			return nil, fmt.Errorf("Bitbucket repository is unavailable")
+		}
+		locator.Repository, inspectErr = hydrateRepositoryIdentity(ctx, provider, locator.Repository)
 		if inspectErr != nil {
 			return nil, fmt.Errorf("Bitbucket repository is unavailable")
 		}

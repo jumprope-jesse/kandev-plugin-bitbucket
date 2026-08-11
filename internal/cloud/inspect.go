@@ -57,7 +57,7 @@ func inspectCloudURL(raw string) ([]string, error) {
 
 func cloudRepository(namespace, slug string) domain.Repository {
 	cloneURL := &url.URL{Scheme: "https", Host: cloudWebHost, Path: path.Join("/", namespace, slug+".git")}
-	return domain.Repository{Namespace: namespace, Slug: slug, CloneURL: cloneURL}
+	return domain.Repository{ProviderScope: "https://bitbucket.org", Namespace: namespace, Slug: slug, CloneURL: cloneURL}
 }
 
 func validInspectionSegment(value string) bool {

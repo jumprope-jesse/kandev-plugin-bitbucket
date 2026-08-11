@@ -60,7 +60,7 @@ func (w *Workflows) handleConnectionAction(ctx context.Context, request *plugins
 		}
 		settings, err := connections.Save(ctx, request.Context.WorkspaceID, input.ConnectionInput)
 		if err != nil {
-			return nil, fmt.Errorf("save Bitbucket connection failed")
+			return nil, fmt.Errorf("save Bitbucket connection: %w", err)
 		}
 		if !input.Probe {
 			return actionResponse(connectionResponse(settings, false, nil))

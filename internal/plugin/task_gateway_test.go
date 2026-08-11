@@ -30,7 +30,7 @@ func TestTaskGateway_CreateUsesCredentialFreeRemoteAndDurableReservation(t *test
 		Watch:       watches.Watch{ID: "watch-1", Launch: watches.Launch{WorkflowID: "workflow-1", StartAgent: true}},
 		PullRequest: watches.PullRequest{
 			Key: "repo-1#42", Number: 42, Title: "Fix race", URL: "https://bitbucket.org/workspace/repo/pull-requests/42",
-			Repository: watches.RemoteRepository{ProviderID: "bitbucket", ProviderHost: "bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-1", Name: "repo", CloneURL: "https://bitbucket.org/workspace/repo.git", BaseBranch: "main", HeadBranch: "fix-race"},
+			Repository: watches.RemoteRepository{ProviderID: "bitbucket", ProviderHost: "bitbucket.org", ProviderScope: "https://bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-1", Name: "repo", CloneURL: "https://bitbucket.org/workspace/repo.git", BaseBranch: "main", HeadBranch: "fix-race"},
 		},
 		ReservationToken: "reservation-1",
 	})
@@ -45,7 +45,7 @@ func TestTaskGateway_CreateUsesCredentialFreeRemoteAndDurableReservation(t *test
 func TestWatchPullRequest_UsesForkSourceDescriptor(t *testing.T) {
 	pullRequest := domain.PullRequest{
 		Repository:       domain.Repository{Namespace: "destination", Slug: "repo"},
-		SourceRepository: domain.Repository{Namespace: "fork", Slug: "repo", CloneURL: mustURL(t, "https://bitbucket.org/fork/repo.git")},
+		SourceRepository: domain.Repository{ID: "fork-repo-uuid", ProviderScope: "https://bitbucket.org", Namespace: "fork", Slug: "repo", CloneURL: mustURL(t, "https://bitbucket.org/fork/repo.git")},
 		Number:           42,
 		Source:           domain.Branch{Name: "feature/fork"},
 		Destination:      domain.Branch{Name: "main"},

@@ -5,6 +5,7 @@
   "nextPageStart": 1,
   "values": [
     {
+      "id": 42,
       "slug": "widgets",
       "defaultBranch": "main",
       "project": {"key": "ENG"},

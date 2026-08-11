@@ -58,6 +58,7 @@ type pullRequestPayload struct {
 }
 
 type cloudRepositoryReference struct {
+	UUID      string `json:"uuid"`
 	Slug      string `json:"slug"`
 	FullName  string `json:"full_name"`
 	Workspace struct {

@@ -80,7 +80,8 @@ func (w *Workflows) HandleAction(ctx context.Context, request *pluginsdk.PluginA
 		"watches.pause", "watches.resume",
 		"watches.preview_reset", "watches.preview_delete",
 		"watches.reset", "watches.delete":
-		return w.handleWatchAction(ctx, request)
+		response, err := w.handleWatchAction(ctx, request)
+		return response, categorizeWatchActionError(err)
 	default:
 		return nil, fmt.Errorf("unsupported Bitbucket action %q", request.ActionKey)
 	}
@@ -225,6 +226,10 @@ func (w *Workflows) pullRequestLookup(ctx context.Context, workspaceID string, i
 		repository, number, key, ok := pullRequestIdentity(provider, input.ReviewKey)
 		if !ok {
 			return nil, domain.PullRequest{}, fmt.Errorf("invalid Bitbucket pull request key")
+		}
+		repository, err = hydrateRepositoryIdentity(ctx, provider, repository)
+		if err != nil {
+			return nil, domain.PullRequest{}, fmt.Errorf("Bitbucket repository is unavailable")
 		}
 		pullRequest, err := provider.GetPullRequest(ctx, repository, number)
 		if err != nil || pullRequest.Key() != key {

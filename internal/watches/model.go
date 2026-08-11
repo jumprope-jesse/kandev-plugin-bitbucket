@@ -71,6 +71,7 @@ type PullRequest struct {
 type RemoteRepository struct {
 	ProviderID           string `json:"provider_id"`
 	ProviderHost         string `json:"provider_host"`
+	ProviderScope        string `json:"provider_scope"`
 	OwnerOrProject       string `json:"owner_or_project"`
 	ProviderRepositoryID string `json:"provider_repository_id"`
 	Name                 string `json:"name"`

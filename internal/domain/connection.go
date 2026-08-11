@@ -37,6 +37,7 @@ func (c Capabilities) Supports(capability Capability) bool {
 // Connection contains only credential-free provider endpoints.
 type Connection struct {
 	Product      Product
+	Scope        string
 	APIBase      *url.URL
 	CloneBase    *url.URL
 	Workspace    string
@@ -45,6 +46,8 @@ type Connection struct {
 
 // Repository identifies a repository without embedding provider credentials.
 type Repository struct {
+	ID            string
+	ProviderScope string
 	Namespace     string
 	Slug          string
 	CloneURL      *url.URL
@@ -63,6 +66,7 @@ func NewCloudConnection(workspace string) (Connection, error) {
 	}
 	return Connection{
 		Product:   ProductCloud,
+		Scope:     "https://bitbucket.org",
 		APIBase:   apiBase,
 		CloneBase: cloneBase,
 		Workspace: workspace,

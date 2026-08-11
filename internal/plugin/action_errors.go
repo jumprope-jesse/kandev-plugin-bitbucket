@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 
 	"kandev-plugin-bitbucket/internal/domain"
+	"kandev-plugin-bitbucket/internal/watches"
 
 	"github.com/kandev/kandev/pkg/pluginsdk"
 )
@@ -25,48 +25,73 @@ func actionFailureResponse(err error) (*pluginsdk.PluginActionResponse, error) {
 	return &pluginsdk.PluginActionResponse{Status: status, Headers: headers, Body: body}, nil
 }
 
-func classifyActionFailure(err error) (status int, code, message, retryAfter string) {
-	var upstream *domain.ProviderHTTPError
-	if errors.As(err, &upstream) {
-		status = upstream.Status
-		if status < 400 || status > 499 {
-			status = http.StatusBadGateway
-		}
-		return actionFailureMetadata(status, upstream.RetryAfter)
-	}
-	value := strings.ToLower(err.Error())
+func categorizeWatchActionError(err error) error {
 	switch {
-	case strings.Contains(value, "not associated"), strings.Contains(value, "authorization"):
-		status = http.StatusForbidden
-	case strings.Contains(value, "conflict"), strings.Contains(value, "changed; refresh"):
-		status = http.StatusConflict
-	case strings.Contains(value, "invalid"), strings.Contains(value, "required"),
-		strings.Contains(value, "unsupported"), strings.Contains(value, "unknown"),
-		strings.Contains(value, "must be"):
-		status = http.StatusBadRequest
-	case strings.Contains(value, "unavailable"), strings.Contains(value, "not configured"):
-		status = http.StatusServiceUnavailable
+	case err == nil:
+		return nil
+	case errors.Is(err, watches.ErrWatchNotFound):
+		return pluginsdk.CategorizeActionError(pluginsdk.ActionErrorNotFound, err)
+	case errors.Is(err, watches.ErrWatchPaused):
+		return pluginsdk.CategorizeActionError(pluginsdk.ActionErrorConflict, err)
 	default:
-		status = http.StatusBadGateway
+		return err
 	}
-	return actionFailureMetadata(status, "")
 }
 
-func actionFailureMetadata(status int, retryAfter string) (int, string, string, string) {
-	switch status {
-	case http.StatusBadRequest:
-		return status, "invalid_request", "Invalid Bitbucket action request.", ""
-	case http.StatusUnauthorized, http.StatusForbidden:
-		return status, "authorization_failed", "Bitbucket authorization failed.", ""
-	case http.StatusNotFound:
-		return status, "not_found", "Bitbucket resource was not found.", ""
-	case http.StatusConflict:
-		return status, "conflict", "Bitbucket resource changed. Refresh and retry.", ""
-	case http.StatusTooManyRequests:
-		return status, "rate_limited", "Bitbucket rate limit reached. Retry later.", retryAfter
-	case http.StatusServiceUnavailable:
-		return status, "unavailable", "Bitbucket connection is unavailable.", retryAfter
-	default:
-		return status, "upstream_failure", "Bitbucket request failed.", retryAfter
+func classifyActionFailure(err error) (status int, code, message, retryAfter string) {
+	var categorized *pluginsdk.ActionError
+	if errors.As(err, &categorized) {
+		status = pluginsdk.ActionErrorHTTPStatus(categorized.Code)
+		return actionFailureMetadata(categorized.Code, status, categorized.RetryAfter)
 	}
+	var upstream *domain.ProviderHTTPError
+	if errors.As(err, &upstream) {
+		code := providerActionErrorCode(upstream.Status)
+		return actionFailureMetadata(code, pluginsdk.ActionErrorHTTPStatus(code), upstream.RetryAfter)
+	}
+	return actionFailureMetadata(pluginsdk.ActionErrorUpstream, http.StatusBadGateway, "")
+}
+
+func providerActionErrorCode(status int) pluginsdk.ActionErrorCode {
+	switch status {
+	case http.StatusBadRequest, http.StatusMethodNotAllowed, http.StatusUnprocessableEntity:
+		return pluginsdk.ActionErrorInvalidArgument
+	case http.StatusUnauthorized:
+		return pluginsdk.ActionErrorUnauthenticated
+	case http.StatusForbidden:
+		return pluginsdk.ActionErrorPermissionDenied
+	case http.StatusNotFound:
+		return pluginsdk.ActionErrorNotFound
+	case http.StatusConflict, http.StatusPreconditionFailed:
+		return pluginsdk.ActionErrorConflict
+	case http.StatusTooManyRequests:
+		return pluginsdk.ActionErrorRateLimited
+	case http.StatusRequestTimeout, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return pluginsdk.ActionErrorUnavailable
+	default:
+		return pluginsdk.ActionErrorUpstream
+	}
+}
+
+func actionFailureMetadata(
+	code pluginsdk.ActionErrorCode,
+	status int,
+	retryAfter string,
+) (int, string, string, string) {
+	message := "Bitbucket request failed."
+	switch code {
+	case pluginsdk.ActionErrorInvalidArgument:
+		message = "Invalid Bitbucket action request."
+	case pluginsdk.ActionErrorUnauthenticated, pluginsdk.ActionErrorPermissionDenied:
+		message = "Bitbucket authorization failed."
+	case pluginsdk.ActionErrorNotFound:
+		message = "Bitbucket resource was not found."
+	case pluginsdk.ActionErrorConflict:
+		message = "Bitbucket resource changed. Refresh and retry."
+	case pluginsdk.ActionErrorRateLimited:
+		message = "Bitbucket rate limit reached. Retry later."
+	case pluginsdk.ActionErrorUnavailable:
+		message = "Bitbucket connection is unavailable."
+	}
+	return status, string(code), message, retryAfter
 }

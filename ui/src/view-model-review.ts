@@ -37,6 +37,7 @@ export function normalizePullRequests(value: unknown): PullRequest[] {
         string(record(repository.workspace).slug);
       const repositoryId =
         string(source.repository_id) ??
+        string(repository.provider_repository_id) ??
         string(source.repositoryId) ??
         string(repository.full_name) ??
         (repositoryNamespace && repositorySlug
@@ -49,6 +50,8 @@ export function normalizePullRequests(value: unknown): PullRequest[] {
       if (!id || !repositoryId || !numberValue) return null;
       const status = record(source.status);
       const state = string(source.state) ?? string(source.status) ?? "UNKNOWN";
+      const providerScope =
+        string(source.provider_scope) ?? string(repository.provider_scope);
       const reviewKey =
         string(source.review_key) ??
         string(source.reviewKey) ??
@@ -65,6 +68,7 @@ export function normalizePullRequests(value: unknown): PullRequest[] {
         title,
         url: string(source.url) ?? pullRequestURL(source.links) ?? "",
         repositoryId,
+        ...(providerScope ? { providerScope } : {}),
         repositoryName:
           string(source.repository_name) ??
           string(source.repositoryName) ??

@@ -14,35 +14,23 @@ export function repositoryFilter(
   setRepository: (value: string) => void,
 ) {
   const { jsx: h, ui } = host;
-  return h(
-    ui.Select,
-    {
-      value: repository || "__all__",
-      onValueChange: (value: string) =>
-        setRepository(value === "__all__" ? "" : value),
-    },
-    h(
-      ui.SelectTrigger,
-      {
-        id: "bitbucket-repository-filter",
-        className: "bb-repository-filter",
-        "aria-label": "Repository",
-      },
-      h(ui.SelectValue, { placeholder: "All repositories" }),
-    ),
-    h(
-      ui.SelectContent,
-      null,
-      h(ui.SelectItem, { value: "__all__" }, "All repositories"),
-      ...repositories.map((candidate) =>
-        h(
-          ui.SelectItem,
-          { key: candidate.repositoryId, value: candidate.repositoryId },
-          `${candidate.ownerOrProject}/${candidate.repositoryName}`,
-        ),
-      ),
-    ),
-  );
+  return h(ui.IntegrationRepositoryFilter, {
+    value: repository,
+    onValueChange: setRepository,
+    options: repositories.map((candidate) => {
+      const label = `${candidate.ownerOrProject}/${candidate.repositoryName}`;
+      return { value: candidate.repositoryId, label, keywords: [label] };
+    }),
+    ariaLabel: "Filter Bitbucket pull requests by repository",
+    allLabel: "All repositories",
+    searchPlaceholder: "Filter repositories...",
+    emptyMessage: "No repositories found.",
+    triggerClassName:
+      "min-h-11 w-full border border-input bg-background px-2 py-1.5 text-xs/relaxed hover:bg-secondary/50 md:h-8 md:min-h-0 md:w-[220px]",
+    className: "md:min-w-[360px]",
+    testId: "bitbucket-repository-filter",
+    dropdownTestId: "bitbucket-repository-filter-dropdown",
+  });
 }
 
 export type DashboardScopeSelection = {

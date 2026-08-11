@@ -2,6 +2,7 @@
   "pagelen": 2,
   "values": [
     {
+      "uuid": "{repo-dashboard}",
       "name": "Dashboard",
       "full_name": "acme/dashboard",
       "slug": "dashboard",
@@ -12,6 +13,7 @@
       }
     },
     {
+      "uuid": "{repo-unused}",
       "name": "Unused",
       "full_name": "acme/unused",
       "slug": "unused",

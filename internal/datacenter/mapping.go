@@ -59,7 +59,10 @@ func (c *Client) mapSourceRepository(payload *dataCenterRepositoryReference, fal
 	if !isPathSegment(payload.Project.Key) || !isPathSegment(payload.Slug) {
 		return domain.Repository{}, fmt.Errorf("Data Center pull request source repository is incomplete")
 	}
-	repository := domain.Repository{Namespace: payload.Project.Key, Slug: payload.Slug}
+	if payload.ID <= 0 {
+		return domain.Repository{}, fmt.Errorf("Data Center pull request source repository has no immutable ID")
+	}
+	repository := domain.Repository{ID: strconv.Itoa(payload.ID), ProviderScope: c.connection.Scope, Namespace: payload.Project.Key, Slug: payload.Slug}
 	cloneURL, err := c.connection.CloneURL(repository)
 	if err != nil {
 		return domain.Repository{}, err

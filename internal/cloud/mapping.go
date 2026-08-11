@@ -67,7 +67,10 @@ func mapSourceRepository(payload *cloudRepositoryReference, fallback domain.Repo
 		return domain.Repository{}, err
 	}
 	cloneURL.Path = "/" + path.Join(namespace, slug+".git")
-	return domain.Repository{Namespace: namespace, Slug: slug, CloneURL: cloneURL}, nil
+	if strings.TrimSpace(payload.UUID) == "" {
+		return domain.Repository{}, fmt.Errorf("Cloud pull request source repository has no immutable UUID")
+	}
+	return domain.Repository{ID: payload.UUID, ProviderScope: "https://bitbucket.org", Namespace: namespace, Slug: slug, CloneURL: cloneURL}, nil
 }
 
 func validatePullRequestURL(raw string, repository domain.Repository, number int) error {

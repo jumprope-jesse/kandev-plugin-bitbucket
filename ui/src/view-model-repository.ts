@@ -35,6 +35,8 @@ export function normalizeRepository(value: unknown): Repository | null {
       string(source.providerHost) ??
       string(source.host) ??
       "",
+    providerScope:
+      string(source.provider_scope) ?? string(source.providerScope),
     ownerOrProject:
       string(source.owner_or_project) ??
       string(source.ownerOrProject) ??
@@ -224,6 +226,7 @@ export function pluginRepositoryInput(value: unknown): JsonRecord {
   const body: JsonRecord = {
     provider_id: repository.providerId,
     provider_host: repository.providerHost,
+    provider_scope: repository.providerScope,
     owner_or_project: repository.ownerOrProject,
     provider_repository_id: repository.repositoryId,
     name: repository.repositoryName,
@@ -239,6 +242,8 @@ export function pullRequestListRequest(
   repository: RepositoryInspection | null,
   query: string,
   state: string,
+  cursor = "",
+  limit = 25,
 ): {
   actionKey: "pullrequests.search" | "pullrequests.queue";
   body: JsonRecord;
@@ -251,12 +256,20 @@ export function pullRequestListRequest(
         repository: pluginRepositoryInput(repository),
         query: parsed.query,
         state: parsed.state,
+        cursor,
+        limit,
       },
     };
   }
   return {
     actionKey: "pullrequests.queue",
-    body: { view: "queue", query: parsed.query, state: parsed.state },
+    body: {
+      view: "queue",
+      query: parsed.query,
+      state: parsed.state,
+      cursor,
+      limit,
+    },
   };
 }
 

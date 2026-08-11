@@ -73,6 +73,101 @@ func TestWorkflows_QueueAndComposerAuthorizeLivePullRequest(t *testing.T) {
 	require.False(t, authorized.Allowed)
 }
 
+func TestWorkflows_QueueUsesDeterministicCursorAcrossRepositories(t *testing.T) {
+	repositoryA := domain.Repository{ID: "repo-a", ProviderScope: "https://bitbucket.org", Namespace: "workspace", Slug: "a"}
+	repositoryB := domain.Repository{ID: "repo-b", ProviderScope: "https://bitbucket.org", Namespace: "workspace", Slug: "b"}
+	pullRequest := func(repository domain.Repository, number int) domain.PullRequest {
+		return domain.PullRequest{
+			Repository: repository,
+			Number:     number,
+			Title:      fmt.Sprintf("Pull request %d", number),
+			State:      "OPEN",
+			URL:        fmt.Sprintf("https://bitbucket.org/%s/%s/pull-requests/%d", repository.Namespace, repository.Slug, number),
+		}
+	}
+	provider := &workflowProvider{
+		pullRequest:  pullRequest(repositoryA, 1),
+		repositories: []domain.Repository{repositoryB, repositoryA},
+		pullRequestPages: map[string]map[string]domain.PullRequestPage{
+			"workspace/a": {
+				"":         {PullRequests: []domain.PullRequest{pullRequest(repositoryA, 1), pullRequest(repositoryA, 2)}, NextCursor: "a-page-2"},
+				"a-page-2": {PullRequests: []domain.PullRequest{pullRequest(repositoryA, 3)}},
+			},
+			"workspace/b": {
+				"": {PullRequests: []domain.PullRequest{pullRequest(repositoryB, 1), pullRequest(repositoryB, 2)}},
+			},
+		},
+	}
+	workflows, err := NewWorkflows(newConnectionHost(), staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	requestPage := func(cursor string) ([]string, string) {
+		body, marshalErr := json.Marshal(map[string]any{"state": "OPEN", "limit": 2, "cursor": cursor})
+		require.NoError(t, marshalErr)
+		response, actionErr := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+			ActionKey: "pullrequests.queue",
+			Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+			Body:      body,
+		})
+		require.NoError(t, actionErr)
+		var page struct {
+			PullRequests []struct {
+				ReviewKey string `json:"review_key"`
+			} `json:"pull_requests"`
+			NextCursor string `json:"next_cursor"`
+		}
+		require.NoError(t, json.Unmarshal(response.Body, &page))
+		keys := make([]string, 0, len(page.PullRequests))
+		for _, item := range page.PullRequests {
+			keys = append(keys, item.ReviewKey)
+		}
+		return keys, page.NextCursor
+	}
+
+	first, cursor := requestPage("")
+	require.Equal(t, []string{"workspace/a#1", "workspace/a#2"}, first)
+	require.NotEmpty(t, cursor)
+	second, cursor := requestPage(cursor)
+	require.Equal(t, []string{"workspace/a#3", "workspace/b#1"}, second)
+	require.NotEmpty(t, cursor)
+	third, cursor := requestPage(cursor)
+	require.Equal(t, []string{"workspace/b#2"}, third)
+	require.Empty(t, cursor)
+	require.Equal(t, []domain.PullRequestQuery{
+		{Repository: testRepositoryWithIdentity(repositoryA), State: "OPEN", Limit: 2},
+		{Repository: testRepositoryWithIdentity(repositoryA), State: "OPEN", Limit: 2, Cursor: "a-page-2"},
+		{Repository: testRepositoryWithIdentity(repositoryA), State: "OPEN", Limit: 2, Cursor: "a-page-2"},
+		{Repository: testRepositoryWithIdentity(repositoryB), State: "OPEN", Limit: 2},
+		{Repository: testRepositoryWithIdentity(repositoryB), State: "OPEN", Limit: 2},
+	}, provider.searchQueries)
+}
+
+func TestWorkflows_QueueRejectsCyclicProviderCursor(t *testing.T) {
+	repository := domain.Repository{ID: "repo-a", ProviderScope: "https://bitbucket.org", Namespace: "workspace", Slug: "a"}
+	provider := &workflowProvider{
+		pullRequest:  domain.PullRequest{Repository: repository, Number: 1},
+		repositories: []domain.Repository{repository},
+		pullRequestPages: map[string]map[string]domain.PullRequestPage{
+			"workspace/a": {
+				"":       {NextCursor: "page-a"},
+				"page-a": {NextCursor: "page-b"},
+				"page-b": {NextCursor: "page-a"},
+			},
+		},
+	}
+	workflows, err := NewWorkflows(newConnectionHost(), staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	_, err = workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.queue",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body:      []byte(`{"state":"OPEN","limit":2}`),
+	})
+
+	require.ErrorContains(t, err, "pagination did not advance")
+	require.LessOrEqual(t, len(provider.searchQueries), 3)
+}
+
 func TestWorkflows_ComposerSearchDoesNotUseCandidateLimitAsRepositoryLimit(t *testing.T) {
 	first := domain.Repository{Namespace: "workspace", Slug: "empty"}
 	second := domain.Repository{Namespace: "workspace", Slug: "repo"}
@@ -129,7 +224,10 @@ func TestWorkflows_RepositoryDiscoveryReturnsOpaqueContinuation(t *testing.T) {
 func TestPullRequestViewIncludesCanonicalAuthor(t *testing.T) {
 	pullRequest := testPullRequest()
 	pullRequest.Author = "cloud-account-ada"
-	require.Equal(t, "cloud-account-ada", pullRequestView(pullRequest)["author"])
+	view := pullRequestView(pullRequest)
+	require.Equal(t, "cloud-account-ada", view["author"])
+	require.Equal(t, "repo-uuid", view["repository_id"])
+	require.Equal(t, "https://bitbucket.org", view["provider_scope"])
 }
 
 func TestPullRequestViewIncludesHumanDisplayMetadata(t *testing.T) {
@@ -602,7 +700,8 @@ func TestWorkflows_TaskGetAutoLinksAcrossVerifiedTaskRepositories(t *testing.T) 
 	second.Source.Name = "feature/two"
 	second.URL = "https://bitbucket.org/workspace/two/pull-requests/42"
 	provider := &workflowProvider{
-		pullRequest: first,
+		pullRequest:  first,
+		repositories: []domain.Repository{first.Repository, second.Repository},
 		pullRequestsByRepository: map[string][]domain.PullRequest{
 			"workspace/one": {first},
 			"workspace/two": {second},
@@ -662,7 +761,7 @@ func bitbucketHostRepository(id, namespace, slug string) pluginsdk.Repository {
 	defaultBranch := "main"
 	return pluginsdk.Repository{
 		ID: id, WorkspaceID: "workspace-1", Name: namespace + "/" + slug, SourceType: "provider", ProviderID: "bitbucket",
-		ProviderHost: "bitbucket.org", OwnerOrProject: namespace, ProviderRepositoryID: "uuid-" + id,
+		ProviderHost: "bitbucket.org", ProviderScope: "https://bitbucket.org", OwnerOrProject: namespace, ProviderRepositoryID: "uuid-" + id,
 		ProviderName: slug, RemoteURL: "https://bitbucket.org/" + namespace + "/" + slug + ".git", DefaultBranch: &defaultBranch,
 	}
 }
@@ -864,7 +963,7 @@ func TestWorkflows_CreatePullRequestDerivesRepositoryAndSourceFromVerifiedTask(t
 	defaultBranch := "main"
 	host.repositories.repositories = []pluginsdk.Repository{{
 		ID: "repository-1", WorkspaceID: "workspace-1", Name: "repo", SourceType: "provider", ProviderID: "bitbucket",
-		ProviderHost: "bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-uuid",
+		ProviderHost: "bitbucket.org", ProviderScope: "https://bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-uuid",
 		RemoteURL: "https://bitbucket.org/workspace/repo.git", DefaultBranch: &defaultBranch,
 	}}
 	provider := &workflowProvider{pullRequest: testPullRequest()}
@@ -900,7 +999,7 @@ func TestWorkflows_CreatePullRequestUsesVerifiedSessionHeadBranch(t *testing.T) 
 	defaultBranch := "main"
 	host.repositories.repositories = []pluginsdk.Repository{{
 		ID: "repository-1", WorkspaceID: "workspace-1", Name: "repo", SourceType: "provider", ProviderID: "bitbucket",
-		ProviderHost: "bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-uuid",
+		ProviderHost: "bitbucket.org", ProviderScope: "https://bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-uuid",
 		RemoteURL: "https://bitbucket.org/workspace/repo.git", DefaultBranch: &defaultBranch,
 	}}
 	provider := &workflowProvider{pullRequest: testPullRequest()}
@@ -932,8 +1031,8 @@ func TestWorkflows_CreatePullRequestSelectsVerifiedRepositoryIDForMultiRepoTask(
 	}
 	defaultBranch := "main"
 	host.repositories.repositories = []pluginsdk.Repository{
-		{ID: "repository-1", WorkspaceID: "workspace-1", Name: "one", SourceType: "provider", ProviderID: "bitbucket", ProviderHost: "bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-one", RemoteURL: "https://bitbucket.org/workspace/one.git", DefaultBranch: &defaultBranch},
-		{ID: "repository-2", WorkspaceID: "workspace-1", Name: "two", SourceType: "provider", ProviderID: "bitbucket", ProviderHost: "bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-two", RemoteURL: "https://bitbucket.org/workspace/two.git", DefaultBranch: &defaultBranch},
+		{ID: "repository-1", WorkspaceID: "workspace-1", Name: "one", SourceType: "provider", ProviderID: "bitbucket", ProviderHost: "bitbucket.org", ProviderScope: "https://bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-one", RemoteURL: "https://bitbucket.org/workspace/one.git", DefaultBranch: &defaultBranch},
+		{ID: "repository-2", WorkspaceID: "workspace-1", Name: "two", SourceType: "provider", ProviderID: "bitbucket", ProviderHost: "bitbucket.org", ProviderScope: "https://bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-two", RemoteURL: "https://bitbucket.org/workspace/two.git", DefaultBranch: &defaultBranch},
 	}
 	provider := &workflowProvider{pullRequest: testPullRequest()}
 	workflows, err := NewWorkflows(host, staticResolver{provider: provider})
@@ -961,8 +1060,8 @@ func TestWorkflows_CreatePullRequestRejectsAmbiguousOrUnattachedVerifiedReposito
 		},
 	}
 	host.repositories.repositories = []pluginsdk.Repository{
-		{ID: "repository-1", WorkspaceID: "workspace-1", Name: "one", SourceType: "provider", ProviderID: "bitbucket", ProviderHost: "bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-one", RemoteURL: "https://bitbucket.org/workspace/one.git"},
-		{ID: "repository-2", WorkspaceID: "workspace-1", Name: "two", SourceType: "provider", ProviderID: "bitbucket", ProviderHost: "bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-two", RemoteURL: "https://bitbucket.org/workspace/two.git"},
+		{ID: "repository-1", WorkspaceID: "workspace-1", Name: "one", SourceType: "provider", ProviderID: "bitbucket", ProviderHost: "bitbucket.org", ProviderScope: "https://bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-one", RemoteURL: "https://bitbucket.org/workspace/one.git"},
+		{ID: "repository-2", WorkspaceID: "workspace-1", Name: "two", SourceType: "provider", ProviderID: "bitbucket", ProviderHost: "bitbucket.org", ProviderScope: "https://bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-two", RemoteURL: "https://bitbucket.org/workspace/two.git"},
 	}
 	workflows, err := NewWorkflows(host, staticResolver{provider: &workflowProvider{pullRequest: testPullRequest()}})
 	require.NoError(t, err)
@@ -1029,7 +1128,7 @@ func createPullRequestHost() *scopedConnectionHost {
 		}},
 		repositories: &repositoryReader{repositories: []pluginsdk.Repository{{
 			ID: "repository-1", WorkspaceID: "workspace-1", Name: "repo", SourceType: "provider", ProviderID: "bitbucket",
-			ProviderHost: "bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-uuid",
+			ProviderHost: "bitbucket.org", ProviderScope: "https://bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-uuid",
 			RemoteURL: "https://bitbucket.org/workspace/repo.git", DefaultBranch: &defaultBranch,
 		}}},
 	}
@@ -1043,7 +1142,7 @@ func TestWorkflows_CreatePullRequestRejectsManualRepositoryWithBitbucketFields(t
 	}
 	host.repositories.repositories = []pluginsdk.Repository{{
 		ID: "repository-1", WorkspaceID: "workspace-1", Name: "repo", SourceType: "manual", ProviderID: "bitbucket",
-		ProviderHost: "bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-uuid",
+		ProviderHost: "bitbucket.org", ProviderScope: "https://bitbucket.org", OwnerOrProject: "workspace", ProviderRepositoryID: "repo-uuid",
 		RemoteURL: "https://bitbucket.org/workspace/repo.git",
 	}}
 	workflows, err := NewWorkflows(host, staticResolver{provider: &workflowProvider{pullRequest: testPullRequest()}})
@@ -1263,7 +1362,7 @@ func TestReviewView_MarksCurrentViewerAndApproval(t *testing.T) {
 
 func testPullRequest() domain.PullRequest {
 	return domain.PullRequest{
-		Repository: domain.Repository{Namespace: "workspace", Slug: "repo"}, Number: 42, Title: "Fix auth", State: "OPEN", URL: "https://bitbucket.org/workspace/repo/pull-requests/42",
+		Repository: domain.Repository{ID: "repo-uuid", ProviderScope: "https://bitbucket.org", Namespace: "workspace", Slug: "repo"}, Number: 42, Title: "Fix auth", State: "OPEN", URL: "https://bitbucket.org/workspace/repo/pull-requests/42",
 		Capabilities: domain.Capabilities{domain.CapabilityPullRequests: true, domain.CapabilityReview: true, domain.CapabilityMerge: true},
 	}
 }
@@ -1310,6 +1409,7 @@ type workflowProvider struct {
 	searchQueries            []domain.PullRequestQuery
 	searchErr                error
 	pullRequestsByRepository map[string][]domain.PullRequest
+	pullRequestPages         map[string]map[string]domain.PullRequestPage
 	repositories             []domain.Repository
 	repositoryPages          map[string]domain.RepositoryPage
 	repositoryPageCursors    []string
@@ -1327,9 +1427,9 @@ func (p *workflowProvider) Capabilities() domain.Capabilities {
 func (p *workflowProvider) ListRepositories(_ context.Context, _ string, limit int) ([]domain.Repository, error) {
 	p.listRepositoryLimit = limit
 	if p.repositories != nil {
-		return p.repositories, nil
+		return testRepositoriesWithIdentity(p.repositories), nil
 	}
-	return []domain.Repository{p.pullRequest.Repository}, nil
+	return []domain.Repository{testRepositoryWithIdentity(p.pullRequest.Repository)}, nil
 }
 func (p *workflowProvider) ListRepositoriesPage(_ context.Context, _ string, query domain.RepositoryQuery) (domain.RepositoryPage, error) {
 	p.listRepositoryLimit = query.Limit
@@ -1339,12 +1439,13 @@ func (p *workflowProvider) ListRepositoriesPage(_ context.Context, _ string, que
 		if !found {
 			return domain.RepositoryPage{}, fmt.Errorf("unexpected repository cursor %q", query.Cursor)
 		}
+		page.Repositories = testRepositoriesWithIdentity(page.Repositories)
 		return page, nil
 	}
 	if p.repositories != nil {
-		return domain.RepositoryPage{Repositories: p.repositories}, nil
+		return domain.RepositoryPage{Repositories: testRepositoriesWithIdentity(p.repositories)}, nil
 	}
-	return domain.RepositoryPage{Repositories: []domain.Repository{p.pullRequest.Repository}}, nil
+	return domain.RepositoryPage{Repositories: []domain.Repository{testRepositoryWithIdentity(p.pullRequest.Repository)}}, nil
 }
 func (p *workflowProvider) InspectRepositoryURL(raw string) (domain.Repository, error) {
 	p.inspectedRepositoryURL = raw
@@ -1366,11 +1467,21 @@ func (p *workflowProvider) SearchPullRequests(_ context.Context, query domain.Pu
 		return nil, p.searchErr
 	}
 	if p.pullRequestsByRepository != nil {
-		return p.pullRequestsByRepository[query.Repository.Namespace+"/"+query.Repository.Slug], nil
+		return testPullRequestsWithIdentity(p.pullRequestsByRepository[query.Repository.Namespace+"/"+query.Repository.Slug]), nil
 	}
-	return []domain.PullRequest{p.pullRequest}, nil
+	return []domain.PullRequest{testPullRequestWithIdentity(p.pullRequest)}, nil
 }
 func (p *workflowProvider) SearchPullRequestsPage(ctx context.Context, query domain.PullRequestQuery) (domain.PullRequestPage, error) {
+	if p.pullRequestPages != nil {
+		p.searchQueries = append(p.searchQueries, query)
+		pages := p.pullRequestPages[query.Repository.Namespace+"/"+query.Repository.Slug]
+		page, found := pages[query.Cursor]
+		if !found {
+			return domain.PullRequestPage{}, fmt.Errorf("unexpected pull request cursor %q", query.Cursor)
+		}
+		page.PullRequests = testPullRequestsWithIdentity(page.PullRequests)
+		return page, nil
+	}
 	pullRequests, err := p.SearchPullRequests(ctx, query)
 	return domain.PullRequestPage{PullRequests: pullRequests}, err
 }
@@ -1379,7 +1490,7 @@ func (p *workflowProvider) GetPullRequest(_ context.Context, repository domain.R
 	if p.pullRequestsByRepository != nil {
 		for _, pullRequest := range p.pullRequestsByRepository[repository.Namespace+"/"+repository.Slug] {
 			if pullRequest.Number == number {
-				return pullRequest, nil
+				return testPullRequestWithIdentity(pullRequest), nil
 			}
 		}
 		return domain.PullRequest{}, errors.New("not found")
@@ -1387,21 +1498,55 @@ func (p *workflowProvider) GetPullRequest(_ context.Context, repository domain.R
 	if repository.Namespace != p.pullRequest.Repository.Namespace || repository.Slug != p.pullRequest.Repository.Slug || number != p.pullRequest.Number {
 		return domain.PullRequest{}, errors.New("not found")
 	}
-	return p.pullRequest, nil
+	return testPullRequestWithIdentity(p.pullRequest), nil
 }
 func (p *workflowProvider) CreatePullRequest(_ context.Context, input domain.CreatePullRequestInput) (domain.PullRequest, error) {
 	p.createdPullRequest = input
-	return p.pullRequest, nil
+	return testPullRequestWithIdentity(p.pullRequest), nil
 }
 func (p *workflowProvider) GetReview(context.Context, domain.Repository, int) (domain.Review, error) {
 	if p.reviewErr != nil {
 		return domain.Review{}, p.reviewErr
 	}
-	return domain.Review{PullRequest: p.pullRequest}, nil
+	return domain.Review{PullRequest: testPullRequestWithIdentity(p.pullRequest)}, nil
 }
 func (p *workflowProvider) ApplyReviewAction(context.Context, domain.PullRequest, domain.ReviewAction) (domain.PullRequest, error) {
 	p.actions++
-	return p.pullRequest, nil
+	return testPullRequestWithIdentity(p.pullRequest), nil
+}
+
+func testRepositoryWithIdentity(repository domain.Repository) domain.Repository {
+	if repository.ID == "" {
+		repository.ID = "test:" + repository.Namespace + "/" + repository.Slug
+	}
+	if repository.ProviderScope == "" {
+		repository.ProviderScope = "https://bitbucket.org"
+	}
+	return repository
+}
+
+func testRepositoriesWithIdentity(repositories []domain.Repository) []domain.Repository {
+	result := append([]domain.Repository(nil), repositories...)
+	for index := range result {
+		result[index] = testRepositoryWithIdentity(result[index])
+	}
+	return result
+}
+
+func testPullRequestWithIdentity(pullRequest domain.PullRequest) domain.PullRequest {
+	pullRequest.Repository = testRepositoryWithIdentity(pullRequest.Repository)
+	if pullRequest.SourceRepository.Namespace != "" {
+		pullRequest.SourceRepository = testRepositoryWithIdentity(pullRequest.SourceRepository)
+	}
+	return pullRequest
+}
+
+func testPullRequestsWithIdentity(pullRequests []domain.PullRequest) []domain.PullRequest {
+	result := append([]domain.PullRequest(nil), pullRequests...)
+	for index := range result {
+		result[index] = testPullRequestWithIdentity(result[index])
+	}
+	return result
 }
 func (p *workflowProvider) Health(context.Context) error {
 	p.healthCalls++

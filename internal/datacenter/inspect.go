@@ -89,7 +89,7 @@ func (c *Client) inspectedRepository(namespace, slug string) (domain.Repository,
 	if !validInspectionSegment(namespace) || !validInspectionSegment(slug) {
 		return domain.Repository{}, fmt.Errorf("invalid Bitbucket Data Center repository URL")
 	}
-	repository := domain.Repository{Namespace: namespace, Slug: slug}
+	repository := domain.Repository{ProviderScope: c.connection.Scope, Namespace: namespace, Slug: slug}
 	cloneURL, err := c.connection.CloneURL(repository)
 	if err != nil {
 		return domain.Repository{}, fmt.Errorf("invalid Bitbucket Data Center repository URL")

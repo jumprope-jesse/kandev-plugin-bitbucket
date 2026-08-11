@@ -24,11 +24,20 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 		if err := requireCapability(provider, domain.CapabilityPullRequests); err != nil {
 			return nil, err
 		}
-		pullRequests, err := provider.SearchPullRequests(ctx, domain.PullRequestQuery{Repository: repository, Text: input.Query, State: input.State, Limit: boundedLimit(input.Limit)})
+		page, err := searchPullRequestPage(ctx, provider, domain.PullRequestQuery{
+			Repository: repository,
+			Text:       input.Query,
+			State:      input.State,
+			Limit:      boundedLimit(input.Limit),
+			Cursor:     input.Cursor,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("search pull requests: %w", err)
 		}
-		return actionResponse(map[string]any{"pull_requests": pullRequestViews(pullRequests)})
+		return actionResponse(map[string]any{
+			"pull_requests": pullRequestViews(page.PullRequests),
+			"next_cursor":   page.NextCursor,
+		})
 	case "pullrequests.queue":
 		var input queuePullRequestsInput
 		if err := decodeAction(request.Body, &input); err != nil {
@@ -48,11 +57,21 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 		if err := requireCapability(provider, domain.CapabilityPullRequests); err != nil {
 			return nil, err
 		}
-		pullRequests, err := searchWorkspacePullRequests(ctx, provider, input.Query, input.State, boundedLimit(input.Limit))
+		page, err := searchWorkspacePullRequests(
+			ctx,
+			provider,
+			input.Query,
+			input.State,
+			boundedLimit(input.Limit),
+			input.Cursor,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("list pull request queue: %w", err)
 		}
-		return actionResponse(map[string]any{"pull_requests": pullRequestViews(pullRequests)})
+		return actionResponse(map[string]any{
+			"pull_requests": pullRequestViews(page.PullRequests),
+			"next_cursor":   page.NextCursor,
+		})
 	case "pullrequests.associations":
 		var input pullRequestAssociationsInput
 		if err := decodeAction(request.Body, &input); err != nil {

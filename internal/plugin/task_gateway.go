@@ -123,12 +123,13 @@ func taskReservation(metadata map[string]any) string {
 
 func remoteRepository(pr watches.PullRequest) (*pluginsdk.RemoteRepositoryDescriptor, error) {
 	repository := pr.Repository
-	if repository.ProviderID == "" || repository.ProviderHost == "" || repository.OwnerOrProject == "" || repository.ProviderRepositoryID == "" || repository.Name == "" || repository.CloneURL == "" {
+	if repository.ProviderID == "" || repository.ProviderHost == "" || repository.ProviderScope == "" || repository.OwnerOrProject == "" || repository.ProviderRepositoryID == "" || repository.Name == "" || repository.CloneURL == "" {
 		return nil, fmt.Errorf("pull request %q has incomplete repository descriptor", pr.Key)
 	}
 	return &pluginsdk.RemoteRepositoryDescriptor{
 		ProviderID:           repository.ProviderID,
 		ProviderHost:         repository.ProviderHost,
+		ProviderScope:        repository.ProviderScope,
 		OwnerOrProject:       repository.OwnerOrProject,
 		ProviderRepositoryID: repository.ProviderRepositoryID,
 		Name:                 repository.Name,
