@@ -54,6 +54,10 @@ type ConnectionSettings struct {
 	// generation switch. Keeping this with the credential-free pointer makes
 	// revocation retryable across process restarts without exposing plaintext.
 	PendingSecretRevocations []string `json:"pending_secret_revocations,omitempty"`
+	// Disconnected marks a fail-closed tombstone while secret revocation is
+	// pending. Load hides tombstones from providers, while Disconnect and Save
+	// retain enough generation metadata to finish cleanup after a restart.
+	Disconnected bool `json:"disconnected,omitempty"`
 }
 
 // ConnectionSettingsStore is the optional mutable part of ProviderResolver.
@@ -105,6 +109,17 @@ func NewConnectionResolver(host pluginsdk.Host) (*ConnectionResolver, error) {
 }
 
 func (r *ConnectionResolver) Load(ctx context.Context, workspaceID string) (ConnectionSettings, bool, error) {
+	settings, found, err := r.loadConnectionRecord(ctx, workspaceID)
+	if err != nil || !found {
+		return settings, found, err
+	}
+	if settings.Disconnected {
+		return ConnectionSettings{}, false, nil
+	}
+	return settings, true, nil
+}
+
+func (r *ConnectionResolver) loadConnectionRecord(ctx context.Context, workspaceID string) (ConnectionSettings, bool, error) {
 	if workspaceID == "" {
 		return ConnectionSettings{}, false, fmt.Errorf("workspace id is required")
 	}
@@ -119,6 +134,9 @@ func (r *ConnectionResolver) Load(ctx context.Context, workspaceID string) (Conn
 	if err := decodeState(value, &settings); err != nil {
 		return ConnectionSettings{}, false, fmt.Errorf("decode Bitbucket connection: %w", err)
 	}
+	if settings.Disconnected {
+		return settings, true, nil
+	}
 	if err := validateConnection(settings); err != nil {
 		return ConnectionSettings{}, false, fmt.Errorf("stored Bitbucket connection is invalid: %w", err)
 	}
@@ -131,9 +149,15 @@ func (r *ConnectionResolver) Save(ctx context.Context, workspaceID string, input
 	}
 	r.connectionMu.Lock()
 	defer r.connectionMu.Unlock()
-	previous, found, err := r.Load(ctx, workspaceID)
+	previous, found, err := r.loadConnectionRecord(ctx, workspaceID)
 	if err != nil {
 		return ConnectionSettings{}, err
+	}
+	if found && previous.Disconnected {
+		if err := r.finishDisconnect(ctx, workspaceID, previous); err != nil {
+			return ConnectionSettings{}, err
+		}
+		previous, found = ConnectionSettings{}, false
 	}
 	credentialGeneration, err := nextCredentialGeneration(previous, found)
 	if err != nil {
@@ -209,37 +233,56 @@ func (r *ConnectionResolver) validateTokenCredential(
 	return nil
 }
 
-// Disconnect removes every workspace-scoped connection artifact. Connection
-// state is deleted first, so all fresh provider and broker resolution fails
-// closed even if a later best-effort secret deletion reports an error.
+// Disconnect removes every workspace-scoped connection artifact. It first
+// commits a fail-closed tombstone so a secret deletion failure remains
+// retryable without allowing fresh provider or broker resolution.
 func (r *ConnectionResolver) Disconnect(ctx context.Context, workspaceID string) error {
 	if workspaceID == "" {
 		return fmt.Errorf("workspace id is required")
 	}
 	r.connectionMu.Lock()
 	defer r.connectionMu.Unlock()
-	value, found, err := r.host.GetState(ctx, "workspace", workspaceID, connectionStateKey)
+	settings, found, err := r.loadConnectionRecord(ctx, workspaceID)
 	if err != nil {
-		return fmt.Errorf("load Bitbucket connection: %w", err)
-	}
-	var settings ConnectionSettings
-	if found {
-		_ = decodeState(value, &settings)
+		return err
 	}
 	r.invalidateOAuthWorkspace(workspaceID)
+	if found && settings.Disconnected {
+		return r.finishDisconnect(ctx, workspaceID, settings)
+	}
+	keys := []string{
+		legacyConnectionSecretKey(workspaceID), legacyOAuthRegistrationSecretKey(workspaceID),
+		oauthStateSecretKey(workspaceID),
+	}
+	if found {
+		keys = append(keys, settings.PendingSecretRevocations...)
+		keys = append(keys,
+			connectionSecretKey(workspaceID, settings.CredentialGeneration),
+			oauthRegistrationSecretKey(workspaceID, settings.OAuthGeneration),
+		)
+		if settings.OAuthGeneration != 0 {
+			keys = append(keys, oauthCredentialSecretKey(workspaceID, settings.OAuthGeneration))
+		}
+	}
+	tombstone := ConnectionSettings{Disconnected: true, PendingSecretRevocations: uniqueSecretKeys(keys)}
+	value, err := encodeState(tombstone)
+	if err != nil {
+		return fmt.Errorf("encode Bitbucket disconnect state: %w", err)
+	}
+	if err := r.host.SetState(ctx, "workspace", workspaceID, connectionStateKey, value); err != nil {
+		return fmt.Errorf("save Bitbucket disconnect state: %w", err)
+	}
+	return r.finishDisconnect(ctx, workspaceID, tombstone)
+}
+
+func (r *ConnectionResolver) finishDisconnect(ctx context.Context, workspaceID string, tombstone ConnectionSettings) error {
+	if err := r.deleteSecrets(ctx, tombstone.PendingSecretRevocations...); err != nil {
+		return err
+	}
 	if err := r.host.DeleteState(ctx, "workspace", workspaceID, connectionStateKey); err != nil {
 		return fmt.Errorf("delete Bitbucket connection: %w", err)
 	}
-	keys := []string{
-		connectionSecretKey(workspaceID, settings.CredentialGeneration), legacyConnectionSecretKey(workspaceID),
-		oauthRegistrationSecretKey(workspaceID, settings.OAuthGeneration), legacyOAuthRegistrationSecretKey(workspaceID),
-		oauthStateSecretKey(workspaceID),
-	}
-	keys = append(keys, settings.PendingSecretRevocations...)
-	if settings.OAuthGeneration != 0 {
-		keys = append(keys, oauthCredentialSecretKey(workspaceID, settings.OAuthGeneration))
-	}
-	return r.deleteSecrets(ctx, keys...)
+	return nil
 }
 
 func nextCredentialGeneration(previous ConnectionSettings, found bool) (uint64, error) {
@@ -776,4 +819,16 @@ func (p repositorySearchProvider) ListRepositories(ctx context.Context, query st
 		}
 	}
 	return filtered, nil
+}
+
+func (p repositorySearchProvider) ListRepositoriesPage(
+	ctx context.Context,
+	_ string,
+	query domain.RepositoryQuery,
+) (domain.RepositoryPage, error) {
+	if pager, ok := p.Provider.(domain.RepositoryPager); ok {
+		return pager.ListRepositoriesPage(ctx, p.workspace, query)
+	}
+	repositories, err := p.ListRepositories(ctx, query.Text, query.Limit)
+	return domain.RepositoryPage{Repositories: repositories}, err
 }

@@ -156,6 +156,43 @@ func (c *Client) ListRepositories(ctx context.Context, _ string, limit int) ([]d
 	return c.searchRepositories(ctx, "", limit)
 }
 
+func (c *Client) ListRepositoriesPage(ctx context.Context, _ string, query domain.RepositoryQuery) (domain.RepositoryPage, error) {
+	if query.Limit <= 0 {
+		return domain.RepositoryPage{}, fmt.Errorf("repository limit must be positive")
+	}
+	start := 0
+	if query.Cursor != "" {
+		parsed, err := strconv.Atoi(query.Cursor)
+		if err != nil || parsed < 0 {
+			return domain.RepositoryPage{}, fmt.Errorf("invalid Data Center repository cursor")
+		}
+		start = parsed
+	}
+	endpoint := *c.connection.APIBase
+	endpoint.Path = path.Join(endpoint.Path, "repos")
+	endpoint.RawPath = ""
+	payload, err := c.repositoryPage(ctx, &endpoint, strings.TrimSpace(query.Text), start, min(query.Limit, maxPageLength))
+	if err != nil {
+		return domain.RepositoryPage{}, err
+	}
+	repositories := make([]domain.Repository, 0, len(payload.Values))
+	for _, value := range payload.Values {
+		repository, err := c.mapRepository(value)
+		if err != nil {
+			return domain.RepositoryPage{}, err
+		}
+		repositories = append(repositories, repository)
+	}
+	nextCursor := ""
+	if !payload.IsLastPage {
+		if payload.NextPageStart <= start {
+			return domain.RepositoryPage{}, fmt.Errorf("Data Center repository pagination did not advance")
+		}
+		nextCursor = strconv.Itoa(payload.NextPageStart)
+	}
+	return domain.RepositoryPage{Repositories: repositories, NextCursor: nextCursor}, nil
+}
+
 // SearchRepositories uses Data Center's case-insensitive name filter before
 // paging so matches outside the first repository page remain discoverable.
 func (c *Client) SearchRepositories(ctx context.Context, query string, limit int) ([]domain.Repository, error) {
@@ -166,33 +203,25 @@ func (c *Client) searchRepositories(ctx context.Context, query string, limit int
 	if limit <= 0 {
 		return nil, fmt.Errorf("repository limit must be positive")
 	}
-	endpoint := *c.connection.APIBase
-	endpoint.Path = path.Join(endpoint.Path, "repos")
-	endpoint.RawPath = ""
-	start := 0
 	var repositories []domain.Repository
+	cursor := ""
 	for len(repositories) < limit {
-		page, err := c.repositoryPage(ctx, &endpoint, query, start, min(limit, maxPageLength))
+		page, err := c.ListRepositoriesPage(ctx, "", domain.RepositoryQuery{
+			Text: query, Limit: min(limit, maxPageLength), Cursor: cursor,
+		})
 		if err != nil {
 			return nil, err
 		}
-		for _, payload := range page.Values {
-			repository, err := c.mapRepository(payload)
-			if err != nil {
-				return nil, err
-			}
+		for _, repository := range page.Repositories {
 			repositories = append(repositories, repository)
 			if len(repositories) == limit {
 				break
 			}
 		}
-		if page.IsLastPage || len(repositories) == limit {
+		if page.NextCursor == "" || len(repositories) == limit {
 			break
 		}
-		if page.NextPageStart <= start {
-			return nil, fmt.Errorf("Data Center repository pagination did not advance")
-		}
-		start = page.NextPageStart
+		cursor = page.NextCursor
 	}
 	return repositories, nil
 }
@@ -223,7 +252,7 @@ func (c *Client) Probe(ctx context.Context) (ProbeResult, error) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return ProbeResult{}, fmt.Errorf("Bitbucket Data Center version probe returned %s", response.Status)
+		return ProbeResult{}, providerResponseError(response)
 	}
 	body, err := readBounded(response.Body, c.maxResponseBytes)
 	if err != nil {
@@ -322,8 +351,9 @@ func (c *Client) repositoryPage(ctx context.Context, endpoint *url.URL, name str
 			continue
 		}
 		if response.StatusCode != http.StatusOK {
+			responseErr := providerResponseError(response)
 			response.Body.Close()
-			return repositoryPage{}, fmt.Errorf("Bitbucket Data Center repository request returned %s", response.Status)
+			return repositoryPage{}, responseErr
 		}
 		body, err := readBounded(response.Body, c.maxResponseBytes)
 		response.Body.Close()

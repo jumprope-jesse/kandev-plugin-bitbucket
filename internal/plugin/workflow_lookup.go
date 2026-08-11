@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"sort"
 	"strconv"
@@ -13,7 +14,7 @@ import (
 )
 
 func searchWorkspacePullRequests(ctx context.Context, provider domain.Provider, query, state string, limit int) ([]domain.PullRequest, error) {
-	repositories, err := provider.ListRepositories(ctx, "", limit)
+	repositories, err := listAllRepositories(ctx, provider, "")
 	if err != nil {
 		return nil, err
 	}
@@ -36,6 +37,40 @@ func searchWorkspacePullRequests(ctx context.Context, provider domain.Provider, 
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Key() < result[j].Key() })
 	return result, nil
+}
+
+func listRepositoryPage(
+	ctx context.Context,
+	provider domain.Provider,
+	query domain.RepositoryQuery,
+) (domain.RepositoryPage, error) {
+	if pager, ok := provider.(domain.RepositoryPager); ok {
+		return pager.ListRepositoriesPage(ctx, "", query)
+	}
+	repositories, err := provider.ListRepositories(ctx, query.Text, query.Limit)
+	return domain.RepositoryPage{Repositories: repositories}, err
+}
+
+func listAllRepositories(ctx context.Context, provider domain.Provider, query string) ([]domain.Repository, error) {
+	const pageLimit = 100
+	var repositories []domain.Repository
+	cursor := ""
+	seen := make(map[string]struct{})
+	for {
+		page, err := listRepositoryPage(ctx, provider, domain.RepositoryQuery{Text: query, Limit: pageLimit, Cursor: cursor})
+		if err != nil {
+			return nil, err
+		}
+		repositories = append(repositories, page.Repositories...)
+		if page.NextCursor == "" {
+			return repositories, nil
+		}
+		if _, repeated := seen[page.NextCursor]; repeated {
+			return nil, fmt.Errorf("repository pagination did not advance")
+		}
+		seen[page.NextCursor] = struct{}{}
+		cursor = page.NextCursor
+	}
 }
 
 func parsePullRequestKey(key string) (domain.Repository, int, bool) {

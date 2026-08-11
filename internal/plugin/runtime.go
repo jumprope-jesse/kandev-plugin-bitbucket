@@ -68,7 +68,11 @@ func (r *Runtime) HandleAction(ctx context.Context, request *pluginsdk.PluginAct
 	if err != nil {
 		return nil, err
 	}
-	return workflows.HandleAction(ctx, request)
+	response, err := workflows.HandleAction(ctx, request)
+	if err != nil {
+		return actionFailureResponse(err)
+	}
+	return response, nil
 }
 
 func (r *Runtime) HandleWebhook(ctx context.Context, request *pluginsdk.WebhookRequest) (*pluginsdk.WebhookResponse, error) {

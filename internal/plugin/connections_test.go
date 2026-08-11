@@ -578,6 +578,57 @@ func TestWorkflows_ConnectionDisconnectRevokesEveryCredential(t *testing.T) {
 	require.JSONEq(t, `{"state":"unconfigured","healthy":false}`, string(response.Body))
 }
 
+func TestConnectionResolver_DisconnectRetriesSecretRevocationAfterFailure(t *testing.T) {
+	host := newConnectionHost()
+	resolver, err := NewConnectionResolver(host)
+	require.NoError(t, err)
+	settings, err := resolver.Save(context.Background(), "workspace-1", ConnectionInput{
+		Product: domain.ProductCloud, CloudWorkspace: "acme", AuthMethod: "api_token",
+		AuthIdentity: "dev@example.test", Token: "api-token",
+	})
+	require.NoError(t, err)
+	tokenKey := connectionSecretKey("workspace-1", settings.CredentialGeneration)
+	host.deleteSecretErrKey = tokenKey
+
+	err = resolver.Disconnect(context.Background(), "workspace-1")
+	require.ErrorContains(t, err, "delete Bitbucket credential")
+	_, found, loadErr := resolver.Load(context.Background(), "workspace-1")
+	require.NoError(t, loadErr)
+	require.False(t, found, "a failed secret cleanup must still disable the connection")
+	require.Equal(t, "api-token", host.secrets[tokenKey])
+
+	host.deleteSecretErrKey = ""
+	require.NoError(t, resolver.Disconnect(context.Background(), "workspace-1"))
+	_, tokenFound := host.secrets[tokenKey]
+	require.False(t, tokenFound, "a retry must retain enough metadata to revoke the orphaned generation")
+	require.Empty(t, host.state)
+}
+
+func TestConnectionResolver_DisconnectPersistsLegacyCleanupWithoutConnectionState(t *testing.T) {
+	host := newConnectionHost()
+	legacyKey := legacyConnectionSecretKey("workspace-1")
+	host.secrets[legacyKey] = "legacy-token"
+	host.deleteSecretErrKey = legacyKey
+	resolver, err := NewConnectionResolver(host)
+	require.NoError(t, err)
+
+	err = resolver.Disconnect(context.Background(), "workspace-1")
+	require.ErrorContains(t, err, "delete Bitbucket credential")
+	_, found, loadErr := resolver.Load(context.Background(), "workspace-1")
+	require.NoError(t, loadErr)
+	require.False(t, found)
+	require.NotEmpty(t, host.state, "failed cleanup needs a retryable tombstone")
+
+	host.deleteSecretErrKey = ""
+	_, err = resolver.Save(context.Background(), "workspace-1", ConnectionInput{
+		Product: domain.ProductCloud, CloudWorkspace: "acme", AuthMethod: "api_token",
+		AuthIdentity: "dev@example.test", Token: "new-token",
+	})
+	require.NoError(t, err)
+	_, legacyFound := host.secrets[legacyKey]
+	require.False(t, legacyFound)
+}
+
 func TestConnectionResolver_BoundsPendingOAuthFlows(t *testing.T) {
 	host := newConnectionHost()
 	resolver, err := NewConnectionResolver(host)

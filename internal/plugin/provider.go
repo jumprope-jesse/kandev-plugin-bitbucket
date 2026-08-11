@@ -39,7 +39,21 @@ func (p *WatchProvider) ListPullRequests(ctx context.Context, watch watches.Watc
 		return nil, "", fmt.Errorf("Bitbucket connection does not support pull_requests")
 	}
 	if pager, ok := provider.(domain.PullRequestPager); ok {
-		return p.listPullRequestPage(ctx, provider, pager, watch)
+		items, cursor, err := p.listPullRequestPage(ctx, provider, pager, watch)
+		if err != nil {
+			return nil, "", err
+		}
+		identity, bound, err := connectionIdentityForResolver(ctx, p.resolver, watch.WorkspaceID)
+		if err != nil {
+			return nil, "", err
+		}
+		if bound && identity.Scope == "" {
+			return nil, "", fmt.Errorf("Bitbucket connection identity is unavailable")
+		}
+		for index := range items {
+			items[index].ConnectionScope = identity.Scope
+		}
+		return items, cursor, nil
 	}
 	return nil, "", fmt.Errorf("Bitbucket connection does not support restart-safe pull request paging")
 }
@@ -177,7 +191,7 @@ func filterRepositories(ctx context.Context, provider domain.Provider, filter wa
 		}
 		return repositories, nil
 	}
-	repositories, err := provider.ListRepositories(ctx, "", 100)
+	repositories, err := listAllRepositories(ctx, provider, "")
 	if err != nil {
 		return nil, fmt.Errorf("list watched repositories: %w", err)
 	}

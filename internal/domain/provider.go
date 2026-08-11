@@ -141,6 +141,25 @@ type PullRequestPage struct {
 	NextCursor   string
 }
 
+// RepositoryQuery carries server-side search and an opaque continuation.
+type RepositoryQuery struct {
+	Text   string
+	Limit  int
+	Cursor string
+}
+
+// RepositoryPage is a bounded provider page. Empty NextCursor is terminal.
+type RepositoryPage struct {
+	Repositories []Repository
+	NextCursor   string
+}
+
+// RepositoryPager is optional for adapter compatibility. Rich repository
+// discovery requires it so large installations are never silently truncated.
+type RepositoryPager interface {
+	ListRepositoriesPage(context.Context, string, RepositoryQuery) (RepositoryPage, error)
+}
+
 // PullRequestPager is optional while older adapters continue to implement
 // Provider. Watches require it so they can resume without lexical cursors.
 type PullRequestPager interface {

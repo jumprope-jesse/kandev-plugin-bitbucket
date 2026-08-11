@@ -53,16 +53,17 @@ type Preset struct {
 
 // PullRequest is a canonical provider item. Key must be stable across polls.
 type PullRequest struct {
-	Key          string           `json:"key"`
-	RepositoryID string           `json:"repository_id"`
-	Repository   RemoteRepository `json:"repository"`
-	Number       int64            `json:"number"`
-	Title        string           `json:"title"`
-	URL          string           `json:"url"`
-	State        string           `json:"state"`
-	Author       string           `json:"author"`
-	UpdatedAt    time.Time        `json:"updated_at"`
-	Attributes   map[string]any   `json:"attributes,omitempty"`
+	Key             string           `json:"key"`
+	RepositoryID    string           `json:"repository_id"`
+	Repository      RemoteRepository `json:"repository"`
+	Number          int64            `json:"number"`
+	Title           string           `json:"title"`
+	URL             string           `json:"url"`
+	State           string           `json:"state"`
+	Author          string           `json:"author"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+	Attributes      map[string]any   `json:"attributes,omitempty"`
+	ConnectionScope string           `json:"connection_scope,omitempty"`
 }
 
 // RemoteRepository is the complete, credential-free descriptor Kandev needs
@@ -84,16 +85,20 @@ type Reservation struct {
 	State     ReservationState `json:"state"`
 	TaskID    string           `json:"task_id,omitempty"`
 	CreatedAt time.Time        `json:"created_at"`
+	// Link preserves provider identity across a crash after task creation.
+	Link TaskLink `json:"link,omitempty"`
 }
 
 // TaskLink records a task associated with a watch. Only owned links are
 // eligible for reset/delete cascade cleanup.
 type TaskLink struct {
-	PullRequestKey string `json:"pull_request_key"`
-	TaskID         string `json:"task_id"`
-	Owned          bool   `json:"owned"`
-	ProviderID     string `json:"provider_id,omitempty"`
-	ProviderHost   string `json:"provider_host,omitempty"`
+	PullRequestKey  string `json:"pull_request_key"`
+	TaskID          string `json:"task_id"`
+	Owned           bool   `json:"owned"`
+	ProviderID      string `json:"provider_id,omitempty"`
+	ProviderHost    string `json:"provider_host,omitempty"`
+	ConnectionScope string `json:"connection_scope,omitempty"`
+	PullRequestURL  string `json:"pull_request_url,omitempty"`
 }
 
 type Watch struct {

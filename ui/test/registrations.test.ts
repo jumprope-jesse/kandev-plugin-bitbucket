@@ -228,7 +228,7 @@ describe("Bitbucket plugin registrations", () => {
     expect(styles).toContain(".bb-settings-disconnect { margin-left: auto;");
     expect(styles).toMatch(/@media \(max-width: 639px\)[\s\S]*\.bb-settings-actions > button[^}]*min-height: 2\.75rem/);
     expect(source).toContain("ui.DrawerContent");
-    expect(source).toMatch(/invokeAction\(action\.connectionDisconnect, disconnectConnectionInput\(/);
+    expect(source).toMatch(/invokeAction\(\s*action\.connectionDisconnect,\s*disconnectConnectionInput\(/);
     expect(source).toContain("setToken(\"\")");
     expect(source).toContain("setOAuthClientSecret(\"\")");
     expect(source).toContain("setMessage(\"Bitbucket disconnected. Stored credentials cleared.\")");
@@ -254,8 +254,8 @@ describe("Bitbucket plugin registrations", () => {
     expect(source).toContain("lastFetchedAt: queue.lastFetchedAt");
     expect(source).toContain("ui.IntegrationScopeBar");
     expect(source).toContain("ui.IntegrationSaveQueryDialog");
-    expect(source).toContain('host.storage.get("workspace"');
-    expect(source).toContain('host.storage.set("workspace"');
+    expect(source).toMatch(/host\.storage\.get\(\s*"workspace"/);
+    expect(source).toMatch(/host\.storage\.set\(\s*"workspace"/);
     expect(source).not.toContain("canSaveCurrent: false");
     expect(source).toContain("ui.IntegrationStartTaskMenu");
     expect(source).toContain("iconName: \"eye\"");

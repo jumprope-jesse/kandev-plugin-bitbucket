@@ -240,7 +240,11 @@ func (s *Service) Recover(ctx context.Context, workspaceID string) (int, error) 
 			reservation.TaskID = taskID
 			reservation.State = ReservationCreated
 			watch.Reservations[key] = reservation
-			watch.Links[key] = TaskLink{PullRequestKey: key, TaskID: taskID, Owned: true}
+			link := reservation.Link
+			link.PullRequestKey = key
+			link.TaskID = taskID
+			link.Owned = true
+			watch.Links[key] = link
 			recovered++
 		}
 		snapshot.Watches[id] = watch
@@ -365,7 +369,10 @@ func (s *Service) ensureTask(ctx context.Context, workspaceID string, snapshot S
 		if tokenErr != nil {
 			return false, false, snapshot, watch, fmt.Errorf("create reservation token: %w", tokenErr)
 		}
-		reservation = Reservation{Token: token, State: ReservationCreating, CreatedAt: s.now().UTC()}
+		reservation = Reservation{
+			Token: token, State: ReservationCreating, CreatedAt: s.now().UTC(),
+			Link: taskLinkForPullRequest(item, ""),
+		}
 		watch.Reservations[item.Key] = reservation
 		snapshot.Watches[watch.ID] = watch
 		if saveErr := s.repository.Save(ctx, workspaceID, snapshot); saveErr != nil {
@@ -396,11 +403,13 @@ func (s *Service) ensureTask(ctx context.Context, workspaceID string, snapshot S
 
 func taskLinkForPullRequest(item PullRequest, taskID string) TaskLink {
 	return TaskLink{
-		PullRequestKey: item.Key,
-		TaskID:         taskID,
-		Owned:          true,
-		ProviderID:     item.Repository.ProviderID,
-		ProviderHost:   item.Repository.ProviderHost,
+		PullRequestKey:  item.Key,
+		TaskID:          taskID,
+		Owned:           true,
+		ProviderID:      item.Repository.ProviderID,
+		ProviderHost:    item.Repository.ProviderHost,
+		ConnectionScope: item.ConnectionScope,
+		PullRequestURL:  item.URL,
 	}
 }
 
@@ -482,6 +491,10 @@ func (s *Service) Reset(ctx context.Context, workspaceID, watchID string) (Reset
 		}
 		delete(watch.Links, link.PullRequestKey)
 		delete(watch.Reservations, link.PullRequestKey)
+		snapshot.Watches[watch.ID] = watch
+		if err := s.repository.Save(ctx, workspaceID, snapshot); err != nil {
+			return ResetResult{DeletedTaskIDs: deletedTaskIDs}, fmt.Errorf("save reset progress: %w", err)
+		}
 	}
 	watch.Cursor = ""
 	watch.LastPolled = time.Time{}
@@ -518,6 +531,12 @@ func (s *Service) Delete(ctx context.Context, workspaceID, watchID string) (Rese
 		deletedTaskIDs = appendUnique(deletedTaskIDs, deleted...)
 		if deleteErr != nil {
 			return ResetResult{DeletedTaskIDs: deletedTaskIDs}, fmt.Errorf("delete owned task tree %q: %w", link.TaskID, deleteErr)
+		}
+		delete(watch.Links, link.PullRequestKey)
+		delete(watch.Reservations, link.PullRequestKey)
+		snapshot.Watches[watch.ID] = watch
+		if err := s.repository.Save(ctx, workspaceID, snapshot); err != nil {
+			return ResetResult{DeletedTaskIDs: deletedTaskIDs}, fmt.Errorf("save delete progress: %w", err)
 		}
 	}
 	delete(snapshot.Watches, watchID)

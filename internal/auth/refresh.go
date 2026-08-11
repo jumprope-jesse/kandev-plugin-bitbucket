@@ -104,11 +104,15 @@ func NewRefresher(httpClient *http.Client, now func() time.Time) *Refresher {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
 	}
+	safeClient := *httpClient
+	safeClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
 	if now == nil {
 		now = time.Now
 	}
 	return &Refresher{
-		httpClient: httpClient,
+		httpClient: &safeClient,
 		now:        now,
 		inFlight:   make(map[string]*refreshCall),
 		completed:  make(map[string]completedRefresh),

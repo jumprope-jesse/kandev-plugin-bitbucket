@@ -142,6 +142,55 @@ func (c *Client) ListRepositories(ctx context.Context, workspace string, limit i
 	return c.listRepositories(ctx, workspace, "", limit)
 }
 
+// ListRepositoriesPage performs one server-filtered page request. Cursor is
+// opaque to callers and revalidated against the configured API origin/path.
+func (c *Client) ListRepositoriesPage(ctx context.Context, workspace string, query domain.RepositoryQuery) (domain.RepositoryPage, error) {
+	if !isPathSegment(workspace) || query.Limit <= 0 {
+		return domain.RepositoryPage{}, fmt.Errorf("workspace and positive repository limit are required")
+	}
+	endpoint := *c.apiBase
+	endpoint.Path = path.Join(endpoint.Path, "repositories", workspace)
+	endpoint.RawPath = ""
+	if query.Cursor == "" {
+		values := endpoint.Query()
+		values.Set("pagelen", fmt.Sprintf("%d", min(query.Limit, maxPageLength)))
+		if search := strings.TrimSpace(query.Text); search != "" {
+			values.Set("q", `name ~ "`+escapeQueryLiteral(search)+`"`)
+		}
+		endpoint.RawQuery = values.Encode()
+	} else {
+		parsed, err := c.nextURL(&endpoint, query.Cursor)
+		if err != nil || parsed == nil || parsed.Path != endpoint.Path {
+			return domain.RepositoryPage{}, fmt.Errorf("invalid Bitbucket Cloud repository cursor")
+		}
+		endpoint = *parsed
+	}
+	payload, err := c.repositoryPage(ctx, &endpoint)
+	if err != nil {
+		return domain.RepositoryPage{}, err
+	}
+	repositories := make([]domain.Repository, 0, min(len(payload.Values), query.Limit))
+	for _, value := range payload.Values {
+		mapped, err := mapRepository(workspace, value)
+		if err != nil {
+			return domain.RepositoryPage{}, err
+		}
+		repositories = append(repositories, mapped)
+		if len(repositories) == query.Limit {
+			break
+		}
+	}
+	next, err := c.nextURL(&endpoint, payload.Next)
+	if err != nil {
+		return domain.RepositoryPage{}, err
+	}
+	nextCursor := ""
+	if next != nil {
+		nextCursor = next.String()
+	}
+	return domain.RepositoryPage{Repositories: repositories, NextCursor: nextCursor}, nil
+}
+
 // SearchRepositories delegates filtering to Bitbucket before following its
 // opaque cursor. This keeps matches beyond the first UI page discoverable.
 func (c *Client) SearchRepositories(ctx context.Context, workspace, query string, limit int) ([]domain.Repository, error) {
@@ -156,36 +205,25 @@ func (c *Client) listRepositories(ctx context.Context, workspace, search string,
 		return nil, fmt.Errorf("repository limit must be positive")
 	}
 
-	endpoint := *c.apiBase
-	endpoint.Path = path.Join(endpoint.Path, "repositories", workspace)
-	endpoint.RawPath = ""
-	query := endpoint.Query()
-	query.Set("pagelen", fmt.Sprintf("%d", min(limit, maxPageLength)))
-	if search = strings.TrimSpace(search); search != "" {
-		query.Set("q", `name ~ "`+escapeQueryLiteral(search)+`"`)
-	}
-	endpoint.RawQuery = query.Encode()
-
 	var repositories []domain.Repository
-	for next := &endpoint; next != nil && len(repositories) < limit; {
-		page, err := c.repositoryPage(ctx, next)
+	cursor := ""
+	for len(repositories) < limit {
+		page, err := c.ListRepositoriesPage(ctx, workspace, domain.RepositoryQuery{
+			Text: search, Limit: min(limit, maxPageLength), Cursor: cursor,
+		})
 		if err != nil {
 			return nil, err
 		}
-		for _, repository := range page.Values {
-			mapped, err := mapRepository(workspace, repository)
-			if err != nil {
-				return nil, err
-			}
-			repositories = append(repositories, mapped)
+		for _, repository := range page.Repositories {
+			repositories = append(repositories, repository)
 			if len(repositories) == limit {
 				break
 			}
 		}
-		next, err = c.nextURL(next, page.Next)
-		if err != nil {
-			return nil, err
+		if page.NextCursor == "" {
+			break
 		}
+		cursor = page.NextCursor
 	}
 	return repositories, nil
 }
@@ -243,8 +281,9 @@ func (c *Client) repositoryPage(ctx context.Context, endpoint *url.URL) (reposit
 			continue
 		}
 		if response.StatusCode != http.StatusOK {
+			responseErr := providerResponseError(response)
 			response.Body.Close()
-			return repositoryPage{}, fmt.Errorf("Bitbucket Cloud repository request returned %s", response.Status)
+			return repositoryPage{}, responseErr
 		}
 		body, err := readBounded(response.Body, c.maxResponseBytes)
 		response.Body.Close()

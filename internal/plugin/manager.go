@@ -20,9 +20,15 @@ type Manager struct {
 	watches  *watches.Service
 	events   watches.EventSink
 	schedule domain.HealthSchedule
+	now      func() time.Time
 
-	mu       sync.Mutex
-	failures int
+	mu               sync.Mutex
+	workspaceBackoff map[string]workspacePollBackoff
+}
+
+type workspacePollBackoff struct {
+	failures    int
+	nextAttempt time.Time
 }
 
 func NewManager(host pluginsdk.Host, resolver ProviderResolver, watchService *watches.Service) (*Manager, error) {
@@ -33,7 +39,11 @@ func NewManager(host pluginsdk.Host, resolver ProviderResolver, watchService *wa
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{host: host, resolver: resolver, watches: watchService, events: events, schedule: domain.NewHealthSchedule(nil)}, nil
+	return &Manager{
+		host: host, resolver: resolver, watches: watchService, events: events,
+		schedule: domain.NewHealthSchedule(nil), now: time.Now,
+		workspaceBackoff: make(map[string]workspacePollBackoff),
+	}, nil
 }
 
 // Run performs an immediate poll, then uses the adapter's bounded health
@@ -41,15 +51,8 @@ func NewManager(host pluginsdk.Host, resolver ProviderResolver, watchService *wa
 // from a caller-owned request context.
 func (m *Manager) Run(ctx context.Context) {
 	for {
-		err := m.PollAll(ctx)
-		m.mu.Lock()
-		if err == nil {
-			m.failures = 0
-		} else {
-			m.failures++
-		}
-		delay := m.schedule.Next(m.failures)
-		m.mu.Unlock()
+		_ = m.pollScheduled(ctx)
+		delay := m.schedule.Next(0)
 
 		timer := time.NewTimer(delay)
 		select {
@@ -62,6 +65,14 @@ func (m *Manager) Run(ctx context.Context) {
 }
 
 func (m *Manager) PollAll(ctx context.Context) error {
+	return m.pollWorkspaces(ctx, false)
+}
+
+func (m *Manager) pollScheduled(ctx context.Context) error {
+	return m.pollWorkspaces(ctx, true)
+}
+
+func (m *Manager) pollWorkspaces(ctx context.Context, scheduled bool) error {
 	page := pluginsdk.Page{Limit: 100}
 	var firstErr error
 	for {
@@ -73,7 +84,14 @@ func (m *Manager) PollAll(ctx context.Context) error {
 			if workspace.ID == "" {
 				continue
 			}
-			if err := m.PollWorkspace(ctx, workspace.ID); err != nil {
+			if scheduled && !m.workspacePollDue(workspace.ID) {
+				continue
+			}
+			err := m.PollWorkspace(ctx, workspace.ID)
+			if scheduled {
+				m.recordWorkspacePoll(workspace.ID, err)
+			}
+			if err != nil {
 				// Continue polling other workspaces. Per-workspace errors are
 				// emitted with a safe, namespaced event below.
 				m.emit(ctx, "health.unavailable", map[string]any{"workspace_id": workspace.ID})
@@ -87,6 +105,25 @@ func (m *Manager) PollAll(ctx context.Context) error {
 		}
 		page.Cursor = info.NextCursor
 	}
+}
+
+func (m *Manager) workspacePollDue(workspaceID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return !m.now().Before(m.workspaceBackoff[workspaceID].nextAttempt)
+}
+
+func (m *Manager) recordWorkspacePoll(workspaceID string, pollErr error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := m.workspaceBackoff[workspaceID]
+	if pollErr == nil {
+		state.failures = 0
+	} else {
+		state.failures++
+	}
+	state.nextAttempt = m.now().Add(m.schedule.Next(state.failures))
+	m.workspaceBackoff[workspaceID] = state
 }
 
 // PollWorkspace first restores crash-safe reservations, then checks health,

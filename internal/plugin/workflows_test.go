@@ -98,6 +98,34 @@ func TestWorkflows_ComposerSearchDoesNotUseCandidateLimitAsRepositoryLimit(t *te
 	require.Equal(t, 100, provider.listRepositoryLimit)
 }
 
+func TestWorkflows_RepositoryDiscoveryReturnsOpaqueContinuation(t *testing.T) {
+	first := domain.Repository{Namespace: "workspace", Slug: "one"}
+	second := domain.Repository{Namespace: "workspace", Slug: "two"}
+	provider := &workflowProvider{repositoryPages: map[string]domain.RepositoryPage{
+		"":       {Repositories: []domain.Repository{first}, NextCursor: "page-2"},
+		"page-2": {Repositories: []domain.Repository{second}},
+	}}
+	workflows, err := NewWorkflows(newConnectionHost(), staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	firstResponse, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "repositories.list",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body:      []byte(`{"query":"work","limit":25}`),
+	})
+	require.NoError(t, err)
+	require.Contains(t, string(firstResponse.Body), `"next_cursor":"page-2"`)
+
+	secondResponse, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "repositories.list",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body:      []byte(`{"query":"work","limit":25,"cursor":"page-2"}`),
+	})
+	require.NoError(t, err)
+	require.Contains(t, string(secondResponse.Body), `"name":"two"`)
+	require.Equal(t, []string{"", "page-2"}, provider.repositoryPageCursors)
+}
+
 func TestPullRequestViewIncludesCanonicalAuthor(t *testing.T) {
 	pullRequest := testPullRequest()
 	pullRequest.Author = "cloud-account-ada"
@@ -210,6 +238,39 @@ func TestWorkflows_PullRequestAssociationsHidesLinksFromPreviousConnection(t *te
 	require.JSONEq(t, `{"associations":[]}`, string(response.Body))
 }
 
+func TestWorkflows_PullRequestAssociationsHidesLinksFromPreviousDataCenterContext(t *testing.T) {
+	tasks := &associationTaskReader{pages: map[string]associationTaskPage{
+		"": {tasks: []pluginsdk.Task{{ID: "task-1", Title: "Old context"}}},
+	}}
+	resolver := &connectionSettingsResolver{
+		staticResolver: staticResolver{provider: &workflowProvider{}},
+		settings: ConnectionSettings{
+			Product: domain.ProductDataCenter,
+			BaseURL: "https://bitbucket.example.test/current",
+		},
+		found: true,
+	}
+	workflows, err := NewWorkflows(
+		&associationHost{connectionHost: newConnectionHost(), tasks: tasks},
+		resolver,
+	)
+	require.NoError(t, err)
+	_, err = workflows.links.Link(context.Background(), "task-1", PullRequestLink{
+		Key: "PROJECT/repo#42", RepositoryID: "PROJECT/repo",
+		URL: "https://bitbucket.example.test/previous/projects/PROJECT/repos/repo/pull-requests/42", Number: 42,
+		Product: domain.ProductDataCenter, Host: "bitbucket.example.test",
+	})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.associations",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{"associations":[]}`, string(response.Body))
+}
+
 func TestWorkflows_PullRequestAssociationsHidesWatchLinksFromPreviousConnection(t *testing.T) {
 	tasks := &associationTaskReader{pages: map[string]associationTaskPage{
 		"": {tasks: []pluginsdk.Task{{ID: "watch-task", Title: "Old watch"}}},
@@ -242,6 +303,83 @@ func TestWorkflows_PullRequestAssociationsHidesWatchLinksFromPreviousConnection(
 
 	require.NoError(t, err)
 	require.JSONEq(t, `{"associations":[]}`, string(response.Body))
+}
+
+func TestWorkflows_PullRequestAssociationsAcceptsCurrentOriginWatchLink(t *testing.T) {
+	tasks := &associationTaskReader{pages: map[string]associationTaskPage{
+		"": {tasks: []pluginsdk.Task{{ID: "watch-task", Title: "Current watch"}}},
+	}}
+	resolver := &connectionSettingsResolver{
+		staticResolver: staticResolver{provider: &workflowProvider{}},
+		settings:       ConnectionSettings{Product: domain.ProductCloud},
+		found:          true,
+	}
+	workflows, err := NewWorkflows(
+		&associationHost{connectionHost: newConnectionHost(), tasks: tasks},
+		resolver,
+	)
+	require.NoError(t, err)
+	_, err = workflows.watches.Create(context.Background(), watches.Watch{
+		ID: "watch-1", WorkspaceID: "workspace-1",
+		Links: map[string]watches.TaskLink{
+			"workspace/repo#42": {
+				PullRequestKey: "workspace/repo#42", TaskID: "watch-task", Owned: true,
+				ProviderID: "bitbucket", ProviderHost: "https://bitbucket.org",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.associations",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{"associations":[{"review_key":"workspace/repo#42","task_id":"watch-task","task_title":"Current watch"}]}`, string(response.Body))
+}
+
+func TestWorkflows_PullRequestAssociationsScopesWatchLinksToDataCenterContext(t *testing.T) {
+	tasks := &associationTaskReader{pages: map[string]associationTaskPage{
+		"": {tasks: []pluginsdk.Task{{ID: "old-task", Title: "Old context"}, {ID: "current-task", Title: "Current context"}}},
+	}}
+	resolver := &connectionSettingsResolver{
+		staticResolver: staticResolver{provider: &workflowProvider{}},
+		settings: ConnectionSettings{
+			Product: domain.ProductDataCenter,
+			BaseURL: "https://bitbucket.example.test/current",
+		},
+		found: true,
+	}
+	workflows, err := NewWorkflows(
+		&associationHost{connectionHost: newConnectionHost(), tasks: tasks},
+		resolver,
+	)
+	require.NoError(t, err)
+	_, err = workflows.watches.Create(context.Background(), watches.Watch{
+		ID: "watch-1", WorkspaceID: "workspace-1",
+		Links: map[string]watches.TaskLink{
+			"PROJECT/old#41": {
+				PullRequestKey: "PROJECT/old#41", TaskID: "old-task", Owned: true,
+				ProviderID: "bitbucket", ProviderHost: "https://bitbucket.example.test",
+				ConnectionScope: "https://bitbucket.example.test/previous",
+			},
+			"PROJECT/current#42": {
+				PullRequestKey: "PROJECT/current#42", TaskID: "current-task", Owned: true,
+				ProviderID: "bitbucket", ProviderHost: "https://bitbucket.example.test",
+				ConnectionScope: "https://bitbucket.example.test/current",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.associations",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{"associations":[{"review_key":"PROJECT/current#42","task_id":"current-task","task_title":"Current context"}]}`, string(response.Body))
 }
 
 func TestWorkflows_WatchOwnedLinksAppearInTaskAndWorkspaceAssociations(t *testing.T) {
@@ -345,6 +483,24 @@ func TestWorkflows_TaskScopedExplicitGetRequiresManualOrWatchAssociation(t *test
 		Body: []byte(`{"review_key":"workspace/repo#42"}`),
 	})
 	require.NoError(t, err, "workspace-scoped inspection remains available")
+}
+
+func TestWorkflows_PullRequestGetDoesNotMasqueradeReviewFailureAsEmptyData(t *testing.T) {
+	provider := &workflowProvider{
+		pullRequest: testPullRequest(),
+		reviewErr:   errors.New("diff endpoint unavailable"),
+	}
+	workflows, err := NewWorkflows(newConnectionHost(), staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.inspect",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body:      []byte(`{"review_key":"workspace/repo#42"}`),
+	})
+
+	require.ErrorContains(t, err, "get pull request review")
+	require.Nil(t, response)
 }
 
 func TestWorkflows_TaskGetAutoLinksOpenPullRequestForVerifiedCheckoutBranch(t *testing.T) {
@@ -1144,6 +1300,7 @@ type workflowProvider struct {
 	capabilities             domain.Capabilities
 	credentialErr            error
 	healthErr                error
+	healthCalls              int
 	actions                  int
 	createdPullRequest       domain.CreatePullRequestInput
 	inspectedRepositoryURL   string
@@ -1154,7 +1311,10 @@ type workflowProvider struct {
 	searchErr                error
 	pullRequestsByRepository map[string][]domain.PullRequest
 	repositories             []domain.Repository
+	repositoryPages          map[string]domain.RepositoryPage
+	repositoryPageCursors    []string
 	listRepositoryLimit      int
+	reviewErr                error
 }
 
 func (p *workflowProvider) Capabilities() domain.Capabilities {
@@ -1170,6 +1330,21 @@ func (p *workflowProvider) ListRepositories(_ context.Context, _ string, limit i
 		return p.repositories, nil
 	}
 	return []domain.Repository{p.pullRequest.Repository}, nil
+}
+func (p *workflowProvider) ListRepositoriesPage(_ context.Context, _ string, query domain.RepositoryQuery) (domain.RepositoryPage, error) {
+	p.listRepositoryLimit = query.Limit
+	p.repositoryPageCursors = append(p.repositoryPageCursors, query.Cursor)
+	if p.repositoryPages != nil {
+		page, found := p.repositoryPages[query.Cursor]
+		if !found {
+			return domain.RepositoryPage{}, fmt.Errorf("unexpected repository cursor %q", query.Cursor)
+		}
+		return page, nil
+	}
+	if p.repositories != nil {
+		return domain.RepositoryPage{Repositories: p.repositories}, nil
+	}
+	return domain.RepositoryPage{Repositories: []domain.Repository{p.pullRequest.Repository}}, nil
 }
 func (p *workflowProvider) InspectRepositoryURL(raw string) (domain.Repository, error) {
 	p.inspectedRepositoryURL = raw
@@ -1219,13 +1394,19 @@ func (p *workflowProvider) CreatePullRequest(_ context.Context, input domain.Cre
 	return p.pullRequest, nil
 }
 func (p *workflowProvider) GetReview(context.Context, domain.Repository, int) (domain.Review, error) {
+	if p.reviewErr != nil {
+		return domain.Review{}, p.reviewErr
+	}
 	return domain.Review{PullRequest: p.pullRequest}, nil
 }
 func (p *workflowProvider) ApplyReviewAction(context.Context, domain.PullRequest, domain.ReviewAction) (domain.PullRequest, error) {
 	p.actions++
 	return p.pullRequest, nil
 }
-func (p *workflowProvider) Health(context.Context) error { return p.healthErr }
+func (p *workflowProvider) Health(context.Context) error {
+	p.healthCalls++
+	return p.healthErr
+}
 func (p *workflowProvider) ResolveGitCredential(context.Context) (domain.GitCredential, error) {
 	return domain.GitCredential{}, p.credentialErr
 }

@@ -118,3 +118,32 @@ func TestRefresherKeepsCompletedRefreshesGenerationKeyed(t *testing.T) {
 	require.Equal(t, first, again)
 	require.Equal(t, int32(2), calls.Load())
 }
+
+func TestRefresherDoesNotForwardOAuthSecretsThroughRedirects(t *testing.T) {
+	var redirectedCalls atomic.Int32
+	redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectedCalls.Add(1)
+		require.NoError(t, r.ParseForm())
+		require.NotEmpty(t, r.Form.Get("refresh_token"), "the default client would forward this secret on a 307")
+		_, _ = w.Write([]byte(`{"access_token":"leaked-access","refresh_token":"leaked-refresh","expires_in":3600}`))
+	}))
+	defer redirectTarget.Close()
+
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Redirect(w, &http.Request{}, redirectTarget.URL, http.StatusTemporaryRedirect)
+	}))
+	defer tokenServer.Close()
+	tokenURL, err := url.Parse(tokenServer.URL)
+	require.NoError(t, err)
+
+	refresher := NewRefresher(tokenServer.Client(), time.Now)
+	_, err = refresher.Refresh(
+		context.Background(),
+		CredentialScope{WorkspaceID: "workspace-a", Generation: 3},
+		OAuthRegistration{ClientID: "client-id", ClientSecret: "client-secret", TokenURL: tokenURL},
+		"old-refresh",
+	)
+
+	require.ErrorContains(t, err, "307 Temporary Redirect")
+	require.Zero(t, redirectedCalls.Load())
+}

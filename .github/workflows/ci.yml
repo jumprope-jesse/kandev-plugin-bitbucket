@@ -31,7 +31,7 @@ jobs:
           repository: kdlbs/kandev
           # Pre-release contract pin. Replace this with the released host tag
           # through manifest.min_kandev_version before publishing the plugin.
-          ref: cb4d37415d526753651ad0731419915757e2be3e
+          ref: 359c9b5483c43f3524fcdf0cd2c7e98738adf3bb
           path: kandev
           sparse-checkout: apps/backend
 

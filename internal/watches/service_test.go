@@ -115,7 +115,14 @@ func TestRecover_FinalizesCreatingReservationAfterRestart(t *testing.T) {
 			"watch-1": {
 				ID: "watch-1", WorkspaceID: "workspace-1", Status: StatusRunning,
 				Reservations: map[string]Reservation{
-					"repo-1#42": {Token: "created-before-restart", State: ReservationCreating},
+					"repo-1#42": {
+						Token: "created-before-restart", State: ReservationCreating,
+						Link: TaskLink{
+							PullRequestKey: "repo-1#42", ProviderID: "bitbucket",
+							ProviderHost:    "https://bitbucket.example.test",
+							ConnectionScope: "https://bitbucket.example.test/context",
+						},
+					},
 				},
 			},
 		}},
@@ -131,6 +138,8 @@ func TestRecover_FinalizesCreatingReservationAfterRestart(t *testing.T) {
 
 	watch := repository.snapshots["workspace-1"].Watches["watch-1"]
 	require.Equal(t, "task-created-before-restart", watch.Links["repo-1#42"].TaskID)
+	require.Equal(t, "bitbucket", watch.Links["repo-1#42"].ProviderID)
+	require.Equal(t, "https://bitbucket.example.test/context", watch.Links["repo-1#42"].ConnectionScope)
 	require.Equal(t, ReservationCreated, watch.Reservations["repo-1#42"].State)
 }
 
@@ -345,13 +354,47 @@ func TestReset_ReturnsPartialDeletionProgressAndKeepsLinkRetryable(t *testing.T)
 	require.Contains(t, repository.snapshots["workspace-1"].Watches["watch-1"].Links, "owned")
 }
 
-type memoryRepository struct{ snapshots map[string]Snapshot }
+func TestReset_PersistsEachCompletedRootBeforeDeletingTheNext(t *testing.T) {
+	repository := &memoryRepository{snapshots: map[string]Snapshot{"workspace-1": {Watches: map[string]Watch{
+		"watch-1": {ID: "watch-1", WorkspaceID: "workspace-1", Links: map[string]TaskLink{
+			"repo#1": {PullRequestKey: "repo#1", TaskID: "root-1", Owned: true},
+			"repo#2": {PullRequestKey: "repo#2", TaskID: "root-2", Owned: true},
+		}},
+	}}}}
+	tasks := &recordingTasks{deleteByTask: map[string]taskDeleteResult{
+		"root-1": {deleted: []string{"root-1"}},
+		"root-2": {err: errors.New("second root unavailable")},
+	}}
+	service, err := NewService(Options{Repository: repository, Provider: staticProvider{}, Tasks: tasks})
+	require.NoError(t, err)
+
+	result, err := service.Reset(context.Background(), "workspace-1", "watch-1")
+
+	require.ErrorContains(t, err, "second root unavailable")
+	require.Equal(t, []string{"root-1"}, result.DeletedTaskIDs)
+	watch := repository.snapshots["workspace-1"].Watches["watch-1"]
+	require.NotContains(t, watch.Links, "repo#1")
+	require.Contains(t, watch.Links, "repo#2")
+	require.Equal(t, 1, repository.saveCalls, "completed root progress must be durable before the next delete")
+
+	tasks.deleteByTask["root-2"] = taskDeleteResult{deleted: []string{"root-2"}}
+	result, err = service.Reset(context.Background(), "workspace-1", "watch-1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"root-2"}, result.DeletedTaskIDs)
+	require.Equal(t, []string{"root-1", "root-2", "root-2"}, tasks.deleted)
+}
+
+type memoryRepository struct {
+	snapshots map[string]Snapshot
+	saveCalls int
+}
 
 func (r *memoryRepository) Load(_ context.Context, workspaceID string) (Snapshot, error) {
 	return r.snapshots[workspaceID], nil
 }
 
 func (r *memoryRepository) Save(_ context.Context, workspaceID string, snapshot Snapshot) error {
+	r.saveCalls++
 	r.snapshots[workspaceID] = snapshot
 	return nil
 }
@@ -395,6 +438,12 @@ type recordingTasks struct {
 	deleted                 []string
 	createErr               error
 	deleteErr               error
+	deleteByTask            map[string]taskDeleteResult
+}
+
+type taskDeleteResult struct {
+	deleted []string
+	err     error
 }
 
 func (t *recordingTasks) FindByReservation(context.Context, string, string) (string, bool, error) {
@@ -419,6 +468,9 @@ func (t *recordingTasks) PreviewOwned(_ context.Context, taskID string) ([]strin
 
 func (t *recordingTasks) DeleteOwned(_ context.Context, taskID string) ([]string, error) {
 	t.deleted = append(t.deleted, taskID)
+	if result, found := t.deleteByTask[taskID]; found {
+		return result.deleted, result.err
+	}
 	return t.deletedTree, t.deleteErr
 }
 

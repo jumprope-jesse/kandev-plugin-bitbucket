@@ -26,6 +26,9 @@ type PullRequestLink struct {
 	// Older records are upgraded from their canonical pull request URL on read.
 	Product domain.Product `json:"product,omitempty"`
 	Host    string         `json:"host,omitempty"`
+	// ConnectionScope includes the Data Center context path. Host alone is
+	// insufficient when one origin serves multiple Bitbucket installations.
+	ConnectionScope string `json:"connection_scope,omitempty"`
 }
 
 type LinkStore struct {
@@ -240,6 +243,16 @@ func normalizePullRequestLink(link PullRequestLink) (PullRequestLink, bool, erro
 	}
 	if link.Product != domain.ProductCloud && link.Product != domain.ProductDataCenter {
 		return PullRequestLink{}, false, fmt.Errorf("unsupported Bitbucket product")
+	}
+	if link.ConnectionScope != "" {
+		scope, err := normalizeConnectionScope(link.ConnectionScope)
+		if err != nil || !urlWithinConnectionScope(link.URL, scope) {
+			return PullRequestLink{}, false, fmt.Errorf("pull request URL is outside its Bitbucket connection scope")
+		}
+		if link.ConnectionScope != scope {
+			link.ConnectionScope = scope
+			changed = true
+		}
 	}
 	return link, changed, nil
 }

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/kandev/kandev/pkg/pluginsdk"
 	"github.com/stretchr/testify/require"
+	"kandev-plugin-bitbucket/internal/domain"
 )
 
 func TestManager_PollsWorkspaceAndEmitsOnlySafeHealthEvent(t *testing.T) {
@@ -21,6 +23,44 @@ func TestManager_PollsWorkspaceAndEmitsOnlySafeHealthEvent(t *testing.T) {
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "secret-token")
 	require.Equal(t, []string{"health.unavailable"}, host.events)
+}
+
+func TestManager_BackoffIsScopedToTheFailingWorkspace(t *testing.T) {
+	host := &managerHost{
+		connectionHost: newConnectionHost(),
+		workspaces:     []pluginsdk.Workspace{{ID: "broken"}, {ID: "healthy"}},
+	}
+	broken := &workflowProvider{healthErr: errors.New("unavailable")}
+	healthy := &workflowProvider{}
+	resolver := workspaceProviderResolver{providers: map[string]*workflowProvider{
+		"broken": broken, "healthy": healthy,
+	}}
+	workflows, err := NewWorkflows(host, resolver)
+	require.NoError(t, err)
+	manager, err := NewManager(host, resolver, workflows.watches)
+	require.NoError(t, err)
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	manager.schedule = domain.NewHealthSchedule(func() float64 { return 0.5 })
+
+	_ = manager.pollScheduled(context.Background())
+	now = now.Add(90 * time.Second)
+	_ = manager.pollScheduled(context.Background())
+
+	require.Equal(t, 1, broken.healthCalls, "failed workspace must observe its own backoff")
+	require.Equal(t, 2, healthy.healthCalls, "healthy workspace must keep its 90-second cadence")
+}
+
+type workspaceProviderResolver struct {
+	providers map[string]*workflowProvider
+}
+
+func (r workspaceProviderResolver) Provider(_ context.Context, workspaceID string) (domain.Provider, error) {
+	provider := r.providers[workspaceID]
+	if provider == nil {
+		return nil, errors.New("provider unavailable")
+	}
+	return provider, nil
 }
 
 type managerHost struct {

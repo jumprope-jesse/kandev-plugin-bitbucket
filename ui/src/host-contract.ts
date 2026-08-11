@@ -133,8 +133,13 @@ export type PluginRegistry = {
     icon: string;
     listRepositories(context: {
       workspaceId: string;
+      query?: string;
+      cursor?: string;
+      limit?: number;
       signal: AbortSignal;
-    }): Promise<RepositoryInspection[]>;
+    }): Promise<
+      RepositoryInspection[] | { repositories: RepositoryInspection[]; nextCursor?: string }
+    >;
     matchesURL(url: string): boolean;
     listBranches(context: {
       workspaceId: string;
