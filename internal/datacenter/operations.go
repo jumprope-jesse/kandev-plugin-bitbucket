@@ -969,7 +969,17 @@ func (c *Client) pullRequestURL(repository domain.Repository, number int) string
 func mapParticipants(values []dataCenterParticipantPayload) []domain.Participant {
 	participants := make([]domain.Participant, 0, len(values))
 	for _, value := range values {
-		participants = append(participants, domain.Participant{ID: value.User.Slug, Name: value.User.DisplayName, Role: value.Role, Approved: value.Status == "APPROVED"})
+		verdict := domain.ReviewVerdictPending
+		switch strings.ToUpper(value.Status) {
+		case "APPROVED":
+			verdict = domain.ReviewVerdictApproved
+		case "NEEDS_WORK":
+			verdict = domain.ReviewVerdictChangesRequested
+		}
+		participants = append(participants, domain.Participant{
+			ID: value.User.Slug, Name: value.User.DisplayName, Role: value.Role,
+			Approved: verdict == domain.ReviewVerdictApproved, Verdict: verdict,
+		})
 	}
 	return participants
 }

@@ -319,12 +319,21 @@ func (s *Service) ensureTask(ctx context.Context, workspaceID string, snapshot S
 	if item.Key == "" {
 		return false, false, snapshot, watch, fmt.Errorf("watched pull request key is required")
 	}
-	if _, exists := watch.Links[item.Key]; exists {
+	if existing, exists := watch.Links[item.Key]; exists {
+		upgraded := taskLinkForPullRequest(item, existing.TaskID)
+		upgraded.Owned = existing.Owned
+		if existing.ProviderID != upgraded.ProviderID || existing.ProviderHost != upgraded.ProviderHost {
+			watch.Links[item.Key] = upgraded
+			snapshot.Watches[watch.ID] = watch
+			if saveErr := s.repository.Save(ctx, workspaceID, snapshot); saveErr != nil {
+				return false, false, snapshot, watch, fmt.Errorf("save upgraded task link: %w", saveErr)
+			}
+		}
 		return false, true, snapshot, watch, nil
 	}
 	if reservation, exists := watch.Reservations[item.Key]; exists {
 		if reservation.TaskID != "" {
-			watch.Links[item.Key] = TaskLink{PullRequestKey: item.Key, TaskID: reservation.TaskID, Owned: true}
+			watch.Links[item.Key] = taskLinkForPullRequest(item, reservation.TaskID)
 			reservation.State = ReservationCreated
 			watch.Reservations[item.Key] = reservation
 			snapshot.Watches[watch.ID] = watch
@@ -338,7 +347,7 @@ func (s *Service) ensureTask(ctx context.Context, workspaceID string, snapshot S
 			return false, false, snapshot, watch, fmt.Errorf("find creating reservation: %w", findErr)
 		}
 		if found {
-			watch.Links[item.Key] = TaskLink{PullRequestKey: item.Key, TaskID: foundTaskID, Owned: true}
+			watch.Links[item.Key] = taskLinkForPullRequest(item, foundTaskID)
 			reservation.State = ReservationCreated
 			reservation.TaskID = foundTaskID
 			watch.Reservations[item.Key] = reservation
@@ -376,13 +385,23 @@ func (s *Service) ensureTask(ctx context.Context, workspaceID string, snapshot S
 	reservation.State = ReservationCreated
 	reservation.TaskID = taskID
 	watch.Reservations[item.Key] = reservation
-	watch.Links[item.Key] = TaskLink{PullRequestKey: item.Key, TaskID: taskID, Owned: true}
+	watch.Links[item.Key] = taskLinkForPullRequest(item, taskID)
 	snapshot.Watches[watch.ID] = watch
 	if saveErr := s.repository.Save(ctx, workspaceID, snapshot); saveErr != nil {
 		return false, false, snapshot, watch, fmt.Errorf("persist created task link: %w", saveErr)
 	}
 	s.emit(ctx, "watch.task_created", map[string]any{"workspace_id": workspaceID, "watch_id": watch.ID, "task_id": taskID, "pull_request_key": item.Key})
 	return true, false, snapshot, watch, nil
+}
+
+func taskLinkForPullRequest(item PullRequest, taskID string) TaskLink {
+	return TaskLink{
+		PullRequestKey: item.Key,
+		TaskID:         taskID,
+		Owned:          true,
+		ProviderID:     item.Repository.ProviderID,
+		ProviderHost:   item.Repository.ProviderHost,
+	}
 }
 
 func (s *Service) loadWatch(ctx context.Context, workspaceID, watchID string) (Snapshot, Watch, error) {
@@ -457,10 +476,10 @@ func (s *Service) Reset(ctx context.Context, workspaceID, watchID string) (Reset
 	var deletedTaskIDs []string
 	for _, link := range ownedLinks(watch) {
 		deleted, deleteErr := s.tasks.DeleteOwned(ctx, link.TaskID)
+		deletedTaskIDs = appendUnique(deletedTaskIDs, deleted...)
 		if deleteErr != nil {
 			return ResetResult{DeletedTaskIDs: deletedTaskIDs}, fmt.Errorf("delete owned task tree %q: %w", link.TaskID, deleteErr)
 		}
-		deletedTaskIDs = appendUnique(deletedTaskIDs, deleted...)
 		delete(watch.Links, link.PullRequestKey)
 		delete(watch.Reservations, link.PullRequestKey)
 	}
@@ -496,10 +515,10 @@ func (s *Service) Delete(ctx context.Context, workspaceID, watchID string) (Rese
 	var deletedTaskIDs []string
 	for _, link := range ownedLinks(watch) {
 		deleted, deleteErr := s.tasks.DeleteOwned(ctx, link.TaskID)
+		deletedTaskIDs = appendUnique(deletedTaskIDs, deleted...)
 		if deleteErr != nil {
 			return ResetResult{DeletedTaskIDs: deletedTaskIDs}, fmt.Errorf("delete owned task tree %q: %w", link.TaskID, deleteErr)
 		}
-		deletedTaskIDs = appendUnique(deletedTaskIDs, deleted...)
 	}
 	delete(snapshot.Watches, watchID)
 	if err := s.repository.Save(ctx, workspaceID, snapshot); err != nil {

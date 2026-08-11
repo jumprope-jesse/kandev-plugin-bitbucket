@@ -7,9 +7,7 @@ import (
 	"io"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
-	"time"
 
 	"kandev-plugin-bitbucket/internal/domain"
 	"kandev-plugin-bitbucket/internal/watches"
@@ -256,7 +254,11 @@ func (w *Workflows) HandleAction(ctx context.Context, request *pluginsdk.PluginA
 		}
 		return actionResponse(map[string]any{"pull_requests": pullRequestViews(pullRequests)})
 	case "pullrequests.associations":
-		associations, err := w.pullRequestAssociations(ctx, request.Context.WorkspaceID)
+		var input pullRequestAssociationsInput
+		if err := decodeAction(request.Body, &input); err != nil {
+			return nil, err
+		}
+		associations, err := w.pullRequestAssociations(ctx, request.Context.WorkspaceID, input.ReviewKeys)
 		if err != nil {
 			return nil, err
 		}
@@ -602,7 +604,9 @@ func (w *Workflows) SearchEntityReferences(ctx context.Context, request *plugins
 	if err := requireCapability(provider, domain.CapabilityPullRequests); err != nil {
 		return nil, err
 	}
-	repositories, err := provider.ListRepositories(ctx, "", boundedLimit(int(request.Limit)))
+	// Candidate count must not truncate repository discovery: a matching pull
+	// request may live after repositories that return no matches.
+	repositories, err := provider.ListRepositories(ctx, "", 100)
 	if err != nil {
 		return nil, fmt.Errorf("list reference repositories: %w", err)
 	}
@@ -922,7 +926,11 @@ func (w *Workflows) taskPullRequests(ctx context.Context, workspaceID, taskID st
 	return actionResponse(response)
 }
 
-func (w *Workflows) pullRequestAssociations(ctx context.Context, workspaceID string) ([]map[string]any, error) {
+func (w *Workflows) pullRequestAssociations(
+	ctx context.Context,
+	workspaceID string,
+	visibleReviewKeys *[]string,
+) ([]map[string]any, error) {
 	if workspaceID == "" {
 		return nil, fmt.Errorf("verified workspace context is required")
 	}
@@ -931,6 +939,7 @@ func (w *Workflows) pullRequestAssociations(ctx context.Context, workspaceID str
 		return nil, err
 	}
 	associations := make([]map[string]any, 0)
+	visible := associationKeyFilter(visibleReviewKeys)
 	page := pluginsdk.Page{Limit: 100}
 	for {
 		tasks, info, err := w.host.Tasks().List(ctx, pluginsdk.TaskFilter{WorkspaceIDs: []string{workspaceID}}, page)
@@ -944,9 +953,19 @@ func (w *Workflows) pullRequestAssociations(ctx context.Context, workspaceID str
 			}
 			keys := make(map[string]struct{}, len(links)+len(watchAssociations[task.ID]))
 			for _, link := range links {
+				matchesConnection, err := w.linkMatchesConnection(ctx, workspaceID, link)
+				if err != nil {
+					return nil, err
+				}
+				if !matchesConnection || !visibleAssociationKey(visible, link.Key) {
+					continue
+				}
 				keys[link.Key] = struct{}{}
 			}
 			for key := range watchAssociations[task.ID] {
+				if !visibleAssociationKey(visible, key) {
+					continue
+				}
 				keys[key] = struct{}{}
 			}
 			for _, key := range sortedAssociationKeys(keys) {
@@ -964,15 +983,40 @@ func (w *Workflows) pullRequestAssociations(ctx context.Context, workspaceID str
 	}
 }
 
+func associationKeyFilter(keys *[]string) map[string]struct{} {
+	if keys == nil {
+		return nil
+	}
+	result := make(map[string]struct{}, len(*keys))
+	for _, key := range *keys {
+		if _, _, ok := parsePullRequestKey(key); ok {
+			result[key] = struct{}{}
+		}
+	}
+	return result
+}
+
+func visibleAssociationKey(filter map[string]struct{}, key string) bool {
+	if filter == nil {
+		return true
+	}
+	_, found := filter[key]
+	return found
+}
+
 func (w *Workflows) watchOwnedAssociations(ctx context.Context, workspaceID string) (map[string]map[string]struct{}, error) {
 	configured, err := w.watches.List(ctx, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("list watch-owned pull request links: %w", err)
 	}
+	identity, bound, err := w.connectionIdentity(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
 	associations := make(map[string]map[string]struct{})
 	for _, watch := range configured {
 		for mapKey, link := range watch.Links {
-			if !link.Owned || link.TaskID == "" {
+			if !link.Owned || link.TaskID == "" || !watchLinkMatchesConnection(link, identity, bound) {
 				continue
 			}
 			key := link.PullRequestKey
@@ -989,6 +1033,20 @@ func (w *Workflows) watchOwnedAssociations(ctx context.Context, workspaceID stri
 		}
 	}
 	return associations, nil
+}
+
+func watchLinkMatchesConnection(
+	link watches.TaskLink,
+	identity connectionIdentity,
+	bound bool,
+) bool {
+	if !bound {
+		return true
+	}
+	if identity.Host == "" || link.ProviderID != "bitbucket" || link.ProviderHost == "" {
+		return false
+	}
+	return strings.EqualFold(identity.Host, link.ProviderHost)
 }
 
 func sortedAssociationKeys(keys map[string]struct{}) []string {
@@ -1246,6 +1304,9 @@ type queuePullRequestsInput struct {
 	Limit int    `json:"limit"`
 	View  string `json:"view"`
 }
+type pullRequestAssociationsInput struct {
+	ReviewKeys *[]string `json:"review_keys"`
+}
 type pullRequestLookup struct {
 	ReviewKey     string                   `json:"review_key"`
 	Repository    watches.RemoteRepository `json:"repository"`
@@ -1311,173 +1372,6 @@ type connectionSaveInput struct {
 	Probe bool `json:"probe"`
 }
 
-func repositoryViews(repositories []domain.Repository) []map[string]any {
-	views := make([]map[string]any, 0, len(repositories))
-	for _, repository := range repositories {
-		cloneURL := ""
-		host := ""
-		if repository.CloneURL != nil {
-			cloneURL = repository.CloneURL.String()
-			host = repositoryProviderHost(repository.CloneURL)
-		}
-		views = append(views, map[string]any{
-			"id": repository.Namespace + "/" + repository.Slug, "name": repository.Slug,
-			"owner_or_project": repository.Namespace, "provider_id": "bitbucket", "provider_host": host,
-			"provider_repository_id": repository.Namespace + "/" + repository.Slug, "clone_url": cloneURL,
-			"default_branch": repository.DefaultBranch,
-		})
-	}
-	return views
-}
-
-func branchViews(branches []domain.Branch) []map[string]any {
-	views := make([]map[string]any, 0, len(branches))
-	for _, branch := range branches {
-		views = append(views, map[string]any{"name": branch.Name, "commit": branch.Commit, "is_default": branch.IsDefault})
-	}
-	return views
-}
-
-func pullRequestViews(pullRequests []domain.PullRequest) []map[string]any {
-	views := make([]map[string]any, 0, len(pullRequests))
-	for _, pullRequest := range pullRequests {
-		views = append(views, pullRequestView(pullRequest))
-	}
-	return views
-}
-
-func pullRequestView(pullRequest domain.PullRequest) map[string]any {
-	createdAt := ""
-	if !pullRequest.CreatedAt.IsZero() {
-		createdAt = pullRequest.CreatedAt.UTC().Format(time.RFC3339)
-	}
-	return map[string]any{
-		"id": strconv.Itoa(pullRequest.Number), "review_key": pullRequest.Key(), "number": pullRequest.Number,
-		"title": pullRequest.Title, "description": pullRequest.Description, "url": pullRequest.URL,
-		"repository_id":   pullRequest.Repository.Namespace + "/" + pullRequest.Repository.Slug,
-		"repository_name": pullRequest.Repository.Slug, "repository": repositoryViews([]domain.Repository{pullRequest.Repository})[0],
-		"state": pullRequest.State, "source_branch": pullRequest.Source.Name, "destination_branch": pullRequest.Destination.Name,
-		"author":              pullRequest.Author,
-		"author_display_name": pullRequest.AuthorDisplayName,
-		"created_at":          createdAt,
-		"capabilities":        actionCapabilities(pullRequest.Capabilities),
-	}
-}
-
-func reviewView(review domain.Review) map[string]any {
-	view := pullRequestView(review.PullRequest)
-	files := make([]map[string]any, 0, len(review.Files))
-	for _, file := range review.Files {
-		files = append(files, map[string]any{
-			"path": file.Path, "status": file.Status, "additions": file.Additions, "deletions": file.Deletions, "patch": file.Patch,
-		})
-	}
-	commits := make([]map[string]any, 0, len(review.Commits))
-	for _, commit := range review.Commits {
-		commits = append(commits, map[string]any{"id": commit.Hash, "hash": commit.Hash, "message": commit.Message, "author": commit.Author})
-	}
-	participants := make([]map[string]any, 0, len(review.Participants))
-	viewerKnown := strings.TrimSpace(review.ViewerID) != ""
-	viewerApproved := false
-	for _, participant := range review.Participants {
-		participantView := map[string]any{"id": participant.ID, "name": participant.Name, "role": participant.Role, "approved": participant.Approved}
-		if viewerKnown && strings.EqualFold(participant.ID, review.ViewerID) {
-			participantView["is_current_user"] = true
-			viewerApproved = participant.Approved
-		}
-		participants = append(participants, participantView)
-	}
-	threads := make([]map[string]any, 0, len(review.Threads))
-	for _, thread := range review.Threads {
-		threadView := map[string]any{"id": thread.ID, "comments": thread.Comments}
-		if len(thread.Comments) > 0 {
-			threadView["author"] = thread.Comments[0].Author
-			threadView["body"] = thread.Comments[0].Body
-		}
-		threads = append(threads, threadView)
-	}
-	statuses := make([]map[string]any, 0, len(review.Statuses))
-	for _, status := range review.Statuses {
-		statuses = append(statuses, map[string]any{"key": status.Key, "name": status.Name, "state": status.State, "url": status.URL, "target": status.Target})
-	}
-	view["diff"] = review.Diff
-	view["files"] = files
-	view["commits"] = commits
-	view["participants"] = participants
-	if viewerKnown {
-		view["viewer_approved"] = viewerApproved
-	}
-	view["threads"] = threads
-	view["statuses"] = statuses
-	return view
-}
-
-func actionCapabilities(capabilities domain.Capabilities) []string {
-	values := []string{"link", "launch_task"}
-	for capability, enabled := range capabilities {
-		if enabled {
-			values = append(values, string(capability))
-		}
-	}
-	sort.Strings(values)
-	return values
-}
-
-func searchWorkspacePullRequests(ctx context.Context, provider domain.Provider, query, state string, limit int) ([]domain.PullRequest, error) {
-	repositories, err := provider.ListRepositories(ctx, "", limit)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]domain.PullRequest, 0, limit)
-	for _, repository := range repositories {
-		pullRequests, searchErr := provider.SearchPullRequests(ctx, domain.PullRequestQuery{Repository: repository, Text: query, State: state, Limit: limit})
-		if searchErr != nil {
-			return nil, searchErr
-		}
-		for _, pullRequest := range pullRequests {
-			if state != "" && !strings.EqualFold(state, "all") && !strings.EqualFold(state, pullRequest.State) {
-				continue
-			}
-			result = append(result, pullRequest)
-			if len(result) == limit {
-				sort.Slice(result, func(i, j int) bool { return result[i].Key() < result[j].Key() })
-				return result, nil
-			}
-		}
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Key() < result[j].Key() })
-	return result, nil
-}
-
-func parsePullRequestKey(key string) (domain.Repository, int, bool) {
-	parts := strings.Split(strings.TrimSpace(key), "#")
-	if len(parts) != 2 || parts[0] == "" {
-		return domain.Repository{}, 0, false
-	}
-	path := strings.Split(parts[0], "/")
-	if len(path) != 2 || path[0] == "" || path[1] == "" {
-		return domain.Repository{}, 0, false
-	}
-	number, err := strconv.Atoi(parts[1])
-	if err != nil || number <= 0 {
-		return domain.Repository{}, 0, false
-	}
-	return domain.Repository{Namespace: path[0], Slug: path[1]}, number, true
-}
-
-func hasFilter(filter watches.Filter) bool {
-	return len(filter.RepositoryIDs) > 0 || len(filter.Repositories) > 0 || len(filter.States) > 0 || len(filter.Authors) > 0 || filter.Query != ""
-}
-
-func sameRepositoryURL(left, right *url.URL) bool {
-	if left == nil || right == nil || !strings.EqualFold(left.Host, right.Host) {
-		return false
-	}
-	leftPath := strings.TrimSuffix(strings.TrimSuffix(left.Path, "/"), ".git")
-	rightPath := strings.TrimSuffix(strings.TrimSuffix(right.Path, "/"), ".git")
-	return leftPath == rightPath
-}
-
 func connectionResponse(settings ConnectionSettings, healthy bool, err error, oauthConfigured ...bool) map[string]any {
 	state := "connected"
 	if !healthy {
@@ -1496,104 +1390,5 @@ func connectionResponse(settings ConnectionSettings, healthy bool, err error, oa
 		"oauth_client_id": settings.OAuthClientID, "oauth_redirect_url": settings.OAuthRedirectURL,
 		"oauth_registration_configured": registrationConfigured,
 		"error":                         safeError(err),
-	}
-}
-
-type providerCredentialSource struct{ resolver ProviderResolver }
-
-func (s providerCredentialSource) GetGitCredentialBinding(ctx context.Context, scope GitCredentialScope) (string, error) {
-	binder, ok := s.resolver.(interface {
-		GitCredentialBinding(context.Context, GitCredentialScope) (string, error)
-	})
-	if !ok {
-		return "", ErrCredentialUnavailable
-	}
-	return binder.GitCredentialBinding(ctx, scope)
-}
-
-func (s providerCredentialSource) ResolveGitCredential(ctx context.Context, scope GitCredentialScope) (GitCredential, error) {
-	if validator, ok := s.resolver.(interface {
-		ValidateGitCredentialScope(context.Context, GitCredentialScope) error
-	}); ok {
-		if err := validator.ValidateGitCredentialScope(ctx, scope); err != nil {
-			return GitCredential{}, ErrCredentialUnavailable
-		}
-	}
-	provider, err := s.resolver.Provider(ctx, scope.WorkspaceID)
-	if err != nil {
-		return GitCredential{}, err
-	}
-	credential, err := provider.ResolveGitCredential(ctx)
-	if err != nil {
-		return GitCredential{}, err
-	}
-	expiresAt := credential.ExpiresAt
-	if expiresAt.IsZero() {
-		expiresAt = time.Now().Add(5 * time.Minute)
-	}
-	return GitCredential{Username: credential.Username, Secret: credential.Secret, ExpiresAt: expiresAt}, nil
-}
-
-func referenceIdentity(reference map[string]any) (domain.Repository, int, string, bool) {
-	key, ok := canonicalReferenceKey(reference)
-	if !ok {
-		return domain.Repository{}, 0, "", false
-	}
-	repository, number, ok := parsePullRequestKey(key)
-	if !ok {
-		return domain.Repository{}, 0, "", false
-	}
-
-	repositoryValue, hasRepository := reference["repository"]
-	numberValue, hasNumber := reference["number"]
-	if !hasRepository && !hasNumber {
-		return repository, number, key, true
-	}
-	if !hasRepository || !hasNumber {
-		return domain.Repository{}, 0, "", false
-	}
-	repositoryMap, repositoryOK := repositoryValue.(map[string]any)
-	structuredNumber, numberOK := positiveNumber(numberValue)
-	if !repositoryOK || !numberOK {
-		return domain.Repository{}, 0, "", false
-	}
-	namespace, namespaceOK := repositoryMap["namespace"].(string)
-	slug, slugOK := repositoryMap["slug"].(string)
-	if !namespaceOK || !slugOK {
-		return domain.Repository{}, 0, "", false
-	}
-	if namespace != repository.Namespace || slug != repository.Slug || structuredNumber != number {
-		return domain.Repository{}, 0, "", false
-	}
-	return repository, number, key, true
-}
-
-func canonicalReferenceKey(reference map[string]any) (string, bool) {
-	key, hasKey := reference["key"].(string)
-	id, hasID := reference["id"].(string)
-	key = strings.TrimSpace(key)
-	id = strings.TrimSpace(id)
-	if hasKey && hasID && key != id {
-		return "", false
-	}
-	if key != "" {
-		return key, true
-	}
-	return id, id != ""
-}
-
-func positiveNumber(value any) (int, bool) {
-	switch value := value.(type) {
-	case int:
-		return value, value > 0
-	case int64:
-		return int(value), value > 0 && int64(int(value)) == value
-	case float64:
-		return int(value), value > 0 && value == float64(int(value))
-	case json.Number:
-		parsed, err := value.Int64()
-		return int(parsed), err == nil && parsed > 0 && int64(int(parsed)) == parsed
-	default:
-		return 0, false
 	}
 }

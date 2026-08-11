@@ -509,6 +509,7 @@ type cloudParticipantPayload struct {
 	} `json:"user"`
 	Role     string `json:"role"`
 	Approved bool   `json:"approved"`
+	State    string `json:"state"`
 }
 
 type reviewCommitPage struct {
@@ -970,7 +971,21 @@ func validatePullRequestURL(raw string, repository domain.Repository, number int
 func mapParticipants(values []cloudParticipantPayload) []domain.Participant {
 	participants := make([]domain.Participant, 0, len(values))
 	for _, value := range values {
-		participants = append(participants, domain.Participant{ID: value.User.AccountID, Name: value.User.DisplayName, Role: value.Role, Approved: value.Approved})
+		verdict := domain.ReviewVerdictPending
+		switch strings.ToUpper(value.State) {
+		case "CHANGES_REQUESTED", "NEEDS_WORK":
+			verdict = domain.ReviewVerdictChangesRequested
+		case "APPROVED":
+			verdict = domain.ReviewVerdictApproved
+		default:
+			if value.Approved {
+				verdict = domain.ReviewVerdictApproved
+			}
+		}
+		participants = append(participants, domain.Participant{
+			ID: value.User.AccountID, Name: value.User.DisplayName, Role: value.Role,
+			Approved: value.Approved, Verdict: verdict,
+		})
 	}
 	return participants
 }

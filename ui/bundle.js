@@ -1,4 +1,25 @@
 // ui/src/view-models.ts
+function matchingHostRepositoryId(repositories, pullRequest) {
+  const target = canonicalRepositoryIdentity(pullRequest.repositoryId);
+  if (!target) return void 0;
+  const matches = repositories.filter((repository) => {
+    if ((string(repository.provider) ?? "").toLowerCase() !== "bitbucket") return false;
+    const owner = string(repository.provider_owner);
+    const name = string(repository.provider_name);
+    const identities = [
+      string(repository.provider_repo_id),
+      string(repository.provider_repository_id),
+      owner && name ? `${owner}/${name}` : void 0
+    ];
+    return identities.some((identity) => canonicalRepositoryIdentity(identity) === target);
+  });
+  if (matches.length !== 1) return void 0;
+  return string(matches[0].id);
+}
+function canonicalRepositoryIdentity(value) {
+  const identity = string(value)?.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
+  return identity?.toLowerCase();
+}
 function integrationSettingsHref(workspaceId) {
   return workspaceId ? `/settings/workspace/${encodeURIComponent(workspaceId)}/integrations/bitbucket` : "/settings/integrations/bitbucket";
 }
@@ -29,8 +50,12 @@ function oauthStartInput(workspaceId) {
 function disconnectConnectionInput(workspaceId) {
   return { workspaceId };
 }
-function deriveOAuthCallbackURL(origin) {
-  return new URL("/api/plugins/kandev-plugin-bitbucket/webhooks/oauth-callback", origin).toString();
+function deriveOAuthCallbackURL(apiBaseUrl, browserOrigin) {
+  const backendOrigin = apiBaseUrl.trim() || browserOrigin;
+  return new URL(
+    "/api/plugins/kandev-plugin-bitbucket/webhooks/oauth-callback",
+    backendOrigin
+  ).toString();
 }
 function record(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -341,6 +366,14 @@ function isCurrentUserParticipant(participant) {
   const user = record(participant.user);
   return participant.is_current_user === true || participant.isCurrentUser === true || participant.currentUser === true || user.is_current_user === true || user.isCurrentUser === true;
 }
+function normalizeParticipantVerdict(participant, approved) {
+  const raw = (string(participant.verdict) ?? string(participant.status))?.trim().toUpperCase();
+  if (["NEEDS_WORK", "CHANGES_REQUESTED", "REQUEST_CHANGES"].includes(raw ?? "")) {
+    return "changes_requested";
+  }
+  if (raw === "APPROVED" || approved) return "approved";
+  return "pending";
+}
 function normalizeViewerApproval(source, participants) {
   const direct = boolean(source.viewer_approved) ?? boolean(source.viewerApproved) ?? boolean(source.current_user_approved) ?? boolean(source.currentUserApproved);
   if (direct !== void 0) return direct;
@@ -373,12 +406,14 @@ function normalizeReviewDetail(value) {
       const user = record(participant.user);
       const name = string(participant.name) ?? string(participant.display_name) ?? string(participant.displayName) ?? string(user.display_name) ?? string(user.displayName) ?? string(user.name);
       const approved = boolean(participant.approved) ?? string(participant.status)?.toUpperCase() === "APPROVED";
+      const verdict = normalizeParticipantVerdict(participant, approved);
       const isCurrentUser = boolean(participant.is_current_user) ?? boolean(participant.isCurrentUser) ?? boolean(participant.currentUser) ?? boolean(user.is_current_user) ?? boolean(user.isCurrentUser);
       return name ? [{
         id: string(participant.id) ?? string(user.account_id) ?? string(user.slug),
         name,
         role: string(participant.role),
         approved,
+        verdict,
         isCurrentUser,
         url: personLink(user, "html"),
         avatarUrl: personLink(user, "avatar")
@@ -439,7 +474,12 @@ function changeRequestDetailModel(detail) {
     (participant) => ["REVIEWER", "APPROVER"].includes(participant.role?.toUpperCase() ?? "REVIEWER")
   );
   const approved = reviewers.filter((participant) => participant.approved);
-  const requested = reviewers.filter((participant) => !participant.approved);
+  const changesRequested = reviewers.filter(
+    (participant) => participant.verdict === "changes_requested"
+  );
+  const requested = reviewers.filter(
+    (participant) => participant.verdict !== "approved" && participant.verdict !== "changes_requested"
+  );
   const person = (participant) => ({
     name: participant.name,
     ...participant.url ? { url: participant.url } : {},
@@ -478,13 +518,20 @@ function changeRequestDetailModel(detail) {
     additions: detail.files.reduce((total, file) => total + (file.additions ?? 0), 0),
     deletions: detail.files.reduce((total, file) => total + (file.deletions ?? 0), 0),
     ...detail.description ? { description: detail.description } : {},
-    ...approved.length > 0 ? { reviewState: "approved" } : requested.length > 0 ? { reviewState: "pending" } : {},
+    ...changesRequested.length > 0 ? { reviewState: "changes_requested" } : approved.length > 0 ? { reviewState: "approved" } : requested.length > 0 ? { reviewState: "pending" } : {},
     ...requested.length > 0 ? { pendingReviewCount: requested.length } : {},
-    reviews: approved.map((participant) => ({
-      id: participant.id ?? participant.name,
-      author: person(participant),
-      state: "APPROVED"
-    })),
+    reviews: [
+      ...approved.map((participant) => ({
+        id: participant.id ?? participant.name,
+        author: person(participant),
+        state: "APPROVED"
+      })),
+      ...changesRequested.map((participant) => ({
+        id: participant.id ?? participant.name,
+        author: person(participant),
+        state: "CHANGES_REQUESTED"
+      }))
+    ],
     requestedReviewers: requested.map(person),
     checks: detail.statuses.map((status) => ({
       id: status.key,
@@ -703,6 +750,34 @@ function errorMessage(error) {
   return string(source.message) ?? string(source.error) ?? "Bitbucket request failed. Try again.";
 }
 
+// ui/src/actions.ts
+var action = {
+  connectionGet: "connection.get",
+  connectionSave: "connection.save",
+  connectionDisconnect: "connection.disconnect",
+  oauthStart: "oauth.start",
+  repositoriesList: "repositories.list",
+  repositoriesBranches: "repositories.branches",
+  repositoriesInspect: "repositories.inspect",
+  pullRequestsGet: "pullrequests.get",
+  pullRequestsAssociations: "pullrequests.associations",
+  pullRequestsInspect: "pullrequests.inspect",
+  pullRequestsLink: "pullrequests.link",
+  pullRequestsCreate: "pullrequests.create",
+  pullRequestsUnlink: "pullrequests.unlink",
+  reviewsAction: "reviews.action",
+  tasksLaunch: "tasks.launch",
+  watchesGet: "watches.get",
+  watchesUpdate: "watches.update",
+  watchesRun: "watches.run",
+  watchesPause: "watches.pause",
+  watchesResume: "watches.resume",
+  watchesPreviewReset: "watches.preview_reset",
+  watchesPreviewDelete: "watches.preview_delete",
+  watchesReset: "watches.reset",
+  watchesDelete: "watches.delete"
+};
+
 // ui/src/task-review-status.ts
 async function loadTaskPullRequestDetails(invokeAction, context, signal) {
   const scope = {
@@ -757,8 +832,15 @@ function changeRequestStatusView(pullRequest, refreshedAt = Date.now()) {
   const reviewers = "participants" in pullRequest && Array.isArray(pullRequest.participants) ? pullRequest.participants.filter(
     (participant) => ["REVIEWER", "APPROVER"].includes(participant.role?.toUpperCase() ?? "REVIEWER")
   ) : [];
-  const approved = reviewers.filter((participant) => participant.approved).length;
-  const requested = reviewers.length - approved;
+  const approved = reviewers.filter(
+    (participant) => participant.verdict === "approved" || participant.approved
+  ).length;
+  const changesRequested = reviewers.filter(
+    (participant) => participant.verdict === "changes_requested"
+  ).length;
+  const requested = reviewers.filter(
+    (participant) => participant.verdict !== "changes_requested" && participant.verdict !== "approved" && !participant.approved
+  ).length;
   const unresolvedComments = "threads" in pullRequest && Array.isArray(pullRequest.threads) ? pullRequest.threads.filter((thread) => !thread.resolved).length : 0;
   const providerUpdatedAt = pullRequest.updatedAt ? Date.parse(pullRequest.updatedAt) : Number.NaN;
   const updatedAt = Number.isFinite(providerUpdatedAt) ? providerUpdatedAt : refreshedAt;
@@ -770,7 +852,7 @@ function changeRequestStatusView(pullRequest, refreshedAt = Date.now()) {
     checks,
     ...reviewers.length > 0 ? {
       review: {
-        state: approved > 0 ? "approved" : "pending",
+        state: changesRequested > 0 ? "changes_requested" : approved > 0 ? "approved" : "pending",
         approved,
         ...requested > 0 ? { requested } : {}
       }
@@ -797,34 +879,7 @@ function reviewSummaryForPullRequest(pullRequest, refreshedAt = Date.now()) {
   };
 }
 
-// ui/src/bundle.ts
-var PLUGIN_ID = "kandev-plugin-bitbucket";
-var action = {
-  connectionGet: "connection.get",
-  connectionSave: "connection.save",
-  connectionDisconnect: "connection.disconnect",
-  oauthStart: "oauth.start",
-  repositoriesList: "repositories.list",
-  repositoriesBranches: "repositories.branches",
-  repositoriesInspect: "repositories.inspect",
-  pullRequestsGet: "pullrequests.get",
-  pullRequestsAssociations: "pullrequests.associations",
-  pullRequestsInspect: "pullrequests.inspect",
-  pullRequestsLink: "pullrequests.link",
-  pullRequestsCreate: "pullrequests.create",
-  pullRequestsUnlink: "pullrequests.unlink",
-  reviewsAction: "reviews.action",
-  tasksLaunch: "tasks.launch",
-  watchesGet: "watches.get",
-  watchesUpdate: "watches.update",
-  watchesRun: "watches.run",
-  watchesPause: "watches.pause",
-  watchesResume: "watches.resume",
-  watchesPreviewReset: "watches.preview_reset",
-  watchesPreviewDelete: "watches.preview_delete",
-  watchesReset: "watches.reset",
-  watchesDelete: "watches.delete"
-};
+// ui/src/review-store.ts
 var reviewStore = /* @__PURE__ */ (() => {
   const snapshots = /* @__PURE__ */ new Map();
   const listeners = /* @__PURE__ */ new Map();
@@ -833,7 +888,10 @@ var reviewStore = /* @__PURE__ */ (() => {
       return snapshots.get(taskId) ?? [];
     },
     set(taskId, pullRequests) {
-      snapshots.set(taskId, pullRequests.map((pullRequest) => reviewSummaryForPullRequest(pullRequest)));
+      snapshots.set(
+        taskId,
+        pullRequests.map((pullRequest) => reviewSummaryForPullRequest(pullRequest))
+      );
       listeners.get(taskId)?.forEach((listener) => listener());
     },
     subscribe(taskId, listener) {
@@ -903,6 +961,9 @@ async function refreshReviewStore(host, taskId, signal, workspaceId) {
   );
   if (!signal.aborted) reviewStore.set(taskId, pullRequests);
 }
+
+// ui/src/bundle.ts
+var PLUGIN_ID = "kandev-plugin-bitbucket";
 function record2(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
@@ -969,7 +1030,7 @@ function useSavedQueries(host, workspaceId) {
     async save(input) {
       const created = newSavedQuery(
         input,
-        `saved-${globalThis.crypto.randomUUID()}`,
+        `saved-${host.utils.generateUUID()}`,
         (/* @__PURE__ */ new Date()).toISOString()
       );
       await persist([...queries, created]);
@@ -1153,7 +1214,7 @@ function ConnectionHealth({ host, workspaceId: scopedWorkspaceId }) {
   const oauthRegistration = connectionOAuthRegistration(details);
   const [oauthClientId, setOAuthClientId] = React.useState("");
   const [oauthClientSecret, setOAuthClientSecret] = React.useState("");
-  const oauthCallbackUrl = deriveOAuthCallbackURL(window.location.origin);
+  const oauthCallbackUrl = deriveOAuthCallbackURL(host.api.baseUrl, window.location.origin);
   const [disconnectOpen, setDisconnectOpen] = React.useState(false);
   React.useEffect(() => {
     if (!connection.data) return;
@@ -1336,13 +1397,6 @@ function taskCreateContext(state, workspaceId) {
   const byWorkspace = record2(repositoryState.itemsByWorkspaceId);
   const repositories = Array.isArray(byWorkspace[workspaceId]) ? byWorkspace[workspaceId].map(record2) : [];
   return { workflowId, defaultStepId: steps[0].id, steps, repositories };
-}
-function matchingHostRepositoryId(repositories, pullRequest) {
-  const match = repositories.find((repository) => {
-    if (text(repository.provider).toLowerCase() !== "bitbucket") return false;
-    return text(repository.provider_repo_id) === pullRequest.repositoryId || pullRequest.url && text(repository.remote_url) && pullRequest.url.includes(text(repository.provider_owner)) && pullRequest.url.includes(text(repository.provider_name));
-  });
-  return match ? text(match.id) || void 0 : void 0;
 }
 function DashboardPullRequestList({ host, pullRequests, loading, error, tasksByReview, onStartTask }) {
   const { jsx: h2, ui } = host;
@@ -1812,7 +1866,7 @@ function BitbucketPage({ host }) {
         onStartTask: (pullRequest, preset) => setLaunch({
           pullRequest,
           preset,
-          launchId: globalThis.crypto.randomUUID()
+          launchId: host.utils.generateUUID()
         })
       })
     ),
@@ -1854,7 +1908,10 @@ function registerNativeIntegrations(registry, host) {
       const response = await host.api.invokeAction(action.repositoriesBranches, { workspaceId: scopedWorkspaceId, body: { repository: pluginRepositoryInput(repository) } }, { signal });
       if (signal.aborted) return [];
       const branches = record2(response).branches;
-      return Array.isArray(branches) ? branches : [];
+      return Array.isArray(branches) ? branches.flatMap((entry) => {
+        const name = text(record2(entry).name);
+        return name ? [{ name }] : [];
+      }) : [];
     },
     async inspectURL({ workspaceId: scopedWorkspaceId, url, signal }) {
       const response = await host.api.invokeAction(action.repositoriesInspect, { workspaceId: scopedWorkspaceId, body: { url } }, { signal });
@@ -1886,13 +1943,15 @@ function registerNativeIntegrations(registry, host) {
         },
         { signal }
       );
-      void Promise.all([
-        refreshReviewStore(host, taskId, new AbortController().signal, workspaceId),
-        refreshAssociationStore(host, workspaceId, new AbortController().signal)
+      await Promise.all([
+        refreshReviewStore(host, taskId, signal, workspaceId),
+        refreshAssociationStore(host, workspaceId, signal)
       ]).catch(() => void 0);
       return {
         url: text(response.url),
-        provider: "bitbucket"
+        provider: "bitbucket",
+        ...typeof response.linked === "boolean" ? { linked: response.linked } : {},
+        ...text(response.association_error) ? { associationError: text(response.association_error) } : {}
       };
     }
   });
@@ -1913,25 +1972,22 @@ function registerNativeIntegrations(registry, host) {
         inputTestId: "bitbucket-review-reference",
         errorTestId: "bitbucket-review-reference-error",
         submitTestId: "bitbucket-review-reference-submit",
-        async onSubmit(reference) {
+        async onSubmit(reference, signal) {
           const body = linkPullRequestBody(reference);
           if (!body) throw new Error("Enter a Bitbucket pull request URL or key.");
-          await host.api.invokeAction(action.pullRequestsLink, {
-            workspaceId: context.workspaceId,
-            taskId: context.taskId,
-            body
-          });
-          void refreshReviewStore(
-            host,
-            context.taskId,
-            new AbortController().signal,
-            context.workspaceId
-          ).catch(() => void 0);
-          void refreshAssociationStore(
-            host,
-            context.workspaceId,
-            new AbortController().signal
-          ).catch(() => void 0);
+          await host.api.invokeAction(
+            action.pullRequestsLink,
+            {
+              workspaceId: context.workspaceId,
+              taskId: context.taskId,
+              body
+            },
+            { signal }
+          );
+          await Promise.all([
+            refreshReviewStore(host, context.taskId, signal, context.workspaceId),
+            refreshAssociationStore(host, context.workspaceId, signal)
+          ]).catch(() => void 0);
         }
       });
     }

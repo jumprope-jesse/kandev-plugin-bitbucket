@@ -3,9 +3,7 @@ package plugin
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -52,6 +50,10 @@ type ConnectionSettings struct {
 	OAuthRedirectURL     string         `json:"oauth_redirect_url,omitempty"`
 	OAuthGeneration      uint64         `json:"oauth_generation,omitempty"`
 	CredentialGeneration uint64         `json:"credential_generation,omitempty"`
+	// Secret identifiers pending best-effort deletion after a committed
+	// generation switch. Keeping this with the credential-free pointer makes
+	// revocation retryable across process restarts without exposing plaintext.
+	PendingSecretRevocations []string `json:"pending_secret_revocations,omitempty"`
 }
 
 // ConnectionSettingsStore is the optional mutable part of ProviderResolver.
@@ -91,21 +93,6 @@ type oauthFlow struct {
 	states       *auth.StateManager
 	epoch        uint64
 	expiresAt    time.Time
-}
-
-type oauthRegistrationSecret struct {
-	ClientSecret string `json:"client_secret"`
-}
-
-type secretWrite struct {
-	key   string
-	value string
-}
-
-type secretSnapshot struct {
-	key   string
-	value string
-	found bool
 }
 
 func NewConnectionResolver(host pluginsdk.Host) (*ConnectionResolver, error) {
@@ -174,42 +161,29 @@ func (r *ConnectionResolver) Save(ctx context.Context, workspaceID string, input
 	if err := r.validateTokenCredential(ctx, workspaceID, settings, previous, found, input.Token); err != nil {
 		return ConnectionSettings{}, err
 	}
-	writes := connectionSecretWrites(workspaceID, settings, input)
-	deleteKeys := supersededCredentialKeys(workspaceID, previous, found, settings)
-	snapshots, err := r.snapshotSecrets(ctx, mutationSecretKeys(writes, deleteKeys))
+	writes, err := r.connectionSecretWrites(ctx, workspaceID, settings, previous, found, input)
 	if err != nil {
 		return ConnectionSettings{}, err
 	}
+	deleteKeys := supersededCredentialKeys(workspaceID, previous, found, settings)
+	settings.PendingSecretRevocations = uniqueSecretKeys(append(previous.PendingSecretRevocations, deleteKeys...))
 	if err := r.writeSecrets(ctx, writes); err != nil {
-		_ = r.restoreSecrets(ctx, snapshots)
+		r.compensateStagedSecrets(ctx, writes)
 		return ConnectionSettings{}, err
 	}
 	value, err := encodeState(settings)
 	if err != nil {
-		_ = r.restoreSecrets(ctx, snapshots)
+		r.compensateStagedSecrets(ctx, writes)
 		return ConnectionSettings{}, fmt.Errorf("encode Bitbucket connection: %w", err)
 	}
 	if err := r.host.SetState(ctx, "workspace", workspaceID, connectionStateKey, value); err != nil {
-		_ = r.restoreSecrets(ctx, snapshots)
+		r.compensateStagedSecrets(ctx, writes)
 		return ConnectionSettings{}, fmt.Errorf("save Bitbucket connection: %w", err)
 	}
-	if err := r.revokeSupersededCredentials(ctx, workspaceID, previous, found, settings); err != nil {
-		_ = r.restoreSecrets(ctx, snapshots)
-		_ = r.restoreConnectionState(ctx, workspaceID, previous, found)
-		return ConnectionSettings{}, err
-	}
+	r.invalidateSupersededOAuth(workspaceID, previous, found, settings)
+	r.cleanupCommittedSecrets(ctx, workspaceID, settings)
+	settings.PendingSecretRevocations = nil
 	return settings, nil
-}
-
-func (r *ConnectionResolver) restoreConnectionState(ctx context.Context, workspaceID string, previous ConnectionSettings, found bool) error {
-	if !found {
-		return r.host.DeleteState(ctx, "workspace", workspaceID, connectionStateKey)
-	}
-	value, err := encodeState(previous)
-	if err != nil {
-		return err
-	}
-	return r.host.SetState(ctx, "workspace", workspaceID, connectionStateKey, value)
 }
 
 func (r *ConnectionResolver) validateTokenCredential(
@@ -225,7 +199,7 @@ func (r *ConnectionResolver) validateTokenCredential(
 	if !found || previous.Product != settings.Product || previous.AuthMethod != settings.AuthMethod || previous.AuthIdentity != settings.AuthIdentity {
 		return fmt.Errorf("Bitbucket token credential is required")
 	}
-	stored, present, err := r.host.GetSecret(ctx, connectionSecretKey(workspaceID))
+	stored, present, err := r.loadTokenCredential(ctx, workspaceID, previous.CredentialGeneration)
 	if err != nil {
 		return fmt.Errorf("load Bitbucket credential: %w", err)
 	}
@@ -257,8 +231,11 @@ func (r *ConnectionResolver) Disconnect(ctx context.Context, workspaceID string)
 		return fmt.Errorf("delete Bitbucket connection: %w", err)
 	}
 	keys := []string{
-		connectionSecretKey(workspaceID), oauthRegistrationSecretKey(workspaceID), oauthStateSecretKey(workspaceID),
+		connectionSecretKey(workspaceID, settings.CredentialGeneration), legacyConnectionSecretKey(workspaceID),
+		oauthRegistrationSecretKey(workspaceID, settings.OAuthGeneration), legacyOAuthRegistrationSecretKey(workspaceID),
+		oauthStateSecretKey(workspaceID),
 	}
+	keys = append(keys, settings.PendingSecretRevocations...)
 	if settings.OAuthGeneration != 0 {
 		keys = append(keys, oauthCredentialSecretKey(workspaceID, settings.OAuthGeneration))
 	}
@@ -316,7 +293,13 @@ func (r *ConnectionResolver) tokenSource(ctx context.Context, workspaceID string
 	AccessToken(context.Context) (string, error)
 }, error) {
 	if settings.AuthMethod != "oauth" {
-		return hostTokenSource{host: r.host, key: connectionSecretKey(workspaceID)}, nil
+		return hostTokenSource{
+			host: r.host,
+			keys: []string{
+				connectionSecretKey(workspaceID, settings.CredentialGeneration),
+				legacyConnectionSecretKey(workspaceID),
+			},
+		}, nil
 	}
 	registration, err := r.oauthRegistration(ctx, workspaceID, settings)
 	if err != nil {
@@ -398,147 +381,6 @@ func (r *ConnectionResolver) HandleOAuthCallback(ctx context.Context, state, cod
 		return nil, err
 	}
 	return &pluginsdk.WebhookResponse{Status: http.StatusOK, Headers: map[string]string{"Content-Type": "text/plain; charset=utf-8"}, Body: []byte("Bitbucket connected. You can close this window.")}, nil
-}
-
-// ValidateGitCredentialScope proves that a host-verified broker request still
-// targets this workspace's configured Bitbucket clone endpoint. The adapter
-// token is never returned until this check succeeds.
-func (r *ConnectionResolver) ValidateGitCredentialScope(ctx context.Context, scope GitCredentialScope) error {
-	settings, found, err := r.Load(ctx, scope.WorkspaceID)
-	if err != nil || !found || scope.TaskID == "" || scope.RepositoryID == "" || scope.Host == "" ||
-		!strings.HasPrefix(scope.Path, "/") || strings.ContainsAny(scope.Path, "?#\\") {
-		return ErrCredentialUnavailable
-	}
-	hostURL, err := url.Parse("https://" + scope.Host)
-	if err != nil || hostURL.Host != scope.Host || hostURL.Path != "" || hostURL.RawQuery != "" || hostURL.Fragment != "" {
-		return ErrCredentialUnavailable
-	}
-	if r.matchesTaskRepositoryScope(ctx, settings, scope) {
-		return nil
-	}
-	return ErrCredentialUnavailable
-}
-
-// GitCredentialBinding returns the current non-secret connection generation
-// only after the exact task/repository clone scope remains valid. It never
-// constructs a provider client or reads a credential secret.
-func (r *ConnectionResolver) GitCredentialBinding(ctx context.Context, scope GitCredentialScope) (string, error) {
-	settings, found, err := r.Load(ctx, scope.WorkspaceID)
-	if err != nil || !found || settings.CredentialGeneration == 0 {
-		return "", ErrCredentialUnavailable
-	}
-	if err := r.ValidateGitCredentialScope(ctx, scope); err != nil {
-		return "", ErrCredentialUnavailable
-	}
-	return fmt.Sprintf("bitbucket-credential:%d", settings.CredentialGeneration), nil
-}
-
-// matchesTaskRepositoryScope permits a fork only when the host-verified task
-// points at one exact Bitbucket repository and its credential-free clone URL
-// is the requested host/path. It never trusts a browser repository value.
-func (r *ConnectionResolver) matchesTaskRepositoryScope(ctx context.Context, settings ConnectionSettings, scope GitCredentialScope) bool {
-	task, err := r.host.Tasks().Get(ctx, scope.TaskID)
-	if err != nil || task == nil || task.ID != scope.TaskID || task.WorkspaceID != scope.WorkspaceID {
-		return false
-	}
-	matched := false
-	for _, taskRepository := range task.Repositories {
-		if taskRepository.RepositoryID == scope.RepositoryID {
-			if matched {
-				return false
-			}
-			matched = true
-		}
-	}
-	if !matched {
-		return false
-	}
-	page := pluginsdk.Page{Limit: 100}
-	for {
-		repositories, info, listErr := r.host.Repositories().List(ctx, scope.WorkspaceID, page)
-		if listErr != nil {
-			return false
-		}
-		for _, repository := range repositories {
-			if repository.ID != scope.RepositoryID || repository.SourceType != "provider" || repository.ProviderID != "bitbucket" ||
-				repository.ProviderRepositoryID == "" || repository.ProviderHost == "" || repository.OwnerOrProject == "" ||
-				repository.ProviderName == "" || repository.RemoteURL == "" {
-				continue
-			}
-			cloneURL, parseErr := url.Parse(repository.RemoteURL)
-			if parseErr != nil || cloneURL.Scheme != "https" || cloneURL.User != nil || cloneURL.RawPath != "" ||
-				cloneURL.RawQuery != "" || cloneURL.Fragment != "" || !strings.EqualFold(cloneURL.Host, scope.Host) ||
-				!providerHostMatches(repository.ProviderHost, cloneURL) {
-				return false
-			}
-			owner, name, valid := repositoryIdentity(settings, cloneURL)
-			if !valid || !strings.EqualFold(repository.OwnerOrProject, owner) || repository.ProviderName != name {
-				return false
-			}
-			return normalizedClonePath(cloneURL.Path) == normalizedClonePath(scope.Path)
-		}
-		if info == nil || !info.HasMore || info.NextCursor == "" {
-			return false
-		}
-		page.Cursor = info.NextCursor
-	}
-}
-
-// providerHostMatches accepts the current host contract (an HTTPS origin)
-// plus the pre-origin legacy hostname while rejecting paths and credentials.
-func providerHostMatches(raw string, cloneURL *url.URL) bool {
-	value := strings.TrimSpace(raw)
-	if value == "" || cloneURL == nil {
-		return false
-	}
-	if !strings.Contains(value, "://") {
-		return strings.EqualFold(value, cloneURL.Host)
-	}
-	origin, err := url.Parse(value)
-	if err != nil || origin.Scheme != "https" || origin.User != nil || origin.Host == "" ||
-		(origin.Path != "" && origin.Path != "/") || origin.RawPath != "" || origin.RawQuery != "" || origin.Fragment != "" {
-		return false
-	}
-	return strings.EqualFold(origin.Host, cloneURL.Host)
-}
-
-func repositoryIdentity(settings ConnectionSettings, cloneURL *url.URL) (string, string, bool) {
-	if cloneURL == nil {
-		return "", "", false
-	}
-	var relative string
-	switch settings.Product {
-	case domain.ProductCloud:
-		if !strings.EqualFold(cloneURL.Host, "bitbucket.org") {
-			return "", "", false
-		}
-		relative = strings.Trim(cloneURL.Path, "/")
-	case domain.ProductDataCenter:
-		base, err := url.Parse(settings.BaseURL)
-		if err != nil || !strings.EqualFold(base.Host, cloneURL.Host) {
-			return "", "", false
-		}
-		prefix := strings.TrimSuffix(base.Path, "/") + "/scm/"
-		if !strings.HasPrefix(cloneURL.Path, prefix) {
-			return "", "", false
-		}
-		relative = strings.TrimPrefix(cloneURL.Path, prefix)
-	default:
-		return "", "", false
-	}
-	parts := strings.Split(strings.Trim(relative, "/"), "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", false
-	}
-	name := strings.TrimSuffix(parts[1], ".git")
-	if name == "" {
-		return "", "", false
-	}
-	return parts[0], name, true
-}
-
-func normalizedClonePath(value string) string {
-	return strings.TrimSuffix(strings.TrimSuffix(value, "/"), ".git")
 }
 
 func validateConnection(settings ConnectionSettings) error {
@@ -658,7 +500,11 @@ func (r *ConnectionResolver) configureOAuthSettings(
 		if (clientID != "" && clientID != previous.OAuthClientID) || (redirectURL != "" && redirectURL != previous.OAuthRedirectURL) {
 			return fmt.Errorf("Bitbucket OAuth client secret is required when registration changes")
 		}
-		configured, err := r.oauthRegistrationConfigured(ctx, workspaceID)
+		configured, err := r.oauthRegistrationConfiguredForGeneration(
+			ctx,
+			workspaceID,
+			previous.OAuthGeneration,
+		)
 		if err != nil {
 			return err
 		}
@@ -686,7 +532,23 @@ func (r *ConnectionResolver) configureOAuthSettings(
 }
 
 func (r *ConnectionResolver) oauthRegistrationConfigured(ctx context.Context, workspaceID string) (bool, error) {
-	secret, found, err := r.host.GetSecret(ctx, oauthRegistrationSecretKey(workspaceID))
+	settings, found, err := r.Load(ctx, workspaceID)
+	if err != nil {
+		return false, err
+	}
+	generation := uint64(0)
+	if found {
+		generation = settings.OAuthGeneration
+	}
+	return r.oauthRegistrationConfiguredForGeneration(ctx, workspaceID, generation)
+}
+
+func (r *ConnectionResolver) oauthRegistrationConfiguredForGeneration(
+	ctx context.Context,
+	workspaceID string,
+	generation uint64,
+) (bool, error) {
+	secret, found, err := r.loadOAuthRegistrationSecret(ctx, workspaceID, generation)
 	if err != nil {
 		return false, fmt.Errorf("load Bitbucket OAuth client registration: %w", err)
 	}
@@ -700,16 +562,15 @@ func (r *ConnectionResolver) oauthRegistrationConfigured(ctx context.Context, wo
 	return strings.TrimSpace(registration.ClientSecret) != "", nil
 }
 
-func (r *ConnectionResolver) revokeSupersededCredentials(ctx context.Context, workspaceID string, previous ConnectionSettings, found bool, next ConnectionSettings) error {
+func (r *ConnectionResolver) invalidateSupersededOAuth(workspaceID string, previous ConnectionSettings, found bool, next ConnectionSettings) {
 	if !found {
-		return nil
+		return
 	}
 	previousOAuth := previous.AuthMethod == "oauth"
 	nextOAuth := next.AuthMethod == "oauth"
 	if previousOAuth && (!nextOAuth || previous.OAuthGeneration != next.OAuthGeneration) {
 		r.invalidateOAuthWorkspace(workspaceID)
 	}
-	return r.deleteSecrets(ctx, supersededCredentialKeys(workspaceID, previous, found, next)...)
 }
 
 func supersededCredentialKeys(workspaceID string, previous ConnectionSettings, found bool, next ConnectionSettings) []string {
@@ -718,20 +579,26 @@ func supersededCredentialKeys(workspaceID string, previous ConnectionSettings, f
 	}
 	previousOAuth := previous.AuthMethod == "oauth"
 	nextOAuth := next.AuthMethod == "oauth"
-	keys := make([]string, 0, 3)
+	keys := make([]string, 0, 8)
 	if previousOAuth && (!nextOAuth || previous.OAuthGeneration != next.OAuthGeneration) {
 		keys = append(keys, oauthStateSecretKey(workspaceID))
 		if previous.OAuthGeneration != 0 {
 			keys = append(keys, oauthCredentialSecretKey(workspaceID, previous.OAuthGeneration))
+			keys = append(keys, oauthRegistrationSecretKey(workspaceID, previous.OAuthGeneration))
 		}
+		keys = append(keys, legacyOAuthRegistrationSecretKey(workspaceID))
 		if !nextOAuth {
-			keys = append(keys, oauthRegistrationSecretKey(workspaceID))
+			keys = append(keys, legacyOAuthRegistrationSecretKey(workspaceID))
 		}
 	}
-	if !previousOAuth && nextOAuth {
-		keys = append(keys, connectionSecretKey(workspaceID))
+	if !previousOAuth && (nextOAuth || previous.CredentialGeneration != next.CredentialGeneration) {
+		keys = append(
+			keys,
+			connectionSecretKey(workspaceID, previous.CredentialGeneration),
+			legacyConnectionSecretKey(workspaceID),
+		)
 	}
-	return keys
+	return uniqueSecretKeys(keys)
 }
 
 func (r *ConnectionResolver) invalidateOAuthWorkspace(workspaceID string) {
@@ -786,23 +653,6 @@ func (r *ConnectionResolver) deleteSecrets(ctx context.Context, keys ...string) 
 	return nil
 }
 
-func (r *ConnectionResolver) oauthRegistration(ctx context.Context, workspaceID string, settings ConnectionSettings) (auth.OAuthRegistration, error) {
-	secret, found, err := r.host.GetSecret(ctx, oauthRegistrationSecretKey(workspaceID))
-	if err != nil || !found {
-		return auth.OAuthRegistration{}, fmt.Errorf("Bitbucket OAuth client registration is unavailable")
-	}
-	var stored oauthRegistrationSecret
-	if err := json.Unmarshal([]byte(secret), &stored); err != nil || strings.TrimSpace(stored.ClientSecret) == "" {
-		return auth.OAuthRegistration{}, fmt.Errorf("Bitbucket OAuth client registration is unavailable")
-	}
-	authorization, token, endpointErr := r.oauthEndpoints(settings)
-	redirect, redirectErr := url.Parse(settings.OAuthRedirectURL)
-	if endpointErr != nil || redirectErr != nil {
-		return auth.OAuthRegistration{}, fmt.Errorf("Bitbucket OAuth endpoints are invalid")
-	}
-	return auth.OAuthRegistration{ClientID: settings.OAuthClientID, ClientSecret: stored.ClientSecret, AuthorizationURL: authorization, TokenURL: token, RedirectURL: redirect}, nil
-}
-
 func (r *ConnectionResolver) oauthEndpoints(settings ConnectionSettings) (*url.URL, *url.URL, error) {
 	if override := r.oauthEndpointOverride; override != nil {
 		if override.authorization == nil || override.token == nil {
@@ -845,88 +695,6 @@ func (r *ConnectionResolver) oauthEndpoints(settings ConnectionSettings) (*url.U
 	return &authorization, &token, nil
 }
 
-func connectionSecretWrites(workspaceID string, settings ConnectionSettings, input ConnectionInput) []secretWrite {
-	writes := make([]secretWrite, 0, 2)
-	if settings.AuthMethod == "oauth" && strings.TrimSpace(input.OAuthClientSecret) != "" {
-		encoded, _ := json.Marshal(oauthRegistrationSecret{ClientSecret: input.OAuthClientSecret})
-		writes = append(writes, secretWrite{key: oauthRegistrationSecretKey(workspaceID), value: string(encoded)})
-	}
-	if settings.AuthMethod != "oauth" {
-		token := strings.TrimSpace(input.Token)
-		if token == "" {
-			return writes
-		}
-		writes = append(writes, secretWrite{key: connectionSecretKey(workspaceID), value: token})
-	}
-	return writes
-}
-
-func mutationSecretKeys(writes []secretWrite, deletes []string) []string {
-	keys := make([]string, 0, len(writes)+len(deletes))
-	seen := make(map[string]struct{}, cap(keys))
-	for _, write := range writes {
-		if _, exists := seen[write.key]; !exists {
-			seen[write.key] = struct{}{}
-			keys = append(keys, write.key)
-		}
-	}
-	for _, key := range deletes {
-		if _, exists := seen[key]; !exists {
-			seen[key] = struct{}{}
-			keys = append(keys, key)
-		}
-	}
-	return keys
-}
-
-func (r *ConnectionResolver) snapshotSecrets(ctx context.Context, keys []string) ([]secretSnapshot, error) {
-	snapshots := make([]secretSnapshot, 0, len(keys))
-	for _, key := range keys {
-		value, found, err := r.host.GetSecret(ctx, key)
-		if err != nil {
-			return nil, fmt.Errorf("load Bitbucket credential: %w", err)
-		}
-		snapshots = append(snapshots, secretSnapshot{key: key, value: value, found: found})
-	}
-	return snapshots, nil
-}
-
-func (r *ConnectionResolver) writeSecrets(ctx context.Context, writes []secretWrite) error {
-	for _, write := range writes {
-		if err := r.host.SetSecret(ctx, write.key, write.value); err != nil {
-			return fmt.Errorf("store Bitbucket credential: %w", err)
-		}
-	}
-	return nil
-}
-
-func (r *ConnectionResolver) restoreSecrets(ctx context.Context, snapshots []secretSnapshot) error {
-	var firstErr error
-	for _, snapshot := range snapshots {
-		var err error
-		if snapshot.found {
-			err = r.host.SetSecret(ctx, snapshot.key, snapshot.value)
-		} else {
-			err = r.host.DeleteSecret(ctx, snapshot.key)
-		}
-		if err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
-}
-
-func (r *ConnectionResolver) saveOAuthRegistration(ctx context.Context, workspaceID, clientSecret string) error {
-	encoded, err := json.Marshal(oauthRegistrationSecret{ClientSecret: clientSecret})
-	if err != nil {
-		return err
-	}
-	if err := r.host.SetSecret(ctx, oauthRegistrationSecretKey(workspaceID), string(encoded)); err != nil {
-		return fmt.Errorf("store Bitbucket OAuth client secret: %w", err)
-	}
-	return nil
-}
-
 func (r *ConnectionResolver) oauthStateManager(ctx context.Context, workspaceID string) (*auth.StateManager, error) {
 	r.oauthMu.Lock()
 	defer r.oauthMu.Unlock()
@@ -955,62 +723,12 @@ func (r *ConnectionResolver) oauthStateManager(ctx context.Context, workspaceID 
 	return manager, nil
 }
 
-func oauthRegistrationSecretKey(workspaceID string) string {
-	return workspaceSecretKey("bitbucket.oauth.registration.", workspaceID)
-}
-func oauthStateSecretKey(workspaceID string) string {
-	return workspaceSecretKey("bitbucket.oauth.state.", workspaceID)
-}
-func oauthCredentialSecretKey(workspaceID string, generation uint64) string {
-	return fmt.Sprintf("%s.%d", workspaceSecretKey("bitbucket.oauth.credential.", workspaceID), generation)
-}
-
-func workspaceSecretKey(prefix, workspaceID string) string {
-	digest := sha256.Sum256([]byte(workspaceID))
-	return prefix + hex.EncodeToString(digest[:16])
-}
-
-type hostOAuthCredentialRepository struct{ host pluginsdk.Host }
-
-func (r hostOAuthCredentialRepository) LoadCredential(ctx context.Context, scope auth.CredentialScope) (auth.Credential, error) {
-	encoded, found, err := r.host.GetSecret(ctx, oauthCredentialSecretKey(scope.WorkspaceID, scope.Generation))
-	if err != nil || !found {
-		return auth.Credential{}, fmt.Errorf("Bitbucket OAuth credential is unavailable")
-	}
-	var credential auth.Credential
-	if err := json.Unmarshal([]byte(encoded), &credential); err != nil {
-		return auth.Credential{}, fmt.Errorf("Bitbucket OAuth credential is unavailable")
-	}
-	return credential, nil
-}
-
-func (r hostOAuthCredentialRepository) SaveCredential(ctx context.Context, scope auth.CredentialScope, credential auth.Credential) error {
-	encoded, err := json.Marshal(credential)
-	if err != nil {
-		return err
-	}
-	if err := r.host.SetSecret(ctx, oauthCredentialSecretKey(scope.WorkspaceID, scope.Generation), string(encoded)); err != nil {
-		return fmt.Errorf("store Bitbucket OAuth credential: %w", err)
-	}
-	return nil
-}
-
 func validateHTTPSURL(raw, label string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return fmt.Errorf("%s must be a credential-free HTTPS URL", label)
 	}
 	return nil
-}
-
-func connectionSecretKey(workspaceID string) string {
-	digest := sha256.Sum256([]byte(workspaceID))
-	return "bitbucket.token." + hex.EncodeToString(digest[:16])
-}
-
-type hostTokenSource struct {
-	host pluginsdk.Host
-	key  string
 }
 
 // repositorySearchProvider supplies the Cloud workspace internally and
@@ -1058,12 +776,4 @@ func (p repositorySearchProvider) ListRepositories(ctx context.Context, query st
 		}
 	}
 	return filtered, nil
-}
-
-func (s hostTokenSource) AccessToken(ctx context.Context) (string, error) {
-	token, found, err := s.host.GetSecret(ctx, s.key)
-	if err != nil || !found || strings.TrimSpace(token) == "" {
-		return "", fmt.Errorf("Bitbucket authentication is required")
-	}
-	return token, nil
 }

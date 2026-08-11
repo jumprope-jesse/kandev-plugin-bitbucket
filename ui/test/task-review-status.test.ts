@@ -82,7 +82,8 @@ describe("Bitbucket task review status", () => {
       ],
       participants: [
         { name: "Ada", role: "REVIEWER", approved: true },
-        { name: "Grace", role: "REVIEWER", approved: false },
+        { name: "Grace", role: "REVIEWER", approved: false, verdict: "changes_requested" },
+        { name: "Linus", role: "REVIEWER", approved: false, verdict: "pending" },
       ],
       threads: [
         { id: "10", author: "Grace", body: "Please fix CI", resolved: false, comments: [] },
@@ -102,7 +103,7 @@ describe("Bitbucket task review status", () => {
         },
         { id: "security", label: "Security", state: "success" },
       ],
-      review: { state: "approved", approved: 1, requested: 1 },
+      review: { state: "changes_requested", approved: 1, requested: 1 },
       unresolvedComments: 1,
       updatedAt: Date.parse("2026-08-06T10:00:00Z"),
     });

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -72,6 +73,31 @@ func TestWorkflows_QueueAndComposerAuthorizeLivePullRequest(t *testing.T) {
 	require.False(t, authorized.Allowed)
 }
 
+func TestWorkflows_ComposerSearchDoesNotUseCandidateLimitAsRepositoryLimit(t *testing.T) {
+	first := domain.Repository{Namespace: "workspace", Slug: "empty"}
+	second := domain.Repository{Namespace: "workspace", Slug: "repo"}
+	pullRequest := testPullRequest()
+	pullRequest.Repository = second
+	provider := &workflowProvider{
+		pullRequest:  pullRequest,
+		repositories: []domain.Repository{first, second},
+		pullRequestsByRepository: map[string][]domain.PullRequest{
+			"workspace/repo": {pullRequest},
+		},
+	}
+	workflows, err := NewWorkflows(newConnectionHost(), staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	response, err := workflows.SearchEntityReferences(context.Background(), &pluginsdk.SearchEntityReferencesRequest{
+		Source: "bitbucket", WorkspaceID: "workspace-1", Query: "fix", Limit: 1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, response.Candidates, 1)
+	require.Equal(t, "workspace/repo#42", response.Candidates[0].ProviderLocalID)
+	require.Equal(t, 100, provider.listRepositoryLimit)
+}
+
 func TestPullRequestViewIncludesCanonicalAuthor(t *testing.T) {
 	pullRequest := testPullRequest()
 	pullRequest.Author = "cloud-account-ada"
@@ -125,6 +151,97 @@ func TestWorkflows_PullRequestAssociationsPaginatesWorkspaceTasksAndSkipsEmptyLi
 	}, tasks.filters)
 	require.Empty(t, provider.searchQueries, "association lookup must not call Bitbucket")
 	require.Zero(t, provider.getPullRequestCalls, "association lookup must not call Bitbucket")
+}
+
+func TestWorkflows_PullRequestAssociationsHonorsVisibleReviewKeys(t *testing.T) {
+	tasks := &associationTaskReader{pages: map[string]associationTaskPage{
+		"": {tasks: []pluginsdk.Task{{ID: "task-1", Title: "Fix auth"}, {ID: "task-2", Title: "Other"}}},
+	}}
+	workflows, err := NewWorkflows(
+		&associationHost{connectionHost: newConnectionHost(), tasks: tasks},
+		staticResolver{provider: &workflowProvider{}},
+	)
+	require.NoError(t, err)
+	for taskID, number := range map[string]int64{"task-1": 42, "task-2": 43} {
+		_, err = workflows.links.Link(context.Background(), taskID, PullRequestLink{
+			Key: fmt.Sprintf("workspace/repo#%d", number), RepositoryID: "workspace/repo",
+			URL: fmt.Sprintf("https://bitbucket.org/workspace/repo/pull-requests/%d", number), Number: number,
+		})
+		require.NoError(t, err)
+	}
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.associations",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body:      []byte(`{"review_keys":["workspace/repo#43"]}`),
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{"associations":[{"review_key":"workspace/repo#43","task_id":"task-2","task_title":"Other"}]}`, string(response.Body))
+}
+
+func TestWorkflows_PullRequestAssociationsHidesLinksFromPreviousConnection(t *testing.T) {
+	tasks := &associationTaskReader{pages: map[string]associationTaskPage{
+		"": {tasks: []pluginsdk.Task{{ID: "task-1", Title: "Old host"}}},
+	}}
+	resolver := &connectionSettingsResolver{
+		staticResolver: staticResolver{provider: &workflowProvider{}},
+		settings:       ConnectionSettings{Product: domain.ProductDataCenter, BaseURL: "https://new.example.test"},
+		found:          true,
+	}
+	workflows, err := NewWorkflows(
+		&associationHost{connectionHost: newConnectionHost(), tasks: tasks},
+		resolver,
+	)
+	require.NoError(t, err)
+	_, err = workflows.links.Link(context.Background(), "task-1", PullRequestLink{
+		Key: "PROJECT/repo#42", RepositoryID: "PROJECT/repo",
+		URL: "https://old.example.test/projects/PROJECT/repos/repo/pull-requests/42", Number: 42,
+		Product: domain.ProductDataCenter, Host: "old.example.test",
+	})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.associations",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{"associations":[]}`, string(response.Body))
+}
+
+func TestWorkflows_PullRequestAssociationsHidesWatchLinksFromPreviousConnection(t *testing.T) {
+	tasks := &associationTaskReader{pages: map[string]associationTaskPage{
+		"": {tasks: []pluginsdk.Task{{ID: "watch-task", Title: "Old watch"}}},
+	}}
+	resolver := &connectionSettingsResolver{
+		staticResolver: staticResolver{provider: &workflowProvider{}},
+		settings:       ConnectionSettings{Product: domain.ProductDataCenter, BaseURL: "https://new.example.test"},
+		found:          true,
+	}
+	workflows, err := NewWorkflows(
+		&associationHost{connectionHost: newConnectionHost(), tasks: tasks},
+		resolver,
+	)
+	require.NoError(t, err)
+	_, err = workflows.watches.Create(context.Background(), watches.Watch{
+		ID: "watch-1", WorkspaceID: "workspace-1",
+		Links: map[string]watches.TaskLink{
+			"PROJECT/repo#42": {
+				PullRequestKey: "PROJECT/repo#42", TaskID: "watch-task", Owned: true,
+				ProviderID: "bitbucket", ProviderHost: "old.example.test",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.associations",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{"associations":[]}`, string(response.Body))
 }
 
 func TestWorkflows_WatchOwnedLinksAppearInTaskAndWorkspaceAssociations(t *testing.T) {
@@ -1036,6 +1153,8 @@ type workflowProvider struct {
 	searchQueries            []domain.PullRequestQuery
 	searchErr                error
 	pullRequestsByRepository map[string][]domain.PullRequest
+	repositories             []domain.Repository
+	listRepositoryLimit      int
 }
 
 func (p *workflowProvider) Capabilities() domain.Capabilities {
@@ -1044,7 +1163,12 @@ func (p *workflowProvider) Capabilities() domain.Capabilities {
 	}
 	return domain.Capabilities{domain.CapabilityPullRequests: true, domain.CapabilityBranches: true, domain.CapabilityReview: true, domain.CapabilityMerge: true}
 }
-func (p *workflowProvider) ListRepositories(context.Context, string, int) ([]domain.Repository, error) {
+
+func (p *workflowProvider) ListRepositories(_ context.Context, _ string, limit int) ([]domain.Repository, error) {
+	p.listRepositoryLimit = limit
+	if p.repositories != nil {
+		return p.repositories, nil
+	}
 	return []domain.Repository{p.pullRequest.Repository}, nil
 }
 func (p *workflowProvider) InspectRepositoryURL(raw string) (domain.Repository, error) {

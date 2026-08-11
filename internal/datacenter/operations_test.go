@@ -208,7 +208,7 @@ func TestDataCenterGetReviewMapsGoldenReviewData(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "diff --git a/race.go b/race.go\nindex 1111111..2222222 100644\n--- a/race.go\n+++ b/race.go\n@@ -1 +1 @@\n-unsafe()\n+safe()\n", review.Diff)
 	require.Equal(t, []domain.Commit{{Hash: "source-hash", Message: "Fix race", Author: "Ada"}, {Hash: "source-hash-2", Message: "Add coverage", Author: "Bob"}}, review.Commits)
-	require.Equal(t, []domain.Participant{{ID: "ada", Name: "Ada", Role: "REVIEWER", Approved: true}}, review.Participants)
+	require.Equal(t, []domain.Participant{{ID: "ada", Name: "Ada", Role: "REVIEWER", Approved: true, Verdict: domain.ReviewVerdictApproved}}, review.Participants)
 	require.Equal(t, "dev", review.ViewerID)
 	require.Equal(t, []domain.Thread{{ID: "10", Comments: []domain.Comment{
 		{ID: "10", Author: "Ada", Body: "Please add a test.", When: time.Date(2026, time.July, 31, 12, 1, 0, 0, time.UTC)},
@@ -230,6 +230,19 @@ func TestDataCenterGetReviewMapsGoldenReviewData(t *testing.T) {
 	}}, review.Files)
 	require.Equal(t, "main", review.PullRequest.Repository.DefaultBranch)
 	require.Equal(t, domain.Repository{Namespace: "FORK", Slug: "fork-widgets", CloneURL: mustURL(t, server.URL+"/bitbucket/scm/FORK/fork-widgets.git")}, review.PullRequest.SourceRepository)
+}
+
+func TestMapParticipantsPreservesNeedsWorkVerdict(t *testing.T) {
+	needsWork := dataCenterParticipantPayload{Role: "REVIEWER", Status: "NEEDS_WORK"}
+	needsWork.User.Slug, needsWork.User.DisplayName = "ada", "Ada"
+	pending := dataCenterParticipantPayload{Role: "REVIEWER", Status: "UNAPPROVED"}
+	pending.User.Slug, pending.User.DisplayName = "grace", "Grace"
+	participants := mapParticipants([]dataCenterParticipantPayload{needsWork, pending})
+
+	require.Equal(t, []domain.Participant{
+		{ID: "ada", Name: "Ada", Role: "REVIEWER", Verdict: domain.ReviewVerdictChangesRequested},
+		{ID: "grace", Name: "Grace", Role: "REVIEWER", Verdict: domain.ReviewVerdictPending},
+	}, participants)
 }
 
 func mustURL(t *testing.T, raw string) *url.URL {

@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"testing"
 	"time"
@@ -55,6 +56,19 @@ func TestWatchPullRequest_UsesForkSourceDescriptor(t *testing.T) {
 	require.Equal(t, "https://bitbucket.org/fork/repo.git", got.Repository.CloneURL)
 	require.Equal(t, "feature/fork", got.Repository.HeadBranch)
 	require.Equal(t, "main", got.Repository.BaseBranch)
+}
+
+func TestTaskGateway_DeleteOwnedPreservesPartialProgress(t *testing.T) {
+	host := newTaskHost()
+	host.trees.deleted = []string{"grandchild", "child"}
+	host.trees.deleteErr = errors.New("task store unavailable")
+	gateway, err := NewTaskGateway(host)
+	require.NoError(t, err)
+
+	deletedTaskIDs, err := gateway.DeleteOwned(context.Background(), "root")
+
+	require.Equal(t, []string{"grandchild", "child"}, deletedTaskIDs)
+	require.ErrorContains(t, err, "task store unavailable")
 }
 
 func TestTaskGateway_FindsOnlyTaskWithPluginNamespacedReservation(t *testing.T) {
@@ -160,6 +174,7 @@ type ownedTrees struct {
 	deleted      []string
 	previewRoots []string
 	deleteRoots  []string
+	deleteErr    error
 }
 
 func (m *ownedTrees) Preview(_ context.Context, root string) ([]pluginsdk.Task, error) {
@@ -169,5 +184,5 @@ func (m *ownedTrees) Preview(_ context.Context, root string) ([]pluginsdk.Task, 
 
 func (m *ownedTrees) Delete(_ context.Context, root string) ([]string, error) {
 	m.deleteRoots = append(m.deleteRoots, root)
-	return m.deleted, nil
+	return m.deleted, m.deleteErr
 }

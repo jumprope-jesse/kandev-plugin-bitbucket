@@ -206,7 +206,7 @@ func TestCloudGetReviewMapsGoldenReviewData(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "diff --git a/race.go b/race.go\nindex 1111111..2222222 100644\n--- a/race.go\n+++ b/race.go\n@@ -1 +1 @@\n-unsafe()\n+safe()\ndiff --git a/README.md b/README.md\nnew file mode 100644\n--- /dev/null\n+++ b/README.md\n@@ -0,0 +1 @@\n+safe usage\n", review.Diff)
 	require.Equal(t, []domain.Commit{{Hash: "source-hash", Message: "Fix race", Author: "Ada <ada@example.test>"}, {Hash: "source-hash-2", Message: "Add coverage", Author: "Bob <bob@example.test>"}}, review.Commits)
-	require.Equal(t, []domain.Participant{{ID: "user-1", Name: "Ada", Role: "REVIEWER", Approved: true}}, review.Participants)
+	require.Equal(t, []domain.Participant{{ID: "user-1", Name: "Ada", Role: "REVIEWER", Approved: true, Verdict: domain.ReviewVerdictApproved}}, review.Participants)
 	require.Equal(t, "user-1", review.ViewerID)
 	require.Equal(t, []domain.Thread{{ID: "10", Comments: []domain.Comment{
 		{ID: "10", Author: "Ada", Body: "Please add a test.", When: time.Date(2026, time.July, 31, 12, 1, 0, 0, time.UTC)},
@@ -219,6 +219,19 @@ func TestCloudGetReviewMapsGoldenReviewData(t *testing.T) {
 	}, review.Files)
 	require.Equal(t, "main", review.PullRequest.Repository.DefaultBranch)
 	require.Equal(t, domain.Repository{Namespace: "forker", Slug: "forked-widgets", CloneURL: mustURL(t, "https://bitbucket.org/forker/forked-widgets.git")}, review.PullRequest.SourceRepository)
+}
+
+func TestMapParticipantsPreservesChangesRequestedVerdict(t *testing.T) {
+	changesRequested := cloudParticipantPayload{Role: "REVIEWER", State: "changes_requested"}
+	changesRequested.User.AccountID, changesRequested.User.DisplayName = "user-1", "Ada"
+	pending := cloudParticipantPayload{Role: "REVIEWER"}
+	pending.User.AccountID, pending.User.DisplayName = "user-2", "Grace"
+	participants := mapParticipants([]cloudParticipantPayload{changesRequested, pending})
+
+	require.Equal(t, []domain.Participant{
+		{ID: "user-1", Name: "Ada", Role: "REVIEWER", Verdict: domain.ReviewVerdictChangesRequested},
+		{ID: "user-2", Name: "Grace", Role: "REVIEWER", Verdict: domain.ReviewVerdictPending},
+	}, participants)
 }
 
 func TestCloudPullRequestRejectsUnsafeHTMLURL(t *testing.T) {

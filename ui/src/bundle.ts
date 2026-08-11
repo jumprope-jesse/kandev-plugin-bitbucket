@@ -14,6 +14,7 @@ import {
   errorMessage,
   integrationSettingsHref,
   linkPullRequestBody,
+  matchingHostRepositoryId,
   normalizePullRequestAssociations,
   normalizePullRequests,
   normalizeRepositories,
@@ -44,278 +45,23 @@ import {
   validateConnectionIdentity,
   validateOAuthRegistration,
 } from "./view-models";
+import type {
+  ActionInput,
+  Component,
+  ElementFactory,
+  PluginHost,
+  PluginRegistry,
+  QueryState,
+} from "./host-contract";
+import { action } from "./actions";
 import {
-  loadTaskPullRequestDetails,
-  reviewSummaryForPullRequest,
-  type PullRequestWithStatus,
-  type ReviewSummaryForHost,
-} from "./task-review-status";
-
-type ElementFactory = (type: unknown, props?: Record<string, unknown> | null, ...children: unknown[]) => unknown;
-type Component = (props?: Record<string, unknown>) => unknown;
-
-type ResponsiveBreakpoint = { isMobile: boolean; usesDesktopWorkbench?: boolean };
-type ActionInput = {
-  workspaceId?: string;
-  taskId?: string;
-  sessionId?: string;
-  repositoryId?: string;
-  body?: unknown;
-};
-type TaskContext = {
-  workspaceId: string;
-  taskId: string;
-  repositories: readonly unknown[];
-  pathname: string;
-  presentation: "desktop" | "mobile";
-};
-
-type HostReact = {
-  useState<T>(value: T | (() => T)): [T, (next: T | ((previous: T) => T)) => void];
-  useEffect(effect: () => void | (() => void), dependencies?: unknown[]): void;
-  useMemo<T>(factory: () => T, dependencies: unknown[]): T;
-  useCallback<T extends (...args: never[]) => unknown>(callback: T, dependencies: unknown[]): T;
-  useRef<T>(value: T): { current: T };
-};
-
-type PluginHost = {
-  React: HostReact;
-  jsx: ElementFactory;
-  ui: Record<string, unknown>;
-  api: {
-    invokeAction<T>(
-      key: string,
-      input?: ActionInput,
-      options?: { signal?: AbortSignal },
-    ): Promise<T>;
-  };
-  useResponsiveBreakpoint(): ResponsiveBreakpoint;
-  store: { getState(): Record<string, unknown>; subscribe(listener: () => void): () => void };
-  navigate(href: string, options?: { replace?: boolean }): void;
-  openModal(options: {
-    title: string;
-    content: Component;
-    size?: "sm" | "md" | "lg" | "xl";
-    presentation?: "dialog" | "drawer";
-  }): { close(): void };
-  openTaskLinkDialog(options: {
-    title: string;
-    description: string;
-    inputLabel: string;
-    placeholder?: string;
-    emptyError: string;
-    failureMessage: string;
-    successMessage: string;
-    inputTestId?: string;
-    errorTestId?: string;
-    submitTestId?: string;
-    onSubmit(reference: string): Promise<void>;
-  }): { close(): void };
-  storage: {
-    get(
-      scope: "workspace",
-      scopeId: string,
-      key: string,
-    ): Promise<{ value: unknown; updatedAt: string } | undefined>;
-    set(
-      scope: "workspace",
-      scopeId: string,
-      key: string,
-      value: unknown,
-    ): Promise<{ updatedAt: string }>;
-    subscribe(
-      filter: { scope: "workspace"; scopeId: string; key: string },
-      listener: () => void,
-    ): () => void;
-  };
-};
-
-type PluginRegistry = {
-  registerRoute(path: string, component: Component, options?: Record<string, unknown>): void;
-  registerNavItem(item: { id: string; label: string; path: string; icon: string; section: "integrations" }): void;
-  registerComponent(slot: string, component: Component): void;
-  registerIntegrationSettings(settings: {
-    id: string;
-    label: string;
-    description: string;
-    icon?: string;
-    Component: Component;
-  }): void;
-  registerRepositoryProvider(provider: {
-    id: string;
-    label: string;
-    icon: string;
-    listRepositories(context: { workspaceId: string; signal: AbortSignal }): Promise<RepositoryInspection[]>;
-    matchesURL(url: string): boolean;
-    listBranches(context: { workspaceId: string; repository: RepositoryInspection; signal: AbortSignal }): Promise<unknown[]>;
-    inspectURL(context: { workspaceId: string; url: string; signal: AbortSignal }): Promise<RepositoryInspection | null>;
-    supportsDraft?: boolean;
-    createChangeRequest?(context: {
-      workspaceId: string;
-      taskId: string;
-      sessionId: string;
-      repositoryId: string;
-      title: string;
-      body: string;
-      baseBranch?: string;
-      draft: boolean;
-      signal: AbortSignal;
-    }): Promise<{ url: string; provider?: string; output?: string }>;
-  }): void;
-  registerTaskAction(action: {
-    id: string;
-    label: string;
-    icon: string;
-    placement: "link";
-    visible?(context: TaskContext): boolean;
-    run(context: TaskContext): Promise<void>;
-  }): void;
-  registerReviewProvider(provider: {
-    id: string;
-    label: string;
-    icon: string;
-    changeRequestNoun: string;
-    order: number;
-    getSnapshot(taskId: string): readonly ReviewSummary[];
-    subscribe(taskId: string, listener: () => void): () => void;
-    refresh(taskId: string, signal: AbortSignal): Promise<void>;
-    getAssociationSnapshot?(workspaceId: string): readonly ReviewTaskAssociation[];
-    subscribeAssociations?(workspaceId: string, listener: () => void): () => void;
-    refreshAssociations?(workspaceId: string, signal: AbortSignal): Promise<void>;
-    unlink?(context: {
-      workspaceId: string;
-      taskId: string;
-      reviewKey: string;
-      signal: AbortSignal;
-    }): Promise<void>;
-    ReviewPanel: Component;
-  }): void;
-};
-
-type ReviewSummary = ReviewSummaryForHost;
-type ReviewTaskAssociation = { providerId: "bitbucket"; taskId: string; reviewKey: string };
-
-type QueryState<T> = { data: T | null; loading: boolean; error: string | null; lastFetchedAt: Date | null; refresh(): void };
+  associationStore,
+  refreshAssociationStore,
+  refreshReviewStore,
+  reviewStore,
+} from "./review-store";
 
 const PLUGIN_ID = "kandev-plugin-bitbucket";
-const action = {
-  connectionGet: "connection.get",
-  connectionSave: "connection.save",
-  connectionDisconnect: "connection.disconnect",
-  oauthStart: "oauth.start",
-  repositoriesList: "repositories.list",
-  repositoriesBranches: "repositories.branches",
-  repositoriesInspect: "repositories.inspect",
-  pullRequestsGet: "pullrequests.get",
-  pullRequestsAssociations: "pullrequests.associations",
-  pullRequestsInspect: "pullrequests.inspect",
-  pullRequestsLink: "pullrequests.link",
-  pullRequestsCreate: "pullrequests.create",
-  pullRequestsUnlink: "pullrequests.unlink",
-  reviewsAction: "reviews.action",
-  tasksLaunch: "tasks.launch",
-  watchesGet: "watches.get",
-  watchesUpdate: "watches.update",
-  watchesRun: "watches.run",
-  watchesPause: "watches.pause",
-  watchesResume: "watches.resume",
-  watchesPreviewReset: "watches.preview_reset",
-  watchesPreviewDelete: "watches.preview_delete",
-  watchesReset: "watches.reset",
-  watchesDelete: "watches.delete",
-} as const;
-
-const reviewStore = (() => {
-  const snapshots = new Map<string, ReviewSummary[]>();
-  const listeners = new Map<string, Set<() => void>>();
-  return {
-    get(taskId: string): readonly ReviewSummary[] {
-      return snapshots.get(taskId) ?? [];
-    },
-    set(taskId: string, pullRequests: PullRequestWithStatus[]) {
-      snapshots.set(taskId, pullRequests.map((pullRequest) => reviewSummaryForPullRequest(pullRequest)));
-      listeners.get(taskId)?.forEach((listener) => listener());
-    },
-    subscribe(taskId: string, listener: () => void): () => void {
-      const taskListeners = listeners.get(taskId) ?? new Set<() => void>();
-      taskListeners.add(listener);
-      listeners.set(taskId, taskListeners);
-      return () => {
-        taskListeners.delete(listener);
-        if (taskListeners.size === 0) listeners.delete(taskId);
-      };
-    },
-    clear() {
-      snapshots.clear();
-      listeners.forEach((taskListeners) => taskListeners.forEach((listener) => listener()));
-      listeners.clear();
-    },
-  };
-})();
-
-const associationStore = (() => {
-  const snapshots = new Map<string, ReviewTaskAssociation[]>();
-  const listeners = new Map<string, Set<() => void>>();
-  return {
-    get(workspaceId: string): readonly ReviewTaskAssociation[] {
-      return snapshots.get(workspaceId) ?? [];
-    },
-    set(workspaceId: string, value: unknown) {
-      const associations = normalizePullRequestAssociations(value);
-      snapshots.set(
-        workspaceId,
-        Object.entries(associations).flatMap(([reviewKey, tasks]) =>
-          tasks.map((task) => ({ providerId: "bitbucket", taskId: task.taskId, reviewKey })),
-        ),
-      );
-      listeners.get(workspaceId)?.forEach((listener) => listener());
-    },
-    subscribe(workspaceId: string, listener: () => void): () => void {
-      const workspaceListeners = listeners.get(workspaceId) ?? new Set<() => void>();
-      workspaceListeners.add(listener);
-      listeners.set(workspaceId, workspaceListeners);
-      return () => {
-        workspaceListeners.delete(listener);
-        if (workspaceListeners.size === 0) listeners.delete(workspaceId);
-      };
-    },
-    clear() {
-      snapshots.clear();
-      listeners.forEach((workspaceListeners) =>
-        workspaceListeners.forEach((listener) => listener()),
-      );
-      listeners.clear();
-    },
-  };
-})();
-
-async function refreshAssociationStore(
-  host: PluginHost,
-  workspaceId: string,
-  signal: AbortSignal,
-): Promise<void> {
-  const response = await host.api.invokeAction<unknown>(
-    action.pullRequestsAssociations,
-    { workspaceId },
-    { signal },
-  );
-  if (!signal.aborted) associationStore.set(workspaceId, response);
-}
-
-async function refreshReviewStore(
-  host: PluginHost,
-  taskId: string,
-  signal: AbortSignal,
-  workspaceId?: string,
-): Promise<void> {
-  const pullRequests = await loadTaskPullRequestDetails(
-    (key, input, options) => host.api.invokeAction(key, input, options),
-    { taskId, ...(workspaceId ? { workspaceId } : {}) },
-    signal,
-  );
-  if (!signal.aborted) reviewStore.set(taskId, pullRequests);
-}
-
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -388,7 +134,7 @@ function useSavedQueries(host: PluginHost, workspaceId?: string) {
     async save(input: Pick<SavedQuery, "label" | "query" | "repositoryId" | "state">) {
       const created = newSavedQuery(
         input,
-        `saved-${globalThis.crypto.randomUUID()}`,
+        `saved-${host.utils.generateUUID()}`,
         new Date().toISOString(),
       );
       await persist([...queries, created]);
@@ -597,7 +343,7 @@ function ConnectionHealth({ host, workspaceId: scopedWorkspaceId }: { host: Plug
   const oauthRegistration = connectionOAuthRegistration(details);
   const [oauthClientId, setOAuthClientId] = React.useState("");
   const [oauthClientSecret, setOAuthClientSecret] = React.useState("");
-  const oauthCallbackUrl = deriveOAuthCallbackURL(window.location.origin);
+  const oauthCallbackUrl = deriveOAuthCallbackURL(host.api.baseUrl, window.location.origin);
   const [disconnectOpen, setDisconnectOpen] = React.useState(false);
   React.useEffect(() => {
     if (!connection.data) return;
@@ -791,15 +537,6 @@ function taskCreateContext(state: Record<string, unknown>, workspaceId?: string)
   const byWorkspace = record(repositoryState.itemsByWorkspaceId);
   const repositories = Array.isArray(byWorkspace[workspaceId]) ? (byWorkspace[workspaceId] as unknown[]).map(record) : [];
   return { workflowId, defaultStepId: steps[0].id, steps, repositories };
-}
-
-function matchingHostRepositoryId(repositories: Array<Record<string, unknown>>, pullRequest: PullRequest): string | undefined {
-  const match = repositories.find((repository) => {
-    if (text(repository.provider).toLowerCase() !== "bitbucket") return false;
-    return text(repository.provider_repo_id) === pullRequest.repositoryId
-      || (pullRequest.url && text(repository.remote_url) && pullRequest.url.includes(text(repository.provider_owner)) && pullRequest.url.includes(text(repository.provider_name)));
-  });
-  return match ? text(match.id) || undefined : undefined;
 }
 
 function DashboardPullRequestList({ host, pullRequests, loading, error, tasksByReview, onStartTask }: { host: PluginHost; pullRequests: PullRequest[]; loading: boolean; error: string | null; tasksByReview: Record<string, PullRequest["tasks"]>; onStartTask(pullRequest: PullRequest, preset: TaskLaunchPreset): void }) {
@@ -1320,7 +1057,7 @@ function BitbucketPage({ host }: { host: PluginHost }) {
             onStartTask: (pullRequest: PullRequest, preset: TaskLaunchPreset) => setLaunch({
               pullRequest,
               preset,
-              launchId: globalThis.crypto.randomUUID(),
+              launchId: host.utils.generateUUID(),
             }),
           }),
         ),
@@ -1365,7 +1102,12 @@ function registerNativeIntegrations(registry: PluginRegistry, host: PluginHost) 
       const response = await host.api.invokeAction<Record<string, unknown>>(action.repositoriesBranches, { workspaceId: scopedWorkspaceId, body: { repository: pluginRepositoryInput(repository) } }, { signal });
       if (signal.aborted) return [];
       const branches = record(response).branches;
-      return Array.isArray(branches) ? branches : [];
+      return Array.isArray(branches)
+        ? branches.flatMap((entry) => {
+            const name = text(record(entry).name);
+            return name ? [{ name }] : [];
+          })
+        : [];
     },
     async inspectURL({ workspaceId: scopedWorkspaceId, url, signal }) {
       const response = await host.api.invokeAction<unknown>(action.repositoriesInspect, { workspaceId: scopedWorkspaceId, body: { url } }, { signal });
@@ -1397,13 +1139,17 @@ function registerNativeIntegrations(registry: PluginRegistry, host: PluginHost) 
         },
         { signal },
       );
-      void Promise.all([
-        refreshReviewStore(host, taskId, new AbortController().signal, workspaceId),
-        refreshAssociationStore(host, workspaceId, new AbortController().signal),
+      await Promise.all([
+        refreshReviewStore(host, taskId, signal, workspaceId),
+        refreshAssociationStore(host, workspaceId, signal),
       ]).catch(() => undefined);
       return {
         url: text(response.url),
         provider: "bitbucket",
+        ...(typeof response.linked === "boolean" ? { linked: response.linked } : {}),
+        ...(text(response.association_error)
+          ? { associationError: text(response.association_error) }
+          : {}),
       };
     },
   });
@@ -1424,25 +1170,22 @@ function registerNativeIntegrations(registry: PluginRegistry, host: PluginHost) 
         inputTestId: "bitbucket-review-reference",
         errorTestId: "bitbucket-review-reference-error",
         submitTestId: "bitbucket-review-reference-submit",
-        async onSubmit(reference) {
+        async onSubmit(reference, signal) {
           const body = linkPullRequestBody(reference);
           if (!body) throw new Error("Enter a Bitbucket pull request URL or key.");
-          await host.api.invokeAction(action.pullRequestsLink, {
-            workspaceId: context.workspaceId,
-            taskId: context.taskId,
-            body,
-          });
-          void refreshReviewStore(
-            host,
-            context.taskId,
-            new AbortController().signal,
-            context.workspaceId,
-          ).catch(() => undefined);
-          void refreshAssociationStore(
-            host,
-            context.workspaceId,
-            new AbortController().signal,
-          ).catch(() => undefined);
+          await host.api.invokeAction(
+            action.pullRequestsLink,
+            {
+              workspaceId: context.workspaceId,
+              taskId: context.taskId,
+              body,
+            },
+            { signal },
+          );
+          await Promise.all([
+            refreshReviewStore(host, context.taskId, signal, context.workspaceId),
+            refreshAssociationStore(host, context.workspaceId, signal),
+          ]).catch(() => undefined);
         },
       });
     },

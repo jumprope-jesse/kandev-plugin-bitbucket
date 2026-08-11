@@ -31,7 +31,7 @@ func TestConnectionResolver_PersistsOnlyCredentialFreeSettings(t *testing.T) {
 	require.Equal(t, domain.ProductDataCenter, settings.Product)
 	require.Equal(t, "https://bitbucket.example.test/bitbucket", settings.BaseURL)
 	require.NotContains(t, flatten(host.state), "never-in-state")
-	require.Contains(t, host.secrets[connectionSecretKey("workspace-1")], "never-in-state")
+	require.Contains(t, host.secrets[connectionSecretKey("workspace-1", settings.CredentialGeneration)], "never-in-state")
 }
 
 func TestConnectionResolver_CredentialGenerationChangesOnSaveAndDisappearsOnDisconnect(t *testing.T) {
@@ -179,7 +179,7 @@ func TestConnectionResolver_RollsBackNewSecretsWhenConnectionStateWriteFails(t *
 	host := newConnectionHost()
 	resolver, err := NewConnectionResolver(host)
 	require.NoError(t, err)
-	_, err = resolver.Save(context.Background(), "workspace-1", ConnectionInput{
+	first, err := resolver.Save(context.Background(), "workspace-1", ConnectionInput{
 		Product: domain.ProductCloud, CloudWorkspace: "acme", AuthMethod: "api_token", AuthIdentity: "dev@example.test", Token: "old-token",
 	})
 	require.NoError(t, err)
@@ -194,33 +194,75 @@ func TestConnectionResolver_RollsBackNewSecretsWhenConnectionStateWriteFails(t *
 	require.NoError(t, loadErr)
 	require.True(t, found)
 	require.Equal(t, "api_token", settings.AuthMethod)
-	require.Equal(t, "old-token", host.secrets[connectionSecretKey("workspace-1")])
-	_, registrationSaved := host.secrets[oauthRegistrationSecretKey("workspace-1")]
+	require.Equal(t, "old-token", host.secrets[connectionSecretKey("workspace-1", first.CredentialGeneration)])
+	_, registrationSaved := host.secrets[oauthRegistrationSecretKey("workspace-1", 1)]
 	require.False(t, registrationSaved)
 }
 
-func TestConnectionResolver_RollsBackStateAndSecretsWhenCredentialRevocationFails(t *testing.T) {
+func TestConnectionResolver_CompensatesStagedGenerationAfterCallerCancellation(t *testing.T) {
 	host := newConnectionHost()
 	resolver, err := NewConnectionResolver(host)
 	require.NoError(t, err)
-	_, err = resolver.Save(context.Background(), "workspace-1", ConnectionInput{
+	first, err := resolver.Save(context.Background(), "workspace-1", ConnectionInput{
+		Product: domain.ProductCloud, CloudWorkspace: "acme", AuthMethod: "api_token",
+		AuthIdentity: "dev@example.test", Token: "old-token",
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	host.setStateErr = errors.New("state unavailable")
+	host.beforeSetStateError = cancel
+	_, err = resolver.Save(ctx, "workspace-1", ConnectionInput{
+		Product: domain.ProductCloud, CloudWorkspace: "acme", AuthMethod: "api_token",
+		AuthIdentity: "dev@example.test", Token: "new-token",
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+
+	oldKey := connectionSecretKey("workspace-1", first.CredentialGeneration)
+	stagedKey := connectionSecretKey("workspace-1", first.CredentialGeneration+1)
+	require.Equal(t, "old-token", host.secrets[oldKey])
+	_, stagedFound := host.secrets[stagedKey]
+	require.False(t, stagedFound)
+	require.Contains(t, host.deletedSecretKeys, stagedKey)
+}
+
+func TestConnectionResolver_CommitsNewGenerationAndRetriesOldSecretRevocation(t *testing.T) {
+	host := newConnectionHost()
+	resolver, err := NewConnectionResolver(host)
+	require.NoError(t, err)
+	first, err := resolver.Save(context.Background(), "workspace-1", ConnectionInput{
 		Product: domain.ProductCloud, CloudWorkspace: "acme", AuthMethod: "api_token", AuthIdentity: "dev@example.test", Token: "old-token",
 	})
 	require.NoError(t, err)
-	host.deleteSecretErrKey = connectionSecretKey("workspace-1")
+	oldKey := connectionSecretKey("workspace-1", first.CredentialGeneration)
+	host.deleteSecretErrKey = oldKey
 
-	_, err = resolver.Save(context.Background(), "workspace-1", ConnectionInput{
+	next, err := resolver.Save(context.Background(), "workspace-1", ConnectionInput{
 		Product: domain.ProductCloud, CloudWorkspace: "acme", AuthMethod: "oauth",
 		OAuthClientID: "client-id", OAuthClientSecret: "client-secret", OAuthRedirectURL: "https://plugin.example.test/callback",
 	})
-	require.Error(t, err)
+	require.NoError(t, err)
+	require.Equal(t, "oauth", next.AuthMethod)
 	settings, found, loadErr := resolver.Load(context.Background(), "workspace-1")
 	require.NoError(t, loadErr)
 	require.True(t, found)
-	require.Equal(t, "api_token", settings.AuthMethod)
-	require.Equal(t, "old-token", host.secrets[connectionSecretKey("workspace-1")])
-	_, registrationSaved := host.secrets[oauthRegistrationSecretKey("workspace-1")]
-	require.False(t, registrationSaved)
+	require.Equal(t, "oauth", settings.AuthMethod)
+	require.Contains(t, settings.PendingSecretRevocations, oldKey)
+	require.Equal(t, "old-token", host.secrets[oldKey])
+	require.Contains(t, host.secrets[oauthRegistrationSecretKey("workspace-1", settings.OAuthGeneration)], "client-secret")
+
+	host.deleteSecretErrKey = ""
+	_, err = resolver.Save(context.Background(), "workspace-1", ConnectionInput{
+		Product: domain.ProductCloud, CloudWorkspace: "acme", AuthMethod: "oauth",
+	})
+	require.NoError(t, err)
+	_, oldSecretFound := host.secrets[oldKey]
+	require.False(t, oldSecretFound)
+	settings, found, loadErr = resolver.Load(context.Background(), "workspace-1")
+	require.NoError(t, loadErr)
+	require.True(t, found)
+	require.Empty(t, settings.PendingSecretRevocations)
 }
 
 func TestConnectionResolver_ReusesSavedOAuthRegistrationWithoutSecretReentry(t *testing.T) {
@@ -239,19 +281,19 @@ func TestConnectionResolver_ReusesSavedOAuthRegistrationWithoutSecretReentry(t *
 	})
 	require.NoError(t, err)
 	require.Equal(t, first.OAuthGeneration, second.OAuthGeneration)
-	require.Contains(t, host.secrets[oauthRegistrationSecretKey("workspace-1")], "client-secret")
+	require.Contains(t, host.secrets[oauthRegistrationSecretKey("workspace-1", second.OAuthGeneration)], "client-secret")
 }
 
 func TestConnectionResolver_RejectsOAuthRegistrationReuseWhenSecretWasRevoked(t *testing.T) {
 	host := newConnectionHost()
 	resolver, err := NewConnectionResolver(host)
 	require.NoError(t, err)
-	_, err = resolver.Save(context.Background(), "workspace-1", ConnectionInput{
+	settings, err := resolver.Save(context.Background(), "workspace-1", ConnectionInput{
 		Product: domain.ProductCloud, CloudWorkspace: "acme", AuthMethod: "oauth",
 		OAuthClientID: "client-id", OAuthClientSecret: "client-secret", OAuthRedirectURL: "https://plugin.example.test/callback",
 	})
 	require.NoError(t, err)
-	delete(host.secrets, oauthRegistrationSecretKey("workspace-1"))
+	delete(host.secrets, oauthRegistrationSecretKey("workspace-1", settings.OAuthGeneration))
 
 	_, err = resolver.Save(context.Background(), "workspace-1", ConnectionInput{
 		Product: domain.ProductCloud, CloudWorkspace: "acme", AuthMethod: "oauth",
@@ -752,10 +794,12 @@ func TestConnectionResolver_RejectsConnectionWithoutAuthMethod(t *testing.T) {
 
 type connectionHost struct {
 	pluginsdk.UnimplementedHostData
-	state              map[string]map[string]any
-	secrets            map[string]string
-	setStateErr        error
-	deleteSecretErrKey string
+	state               map[string]map[string]any
+	secrets             map[string]string
+	setStateErr         error
+	deleteSecretErrKey  string
+	beforeSetStateError func()
+	deletedSecretKeys   []string
 }
 
 type scopedConnectionHost struct {
@@ -777,6 +821,9 @@ func (h *connectionHost) GetState(_ context.Context, scope, scopeID, key string)
 }
 func (h *connectionHost) SetState(_ context.Context, scope, scopeID, key string, value map[string]any) error {
 	if h.setStateErr != nil {
+		if h.beforeSetStateError != nil {
+			h.beforeSetStateError()
+		}
 		return h.setStateErr
 	}
 	h.state[scope+":"+scopeID+":"+key] = value
@@ -801,10 +848,14 @@ func (h *connectionHost) SetSecret(_ context.Context, key, value string) error {
 	h.secrets[key] = value
 	return nil
 }
-func (h *connectionHost) DeleteSecret(_ context.Context, key string) error {
+func (h *connectionHost) DeleteSecret(ctx context.Context, key string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if key == h.deleteSecretErrKey {
 		return errors.New("secret deletion unavailable")
 	}
+	h.deletedSecretKeys = append(h.deletedSecretKeys, key)
 	delete(h.secrets, key)
 	return nil
 }

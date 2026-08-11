@@ -37,12 +37,22 @@ type Commit struct {
 	When    time.Time
 }
 
-// Participant captures a review participant and approval state.
+type ReviewVerdict string
+
+const (
+	ReviewVerdictPending          ReviewVerdict = "pending"
+	ReviewVerdictApproved         ReviewVerdict = "approved"
+	ReviewVerdictChangesRequested ReviewVerdict = "changes_requested"
+)
+
+// Participant captures a provider-neutral review verdict. Approved remains
+// for source compatibility; Verdict preserves Data Center NEEDS_WORK.
 type Participant struct {
 	ID       string
 	Name     string
 	Role     string
 	Approved bool
+	Verdict  ReviewVerdict
 }
 
 // Comment is a provider-neutral review comment.

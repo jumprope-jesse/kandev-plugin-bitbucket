@@ -49,6 +49,33 @@ export type PullRequest = {
   capabilities: string[];
 };
 
+/** Resolves exactly one persisted Kandev repository by canonical provider identity. */
+export function matchingHostRepositoryId(
+  repositories: JsonRecord[],
+  pullRequest: Pick<PullRequest, "repositoryId">,
+): string | undefined {
+  const target = canonicalRepositoryIdentity(pullRequest.repositoryId);
+  if (!target) return undefined;
+  const matches = repositories.filter((repository) => {
+    if ((string(repository.provider) ?? "").toLowerCase() !== "bitbucket") return false;
+    const owner = string(repository.provider_owner);
+    const name = string(repository.provider_name);
+    const identities = [
+      string(repository.provider_repo_id),
+      string(repository.provider_repository_id),
+      owner && name ? `${owner}/${name}` : undefined,
+    ];
+    return identities.some((identity) => canonicalRepositoryIdentity(identity) === target);
+  });
+  if (matches.length !== 1) return undefined;
+  return string(matches[0].id);
+}
+
+function canonicalRepositoryIdentity(value: unknown): string | undefined {
+  const identity = string(value)?.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
+  return identity?.toLowerCase();
+}
+
 export type TaskRowLink = {
   id: string;
   taskId: string;
@@ -113,6 +140,7 @@ export type ReviewDetail = PullRequest & {
     name: string;
     role?: string;
     approved?: boolean;
+    verdict?: "approved" | "changes_requested" | "pending";
     isCurrentUser?: boolean;
     url?: string;
     avatarUrl?: string;
@@ -259,8 +287,12 @@ export function disconnectConnectionInput(workspaceId: string): { workspaceId: s
   return { workspaceId };
 }
 
-export function deriveOAuthCallbackURL(origin: string): string {
-  return new URL("/api/plugins/kandev-plugin-bitbucket/webhooks/oauth-callback", origin).toString();
+export function deriveOAuthCallbackURL(apiBaseUrl: string, browserOrigin: string): string {
+  const backendOrigin = apiBaseUrl.trim() || browserOrigin;
+  return new URL(
+    "/api/plugins/kandev-plugin-bitbucket/webhooks/oauth-callback",
+    backendOrigin,
+  ).toString();
 }
 
 function record(value: unknown): JsonRecord {
@@ -752,6 +784,20 @@ function isCurrentUserParticipant(participant: JsonRecord): boolean {
     user.isCurrentUser === true;
 }
 
+function normalizeParticipantVerdict(
+  participant: JsonRecord,
+  approved: boolean | undefined,
+): ReviewDetail["participants"][number]["verdict"] {
+  const raw = (string(participant.verdict) ?? string(participant.status))
+    ?.trim()
+    .toUpperCase();
+  if (["NEEDS_WORK", "CHANGES_REQUESTED", "REQUEST_CHANGES"].includes(raw ?? "")) {
+    return "changes_requested";
+  }
+  if (raw === "APPROVED" || approved) return "approved";
+  return "pending";
+}
+
 function normalizeViewerApproval(source: JsonRecord, participants: unknown[]): boolean | undefined {
   const direct =
     boolean(source.viewer_approved) ??
@@ -799,6 +845,7 @@ export function normalizeReviewDetail(value: unknown): ReviewDetail | null {
       const approved =
         boolean(participant.approved) ??
         (string(participant.status)?.toUpperCase() === "APPROVED");
+      const verdict = normalizeParticipantVerdict(participant, approved);
       const isCurrentUser =
         boolean(participant.is_current_user) ??
         boolean(participant.isCurrentUser) ??
@@ -811,6 +858,7 @@ export function normalizeReviewDetail(value: unknown): ReviewDetail | null {
             name,
             role: string(participant.role),
             approved,
+            verdict,
             isCurrentUser,
             url: personLink(user, "html"),
             avatarUrl: personLink(user, "avatar"),
@@ -885,7 +933,12 @@ export function changeRequestDetailModel(detail: ReviewDetail): HostChangeReques
     ["REVIEWER", "APPROVER"].includes(participant.role?.toUpperCase() ?? "REVIEWER"),
   );
   const approved = reviewers.filter((participant) => participant.approved);
-  const requested = reviewers.filter((participant) => !participant.approved);
+  const changesRequested = reviewers.filter(
+    (participant) => participant.verdict === "changes_requested",
+  );
+  const requested = reviewers.filter(
+    (participant) => participant.verdict !== "approved" && participant.verdict !== "changes_requested",
+  );
   const person = (participant: ReviewDetail["participants"][number]) => ({
     name: participant.name,
     ...(participant.url ? { url: participant.url } : {}),
@@ -924,17 +977,26 @@ export function changeRequestDetailModel(detail: ReviewDetail): HostChangeReques
     additions: detail.files.reduce((total, file) => total + (file.additions ?? 0), 0),
     deletions: detail.files.reduce((total, file) => total + (file.deletions ?? 0), 0),
     ...(detail.description ? { description: detail.description } : {}),
-    ...(approved.length > 0
-      ? { reviewState: "approved" }
-      : requested.length > 0
-        ? { reviewState: "pending" }
-        : {}),
+    ...(changesRequested.length > 0
+      ? { reviewState: "changes_requested" }
+      : approved.length > 0
+        ? { reviewState: "approved" }
+        : requested.length > 0
+          ? { reviewState: "pending" }
+          : {}),
     ...(requested.length > 0 ? { pendingReviewCount: requested.length } : {}),
-    reviews: approved.map((participant) => ({
-      id: participant.id ?? participant.name,
-      author: person(participant),
-      state: "APPROVED",
-    })),
+    reviews: [
+      ...approved.map((participant) => ({
+        id: participant.id ?? participant.name,
+        author: person(participant),
+        state: "APPROVED",
+      })),
+      ...changesRequested.map((participant) => ({
+        id: participant.id ?? participant.name,
+        author: person(participant),
+        state: "CHANGES_REQUESTED",
+      })),
+    ],
     requestedReviewers: requested.map(person),
     checks: detail.statuses.map((status) => ({
       id: status.key,

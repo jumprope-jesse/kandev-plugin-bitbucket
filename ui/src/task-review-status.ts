@@ -121,8 +121,18 @@ export function changeRequestStatusView(
         ["REVIEWER", "APPROVER"].includes(participant.role?.toUpperCase() ?? "REVIEWER"),
       )
     : [];
-  const approved = reviewers.filter((participant) => participant.approved).length;
-  const requested = reviewers.length - approved;
+  const approved = reviewers.filter(
+    (participant) => participant.verdict === "approved" || participant.approved,
+  ).length;
+  const changesRequested = reviewers.filter(
+    (participant) => participant.verdict === "changes_requested",
+  ).length;
+  const requested = reviewers.filter(
+    (participant) =>
+      participant.verdict !== "changes_requested" &&
+      participant.verdict !== "approved" &&
+      !participant.approved,
+  ).length;
   const unresolvedComments = "threads" in pullRequest && Array.isArray(pullRequest.threads)
     ? pullRequest.threads.filter((thread) => !thread.resolved).length
     : 0;
@@ -143,7 +153,11 @@ export function changeRequestStatusView(
     ...(reviewers.length > 0
       ? {
           review: {
-            state: approved > 0 ? "approved" as const : "pending" as const,
+            state: changesRequested > 0
+              ? "changes_requested" as const
+              : approved > 0
+                ? "approved" as const
+                : "pending" as const,
             approved,
             ...(requested > 0 ? { requested } : {}),
           },

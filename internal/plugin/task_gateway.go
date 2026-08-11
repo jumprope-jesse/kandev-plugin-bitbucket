@@ -107,7 +107,7 @@ func (g *TaskGateway) DeleteOwned(ctx context.Context, rootTaskID string) ([]str
 	}
 	deleted, err := manager.Delete(ctx, rootTaskID)
 	if err != nil {
-		return nil, fmt.Errorf("delete plugin-owned task tree: %w", err)
+		return deleted, fmt.Errorf("delete plugin-owned task tree: %w", err)
 	}
 	return deleted, nil
 }

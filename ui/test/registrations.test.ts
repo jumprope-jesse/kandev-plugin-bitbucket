@@ -151,6 +151,7 @@ describe("Bitbucket plugin registrations", () => {
     const integrations: IntegrationSettings[] = [];
     const components: string[] = [];
     const invocations: Invocation[] = [];
+    const actionResults: unknown[] = [];
     registrations[0]?.lifecycle.initialize(
       {
         registerNavItem: (item) => navItems.push(item),
@@ -162,7 +163,7 @@ describe("Bitbucket plugin registrations", () => {
         registerReviewProvider: (provider) => reviewProviders.push(provider),
         registerWsHandler: () => {},
       },
-      modalHost(false, [], invocations),
+      modalHost(false, [], invocations, [], actionResults),
     );
 
     expect(registrations[0]?.id).toBe("kandev-plugin-bitbucket");
@@ -303,12 +304,18 @@ describe("Bitbucket plugin registrations", () => {
     expect(repositoryProviders[0]?.matchesURL("https://git.example.test/scm/ENG/widgets.git")).toBe(true);
     expect(repositoryProviders[0]?.supportsDraft).toBe(false);
     const controller = new AbortController();
+    actionResults.push({ repositories: [] });
     await repositoryProviders[0]?.listRepositories({
       workspaceId: "workspace-1",
       signal: controller.signal,
     });
     expect(invocations[0]?.options?.signal).toBe(controller.signal);
-    await repositoryProviders[0]?.createChangeRequest?.({
+    actionResults.push({
+      url: "https://bitbucket.test/workspace/repo/pull-requests/42",
+      linked: false,
+      association_error: "Task association could not be saved",
+    });
+    const creation = await repositoryProviders[0]?.createChangeRequest?.({
       workspaceId: "workspace-1",
       taskId: "task-1",
       sessionId: "session-1",
@@ -318,6 +325,12 @@ describe("Bitbucket plugin registrations", () => {
       baseBranch: "main",
       draft: false,
       signal: controller.signal,
+    });
+    expect(creation).toEqual({
+      url: "https://bitbucket.test/workspace/repo/pull-requests/42",
+      provider: "bitbucket",
+      linked: false,
+      associationError: "Task association could not be saved",
     });
     expect(invocations).toContainEqual(expect.objectContaining({
       key: "pullrequests.create",

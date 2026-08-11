@@ -325,6 +325,26 @@ func TestReset_RespectsCancelledActionContext(t *testing.T) {
 	require.Empty(t, tasks.deleted)
 }
 
+func TestReset_ReturnsPartialDeletionProgressAndKeepsLinkRetryable(t *testing.T) {
+	repository := &memoryRepository{snapshots: map[string]Snapshot{"workspace-1": {Watches: map[string]Watch{
+		"watch-1": {ID: "watch-1", WorkspaceID: "workspace-1", Links: map[string]TaskLink{
+			"owned": {PullRequestKey: "owned", TaskID: "owned-root", Owned: true},
+		}},
+	}}}}
+	tasks := &recordingTasks{
+		deletedTree: []string{"owned-grandchild"},
+		deleteErr:   errors.New("partial task-tree deletion"),
+	}
+	service, err := NewService(Options{Repository: repository, Provider: staticProvider{}, Tasks: tasks})
+	require.NoError(t, err)
+
+	result, err := service.Reset(context.Background(), "workspace-1", "watch-1")
+
+	require.ErrorContains(t, err, "partial task-tree deletion")
+	require.Equal(t, []string{"owned-grandchild"}, result.DeletedTaskIDs)
+	require.Contains(t, repository.snapshots["workspace-1"].Watches["watch-1"].Links, "owned")
+}
+
 type memoryRepository struct{ snapshots map[string]Snapshot }
 
 func (r *memoryRepository) Load(_ context.Context, workspaceID string) (Snapshot, error) {
@@ -374,6 +394,7 @@ type recordingTasks struct {
 	previewed               []string
 	deleted                 []string
 	createErr               error
+	deleteErr               error
 }
 
 func (t *recordingTasks) FindByReservation(context.Context, string, string) (string, bool, error) {
@@ -398,7 +419,7 @@ func (t *recordingTasks) PreviewOwned(_ context.Context, taskID string) ([]strin
 
 func (t *recordingTasks) DeleteOwned(_ context.Context, taskID string) ([]string, error) {
 	t.deleted = append(t.deleted, taskID)
-	return t.deletedTree, nil
+	return t.deletedTree, t.deleteErr
 }
 
 type blockingProvider struct {

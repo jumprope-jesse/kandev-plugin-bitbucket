@@ -92,6 +92,8 @@ type TaskLink struct {
 	PullRequestKey string `json:"pull_request_key"`
 	TaskID         string `json:"task_id"`
 	Owned          bool   `json:"owned"`
+	ProviderID     string `json:"provider_id,omitempty"`
+	ProviderHost   string `json:"provider_host,omitempty"`
 }
 
 type Watch struct {

@@ -12,6 +12,7 @@ import {
   disconnectConnectionInput,
   integrationSettingsHref,
   linkPullRequestBody,
+  matchingHostRepositoryId,
   normalizeRepositoryInspection,
   normalizeRepositories,
   normalizePullRequests,
@@ -43,6 +44,40 @@ import {
 import { describe, expect, it } from "vitest";
 
 describe("Bitbucket view models", () => {
+  it("resolves one host repository by exact provider identity only", () => {
+    const pullRequest = { repositoryId: "workspace/repo" } as never;
+    expect(
+      matchingHostRepositoryId(
+        [
+          {
+            id: "exact",
+            provider: "bitbucket",
+            provider_repo_id: "workspace/repo",
+            provider_owner: "workspace",
+            provider_name: "repo",
+          },
+          {
+            id: "substring",
+            provider: "bitbucket",
+            provider_owner: "work",
+            provider_name: "repo",
+            remote_url: "https://bitbucket.org/work/repo.git?mentions=workspace/repo",
+          },
+        ],
+        pullRequest,
+      ),
+    ).toBe("exact");
+    expect(
+      matchingHostRepositoryId(
+        [
+          { id: "one", provider: "bitbucket", provider_owner: "workspace", provider_name: "repo" },
+          { id: "two", provider: "bitbucket", provider_repo_id: "workspace/repo" },
+        ],
+        pullRequest,
+      ),
+    ).toBeUndefined();
+  });
+
   it("reads the active workspace from the host workspace slice", () => {
     expect(activeWorkspaceIdFromState({ workspaces: { activeId: "workspace-1" } })).toBe(
       "workspace-1",
@@ -361,7 +396,8 @@ describe("Bitbucket view models", () => {
       ],
       participants: [
         { name: "Grace", role: "REVIEWER", approved: true },
-        { name: "Linus", role: "REVIEWER", approved: false },
+        { name: "Linus", role: "REVIEWER", approved: false, verdict: "changes_requested" },
+        { name: "Margaret", role: "REVIEWER", approved: false, verdict: "pending" },
       ],
       statuses: [{ key: "pipeline", name: "Pipelines", state: "SUCCESSFUL" }],
       threads: [{
@@ -388,10 +424,13 @@ describe("Bitbucket view models", () => {
       additions: 20,
       deletions: 3,
       description: "One host-owned review surface.",
-      reviewState: "approved",
+      reviewState: "changes_requested",
       pendingReviewCount: 1,
-      reviews: [{ id: "Grace", author: { name: "Grace" }, state: "APPROVED" }],
-      requestedReviewers: [{ name: "Linus" }],
+      reviews: [
+        { id: "Grace", author: { name: "Grace" }, state: "APPROVED" },
+        { id: "Linus", author: { name: "Linus" }, state: "CHANGES_REQUESTED" },
+      ],
+      requestedReviewers: [{ name: "Margaret" }],
       checks: [{ id: "pipeline", name: "Pipelines", state: "SUCCESSFUL" }],
       comments: [
         { id: "10", author: { name: "Grace" }, body: "Please reuse the host.", path: "ui.tsx", resolved: false },
@@ -874,6 +913,18 @@ describe("Bitbucket view models", () => {
     })).toEqual({
       configured: true,
     });
-    expect(deriveOAuthCallbackURL("https://kandev.example.test/workspaces/acme")).toBe("https://kandev.example.test/api/plugins/kandev-plugin-bitbucket/webhooks/oauth-callback");
+    expect(
+      deriveOAuthCallbackURL(
+        "https://api.kandev.example.test",
+        "https://app.kandev.example.test/workspaces/acme",
+      ),
+    ).toBe(
+      "https://api.kandev.example.test/api/plugins/kandev-plugin-bitbucket/webhooks/oauth-callback",
+    );
+    expect(
+      deriveOAuthCallbackURL("", "https://kandev.example.test/workspaces/acme"),
+    ).toBe(
+      "https://kandev.example.test/api/plugins/kandev-plugin-bitbucket/webhooks/oauth-callback",
+    );
   });
 });
