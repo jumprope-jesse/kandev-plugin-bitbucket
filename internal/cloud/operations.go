@@ -2,6 +2,7 @@ package cloud
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -48,6 +49,10 @@ func (c *Client) CreatePullRequest(ctx context.Context, input domain.CreatePullR
 }
 
 func (c *Client) GetReview(ctx context.Context, repository domain.Repository, number int) (domain.Review, error) {
+	return c.GetReviewProjected(ctx, repository, number, domain.FullReviewProjection())
+}
+
+func (c *Client) GetReviewProjected(ctx context.Context, repository domain.Repository, number int, projection domain.ReviewProjection) (domain.Review, error) {
 	if err := validateRepository(repository); err != nil || number <= 0 {
 		return domain.Review{}, fmt.Errorf("invalid Cloud pull request")
 	}
@@ -61,43 +66,71 @@ func (c *Client) GetReview(ctx context.Context, repository domain.Repository, nu
 		return domain.Review{}, err
 	}
 	pr.Capabilities = c.Capabilities()
-	diffEndpoint := c.repositoryEndpoint(repository, "pullrequests", fmt.Sprint(number), "diff")
-	diff, err := c.getText(ctx, &diffEndpoint)
-	if err != nil {
-		return domain.Review{}, err
+	diff := ""
+	if projection.Diff {
+		diffEndpoint := c.repositoryEndpoint(repository, "pullrequests", fmt.Sprint(number), "diff")
+		diff, err = c.getText(ctx, &diffEndpoint)
+		if err != nil {
+			return domain.Review{}, err
+		}
 	}
-	files, err := c.reviewFiles(ctx, repository, number, diff)
-	if err != nil {
-		return domain.Review{}, err
+	var files []domain.ReviewFile
+	if projection.Files {
+		files, err = c.reviewFiles(ctx, repository, number, diff)
+		if err != nil {
+			return domain.Review{}, err
+		}
 	}
-	commits, err := c.reviewCommits(ctx, repository, number)
-	if err != nil {
-		return domain.Review{}, err
+	var commits []domain.Commit
+	if projection.Commits {
+		commits, err = c.reviewCommits(ctx, repository, number)
+		if err != nil {
+			return domain.Review{}, err
+		}
 	}
-	comments, err := c.reviewComments(ctx, repository, number)
-	if err != nil {
-		return domain.Review{}, err
+	var comments []domain.Thread
+	if projection.Threads {
+		comments, err = c.reviewComments(ctx, repository, number)
+		if err != nil {
+			return domain.Review{}, err
+		}
 	}
-	if !isPathSegment(pr.Source.Commit) {
-		return domain.Review{}, fmt.Errorf("Cloud pull request source commit is invalid")
+	var statuses []domain.BuildStatus
+	if projection.Statuses {
+		if !isPathSegment(pr.Source.Commit) {
+			return domain.Review{}, fmt.Errorf("Cloud pull request source commit is invalid")
+		}
+		statuses, err = c.reviewStatuses(ctx, repository, pr.Source.Commit)
+		if err != nil {
+			return domain.Review{}, err
+		}
 	}
-	statuses, err := c.reviewStatuses(ctx, repository, pr.Source.Commit)
-	if err != nil {
-		return domain.Review{}, err
+	viewerID := ""
+	if projection.Viewer {
+		viewerID, err = c.currentUserID(ctx)
+		if err != nil {
+			return domain.Review{}, err
+		}
 	}
-	viewerID, err := c.currentUserID(ctx)
-	if err != nil {
-		return domain.Review{}, err
+	var threadCount *int
+	if projection.ThreadCount && projection.Threads {
+		count := len(comments)
+		threadCount = &count
+	}
+	var participants []domain.Participant
+	if projection.Participants {
+		participants = mapParticipants(payload.Participants)
 	}
 	return domain.Review{
-		PullRequest:  pr,
-		ViewerID:     viewerID,
-		Diff:         diff,
-		Files:        files,
-		Commits:      commits,
-		Participants: mapParticipants(payload.Participants),
-		Threads:      comments,
-		Statuses:     statuses,
+		PullRequest:           pr,
+		ViewerID:              viewerID,
+		Diff:                  diff,
+		Files:                 files,
+		Commits:               commits,
+		Participants:          participants,
+		Threads:               comments,
+		Statuses:              statuses,
+		UnresolvedThreadCount: threadCount,
 	}, nil
 }
 
@@ -262,6 +295,9 @@ func (c *Client) SearchPullRequestsPage(ctx context.Context, query domain.PullRe
 	if query.Limit <= 0 {
 		return domain.PullRequestPage{}, fmt.Errorf("pull request limit must be positive")
 	}
+	if query.Repository.ID == "" || query.Repository.ProviderScope == "" {
+		return domain.PullRequestPage{}, fmt.Errorf("pull request pagination requires immutable repository identity")
+	}
 	states, err := cloudPullRequestStates(query.State)
 	if err != nil {
 		return domain.PullRequestPage{}, err
@@ -272,16 +308,19 @@ func (c *Client) SearchPullRequestsPage(ctx context.Context, query domain.PullRe
 	return c.searchPullRequestsSinglePage(ctx, query, states[0])
 }
 
-const cloudAllPageCursorVersion = 1
+const cloudAllPageCursorVersion = 2
 
 type cloudAllPageCursor struct {
-	Version int    `json:"version"`
-	State   int    `json:"state"`
-	Cursor  string `json:"cursor,omitempty"`
+	Version       int    `json:"version"`
+	ProviderScope string `json:"provider_scope"`
+	RepositoryID  string `json:"repository_id"`
+	QueryHash     string `json:"query_hash"`
+	State         int    `json:"state"`
+	Cursor        string `json:"cursor,omitempty"`
 }
 
 func (c *Client) searchAllPullRequestsPage(ctx context.Context, query domain.PullRequestQuery, states []string) (domain.PullRequestPage, error) {
-	cursor, err := parseCloudAllPageCursor(query.Cursor)
+	cursor, err := parseCloudAllPageCursor(query.Cursor, query)
 	if err != nil {
 		return domain.PullRequestPage{}, err
 	}
@@ -295,11 +334,11 @@ func (c *Client) searchAllPullRequestsPage(ctx context.Context, query domain.Pul
 		return domain.PullRequestPage{}, err
 	}
 	if page.NextCursor != "" {
-		page.NextCursor = encodeCloudAllPageCursor(cloudAllPageCursor{Version: cloudAllPageCursorVersion, State: cursor.State, Cursor: page.NextCursor})
+		page.NextCursor = encodeCloudAllPageCursor(newCloudAllPageCursor(query, cursor.State, page.NextCursor))
 		return page, nil
 	}
 	if cursor.State+1 < len(states) {
-		page.NextCursor = encodeCloudAllPageCursor(cloudAllPageCursor{Version: cloudAllPageCursorVersion, State: cursor.State + 1})
+		page.NextCursor = encodeCloudAllPageCursor(newCloudAllPageCursor(query, cursor.State+1, ""))
 	}
 	return page, nil
 }
@@ -328,7 +367,7 @@ func (c *Client) searchPullRequestsSinglePage(ctx context.Context, query domain.
 	}
 	nextCursor := ""
 	if next != nil {
-		nextCursor = next.String()
+		nextCursor = encodeCloudPullRequestCursor(newCloudPullRequestCursor(query, state, next.String()))
 	}
 	return domain.PullRequestPage{PullRequests: pullRequests, NextCursor: nextCursor}, nil
 }
@@ -341,9 +380,17 @@ func encodeCloudAllPageCursor(cursor cloudAllPageCursor) string {
 	return base64.RawURLEncoding.EncodeToString(encoded)
 }
 
-func parseCloudAllPageCursor(raw string) (cloudAllPageCursor, error) {
+func newCloudAllPageCursor(query domain.PullRequestQuery, state int, cursor string) cloudAllPageCursor {
+	return cloudAllPageCursor{
+		Version: cloudAllPageCursorVersion, ProviderScope: query.Repository.ProviderScope,
+		RepositoryID: query.Repository.ID, QueryHash: cloudPullRequestQueryHash(query, "ALL"),
+		State: state, Cursor: cursor,
+	}
+}
+
+func parseCloudAllPageCursor(raw string, query domain.PullRequestQuery) (cloudAllPageCursor, error) {
 	if raw == "" {
-		return cloudAllPageCursor{Version: cloudAllPageCursorVersion}, nil
+		return newCloudAllPageCursor(query, 0, ""), nil
 	}
 	if len(raw) > 8192 {
 		return cloudAllPageCursor{}, fmt.Errorf("invalid Cloud pull request cursor")
@@ -353,7 +400,9 @@ func parseCloudAllPageCursor(raw string) (cloudAllPageCursor, error) {
 		return cloudAllPageCursor{}, fmt.Errorf("invalid Cloud pull request cursor")
 	}
 	var cursor cloudAllPageCursor
-	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.Version != cloudAllPageCursorVersion || cursor.State < 0 {
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.Version != cloudAllPageCursorVersion || cursor.State < 0 ||
+		cursor.ProviderScope != query.Repository.ProviderScope || cursor.RepositoryID != query.Repository.ID ||
+		cursor.QueryHash != cloudPullRequestQueryHash(query, "ALL") {
 		return cloudAllPageCursor{}, fmt.Errorf("invalid Cloud pull request cursor")
 	}
 	return cursor, nil
@@ -363,18 +412,90 @@ func (c *Client) pullRequestPageEndpoint(query domain.PullRequestQuery, state st
 	if err := validateRepository(query.Repository); err != nil {
 		return nil, err
 	}
-	if query.Cursor != "" {
-		return c.nextURL(c.apiBase, query.Cursor)
-	}
 	endpoint := c.repositoryEndpoint(query.Repository, "pullrequests")
+	if query.Cursor != "" {
+		cursor, err := parseCloudPullRequestCursor(query.Cursor, query, state)
+		if err != nil {
+			return nil, err
+		}
+		next, err := c.nextURL(&endpoint, cursor.NextURL)
+		if err != nil || next == nil || !validPullRequestPageURL(next, endpoint.Path, query, state) {
+			return nil, fmt.Errorf("invalid Cloud pull request cursor")
+		}
+		return next, nil
+	}
 	parameters := endpoint.Query()
 	parameters.Set("state", state)
 	parameters.Set("pagelen", fmt.Sprint(min(query.Limit, maxPullRequestPageLength)))
-	if query.Text != "" {
-		parameters.Set("q", fmt.Sprintf("title~%q", query.Text))
+	search := strings.TrimSpace(query.Text)
+	if search != "" {
+		parameters.Set("q", fmt.Sprintf("title~%q", search))
 	}
 	endpoint.RawQuery = parameters.Encode()
 	return &endpoint, nil
+}
+
+const cloudPullRequestCursorVersion = 1
+
+type cloudPullRequestCursor struct {
+	Version       int    `json:"version"`
+	ProviderScope string `json:"provider_scope"`
+	RepositoryID  string `json:"repository_id"`
+	QueryHash     string `json:"query_hash"`
+	NextURL       string `json:"next_url"`
+}
+
+func newCloudPullRequestCursor(query domain.PullRequestQuery, state, nextURL string) cloudPullRequestCursor {
+	return cloudPullRequestCursor{
+		Version: cloudPullRequestCursorVersion, ProviderScope: query.Repository.ProviderScope,
+		RepositoryID: query.Repository.ID, QueryHash: cloudPullRequestQueryHash(query, state), NextURL: nextURL,
+	}
+}
+
+func encodeCloudPullRequestCursor(cursor cloudPullRequestCursor) string {
+	encoded, err := json.Marshal(cursor)
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(encoded)
+}
+
+func parseCloudPullRequestCursor(raw string, query domain.PullRequestQuery, state string) (cloudPullRequestCursor, error) {
+	if raw == "" || len(raw) > 8192 || query.Repository.ID == "" || query.Repository.ProviderScope == "" {
+		return cloudPullRequestCursor{}, fmt.Errorf("invalid Cloud pull request cursor")
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return cloudPullRequestCursor{}, fmt.Errorf("invalid Cloud pull request cursor")
+	}
+	var cursor cloudPullRequestCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.Version != cloudPullRequestCursorVersion || cursor.NextURL == "" ||
+		cursor.ProviderScope != query.Repository.ProviderScope || cursor.RepositoryID != query.Repository.ID ||
+		cursor.QueryHash != cloudPullRequestQueryHash(query, state) {
+		return cloudPullRequestCursor{}, fmt.Errorf("invalid Cloud pull request cursor")
+	}
+	return cursor, nil
+}
+
+func cloudPullRequestQueryHash(query domain.PullRequestQuery, state string) string {
+	payload := query.Repository.ProviderScope + "\x00" + query.Repository.ID + "\x00" +
+		strings.TrimSpace(query.Text) + "\x00" + strings.ToUpper(strings.TrimSpace(state)) + "\x00" + fmt.Sprint(query.Limit)
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(payload)))
+}
+
+func validPullRequestPageURL(next *url.URL, expectedPath string, query domain.PullRequestQuery, state string) bool {
+	if next == nil || next.Path != expectedPath {
+		return false
+	}
+	values := next.Query()
+	if values.Get("state") != state || values.Get("pagelen") != fmt.Sprint(min(query.Limit, maxPullRequestPageLength)) {
+		return false
+	}
+	expectedQuery := ""
+	if search := strings.TrimSpace(query.Text); search != "" {
+		expectedQuery = fmt.Sprintf("title~%q", search)
+	}
+	return values.Get("q") == expectedQuery
 }
 
 func (c *Client) listPullRequests(ctx context.Context, repository domain.Repository, search string, limit int) ([]domain.PullRequest, error) {

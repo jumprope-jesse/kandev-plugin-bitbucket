@@ -35,8 +35,11 @@ function canonicalRepositoryIdentity(value) {
   const identity = string(value)?.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
   return identity?.toLowerCase();
 }
+function pullRequestAssociationIdentity(repositoryId, number2) {
+  return repositoryId && number2 && number2 > 0 ? `repository:${repositoryId}\0pull-request:${number2}` : void 0;
+}
 function integrationSettingsHref(workspaceId) {
-  return workspaceId ? `/settings/workspace/${encodeURIComponent(workspaceId)}/integrations/bitbucket` : "/settings/integrations/bitbucket";
+  return workspaceId ? `/settings/workspaces/${encodeURIComponent(workspaceId)}/integrations/bitbucket` : "/settings/integrations/bitbucket";
 }
 function displayPullRequestAuthor(author) {
   const value = author?.trim();
@@ -168,8 +171,20 @@ function normalizePullRequestAssociations(value) {
     const reviewKey = string(source.review_key) ?? string(source.reviewKey);
     if (!reviewKey) continue;
     const links = normalizeTaskLinks([source], reviewKey);
-    if (links.length)
+    const repositoryId = string(source.repository_id) ?? string(source.repositoryId);
+    const changeRequestNumber = number(source.number) ?? number(source.changeRequestNumber);
+    for (const link of links) {
+      link.repositoryId = repositoryId;
+      link.changeRequestNumber = changeRequestNumber;
+    }
+    if (links.length) {
       result[reviewKey] = [...result[reviewKey] ?? [], ...links];
+      const identity = pullRequestAssociationIdentity(
+        repositoryId,
+        changeRequestNumber
+      );
+      if (identity) result[identity] = [...result[identity] ?? [], ...links];
+    }
   }
   return result;
 }
@@ -565,7 +580,8 @@ function normalizeReviewDetail(value) {
         }
       ] : [];
     }),
-    viewerApproved: normalizeViewerApproval(source, participantItems)
+    viewerApproved: normalizeViewerApproval(source, participantItems),
+    unresolvedThreadCount: number(source.unresolved_thread_count)
   };
 }
 function hostChangeRequestState(value) {
@@ -1331,6 +1347,19 @@ function ConnectionHealth({
   );
   const [disconnectOpen, setDisconnectOpen] = React.useState(false);
   React.useEffect(() => {
+    setSaving(false);
+    setMessage(null);
+    setProduct("cloud");
+    setBaseUrl("");
+    setCloudWorkspace("");
+    setAuthMethod("api_token");
+    setToken("");
+    setIdentity("");
+    setOAuthClientId("");
+    setOAuthClientSecret("");
+    setDisconnectOpen(false);
+  }, [scopedWorkspaceId]);
+  React.useEffect(() => {
     if (!connection.data) return;
     setProduct(text(details.product, "cloud"));
     setBaseUrl(text(details.base_url));
@@ -1867,7 +1896,11 @@ function DashboardPullRequestList({
             pullRequest.statusTone
           )
         );
-        const tasks = tasksByReview[pullRequest.key] ?? pullRequest.tasks;
+        const identity = pullRequestAssociationIdentity(
+          pullRequest.repositoryId,
+          pullRequest.number
+        );
+        const tasks = tasksByReview[pullRequest.key] ?? (identity ? tasksByReview[identity] : void 0) ?? pullRequest.tasks;
         return h(ui.ChangeRequestRow, {
           key: pullRequest.key,
           stateIcon: pullRequestStateIcon(host, pullRequest),
@@ -1913,7 +1946,7 @@ function ReviewDetailPanel({
       taskId,
       body: {
         review_key: reviewKey,
-        include: ["files", "commits", "participants", "threads", "status"]
+        include: ["files", "participants", "threads", "status", "viewer"]
       }
     } : scopedWorkspaceId ? {
       workspaceId: scopedWorkspaceId,
@@ -1921,10 +1954,10 @@ function ReviewDetailPanel({
         review_key: reviewKey,
         include: [
           "files",
-          "commits",
           "participants",
           "threads",
-          "status"
+          "status",
+          "viewer"
         ]
       }
     } : void 0,
@@ -2694,7 +2727,7 @@ async function loadTaskPullRequestDetails(invokeAction, context, signal) {
         body: {
           review_key: pullRequest.key,
           pull_request_id: pullRequest.id,
-          include: ["participants", "threads", "status"]
+          include: ["participants", "status"]
         }
       },
       { signal }
@@ -2737,7 +2770,7 @@ function changeRequestStatusView(pullRequest, refreshedAt = Date.now()) {
   const requested = reviewers.filter(
     (participant) => participant.verdict !== "changes_requested" && participant.verdict !== "approved" && !participant.approved
   ).length;
-  const unresolvedComments = "threads" in pullRequest && Array.isArray(pullRequest.threads) ? pullRequest.threads.filter((thread) => !thread.resolved).length : 0;
+  const unresolvedComments = pullRequest.unresolvedThreadCount ?? ("threads" in pullRequest && Array.isArray(pullRequest.threads) ? pullRequest.threads.filter((thread) => !thread.resolved).length : 0);
   const providerUpdatedAt = pullRequest.updatedAt ? Date.parse(pullRequest.updatedAt) : Number.NaN;
   const updatedAt = Number.isFinite(providerUpdatedAt) ? providerUpdatedAt : refreshedAt;
   const pipelineState = states.includes("failure") ? "failure" : states.includes("pending") ? "pending" : states.length > 0 && states.every((state) => state === "success") ? "success" : "neutral";
@@ -2786,7 +2819,9 @@ var reviewStore = /* @__PURE__ */ (() => {
     set(taskId, pullRequests) {
       snapshots.set(
         taskId,
-        pullRequests.map((pullRequest) => reviewSummaryForPullRequest(pullRequest))
+        pullRequests.map(
+          (pullRequest) => reviewSummaryForPullRequest(pullRequest)
+        )
       );
       listeners.get(taskId)?.forEach((listener) => listener());
     },
@@ -2801,7 +2836,9 @@ var reviewStore = /* @__PURE__ */ (() => {
     },
     clear() {
       snapshots.clear();
-      listeners.forEach((taskListeners) => taskListeners.forEach((listener) => listener()));
+      listeners.forEach(
+        (taskListeners) => taskListeners.forEach((listener) => listener())
+      );
       listeners.clear();
     }
   };
@@ -2818,7 +2855,15 @@ var associationStore = /* @__PURE__ */ (() => {
       snapshots.set(
         workspaceId,
         Object.entries(associations).flatMap(
-          ([reviewKey, tasks]) => tasks.map((task) => ({ providerId: "bitbucket", taskId: task.taskId, reviewKey }))
+          ([reviewKey, tasks]) => reviewKey.startsWith("repository:") ? [] : tasks.map((task) => ({
+            providerId: "bitbucket",
+            taskId: task.taskId,
+            reviewKey,
+            ...task.repositoryId && task.changeRequestNumber ? {
+              repositoryId: task.repositoryId,
+              changeRequestNumber: task.changeRequestNumber
+            } : {}
+          }))
         )
       );
       listeners.get(workspaceId)?.forEach((listener) => listener());
@@ -3041,8 +3086,13 @@ function makeIntegrationSettings(host) {
     return host.jsx(
       "div",
       { className: "bb-plugin-settings" },
-      host.jsx(ConnectionHealth, { host, workspaceId: scopedWorkspaceId }),
+      host.jsx(ConnectionHealth, {
+        key: scopedWorkspaceId || "unscoped",
+        host,
+        workspaceId: scopedWorkspaceId
+      }),
       host.jsx(Watches, {
+        key: `watches:${scopedWorkspaceId || "unscoped"}`,
         host,
         workspaceId: scopedWorkspaceId,
         filter: {},

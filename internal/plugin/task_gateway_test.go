@@ -44,7 +44,7 @@ func TestTaskGateway_CreateUsesCredentialFreeRemoteAndDurableReservation(t *test
 
 func TestWatchPullRequest_UsesForkSourceDescriptor(t *testing.T) {
 	pullRequest := domain.PullRequest{
-		Repository:       domain.Repository{Namespace: "destination", Slug: "repo"},
+		Repository:       domain.Repository{ID: "destination-repo-uuid", ProviderScope: "https://bitbucket.org", Namespace: "destination", Slug: "repo"},
 		SourceRepository: domain.Repository{ID: "fork-repo-uuid", ProviderScope: "https://bitbucket.org", Namespace: "fork", Slug: "repo", CloneURL: mustURL(t, "https://bitbucket.org/fork/repo.git")},
 		Number:           42,
 		Source:           domain.Branch{Name: "feature/fork"},
@@ -53,6 +53,8 @@ func TestWatchPullRequest_UsesForkSourceDescriptor(t *testing.T) {
 
 	got := watchPullRequest(pullRequest)
 	require.Equal(t, "fork", got.Repository.OwnerOrProject)
+	require.Equal(t, "fork-repo-uuid", got.Repository.ProviderRepositoryID)
+	require.Equal(t, "destination-repo-uuid", got.RepositoryID, "pull-request identity belongs to the destination repository")
 	require.Equal(t, "https://bitbucket.org/fork/repo.git", got.Repository.CloneURL)
 	require.Equal(t, "feature/fork", got.Repository.HeadBranch)
 	require.Equal(t, "main", got.Repository.BaseBranch)

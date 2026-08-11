@@ -115,9 +115,9 @@ type reviewStatusPage struct {
 }
 
 const (
-	maxReviewFiles   = 1000
-	maxReviewEntries = 1000
-	maxReviewPages   = 100
+	maxReviewFiles   = 200
+	maxReviewEntries = 200
+	maxReviewPages   = 10
 )
 
 type reviewDiffstatPage struct {

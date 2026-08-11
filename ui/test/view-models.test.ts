@@ -122,7 +122,7 @@ describe("Bitbucket view models", () => {
 
   it("builds workspace-scoped integration settings links with a global fallback", () => {
     expect(integrationSettingsHref("workspace one")).toBe(
-      "/settings/workspace/workspace%20one/integrations/bitbucket",
+      "/settings/workspaces/workspace%20one/integrations/bitbucket",
     );
     expect(integrationSettingsHref()).toBe("/settings/integrations/bitbucket");
   });
@@ -300,6 +300,28 @@ describe("Bitbucket view models", () => {
         },
       ],
     });
+  });
+
+  it("also indexes task associations by immutable repository identity", () => {
+    const associations = normalizePullRequestAssociations({
+      associations: [
+        {
+          review_key: "old-name/widgets#42",
+          repository_id: "repo-uuid",
+          number: 42,
+          task_id: "task-1",
+          task_title: "Review rename",
+        },
+      ],
+    });
+
+    expect(associations["repository:repo-uuid\u0000pull-request:42"]).toEqual([
+      expect.objectContaining({
+        taskId: "task-1",
+        repositoryId: "repo-uuid",
+        changeRequestNumber: 42,
+      }),
+    ]);
   });
 
   it("validates, bounds, and creates workspace saved queries from committed filters", () => {

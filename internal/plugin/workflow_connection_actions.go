@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 
@@ -60,6 +61,9 @@ func (w *Workflows) handleConnectionAction(ctx context.Context, request *plugins
 		}
 		settings, err := connections.Save(ctx, request.Context.WorkspaceID, input.ConnectionInput)
 		if err != nil {
+			if errors.Is(err, ErrInvalidConnectionInput) {
+				return nil, pluginsdk.CategorizeActionError(pluginsdk.ActionErrorInvalidArgument, err)
+			}
 			return nil, fmt.Errorf("save Bitbucket connection: %w", err)
 		}
 		if !input.Probe {

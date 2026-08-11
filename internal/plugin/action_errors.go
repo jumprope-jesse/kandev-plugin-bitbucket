@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"kandev-plugin-bitbucket/internal/domain"
@@ -11,6 +12,26 @@ import (
 
 	"github.com/kandev/kandev/pkg/pluginsdk"
 )
+
+func categorizedActionError(code pluginsdk.ActionErrorCode, format string, args ...any) error {
+	return pluginsdk.CategorizeActionError(code, fmt.Errorf(format, args...))
+}
+
+func invalidActionError(format string, args ...any) error {
+	return categorizedActionError(pluginsdk.ActionErrorInvalidArgument, format, args...)
+}
+
+func forbiddenActionError(format string, args ...any) error {
+	return categorizedActionError(pluginsdk.ActionErrorPermissionDenied, format, args...)
+}
+
+func notFoundActionError(format string, args ...any) error {
+	return categorizedActionError(pluginsdk.ActionErrorNotFound, format, args...)
+}
+
+func conflictActionError(format string, args ...any) error {
+	return categorizedActionError(pluginsdk.ActionErrorConflict, format, args...)
+}
 
 func actionFailureResponse(err error) (*pluginsdk.PluginActionResponse, error) {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -31,7 +52,13 @@ func categorizeWatchActionError(err error) error {
 		return nil
 	case errors.Is(err, watches.ErrWatchNotFound):
 		return pluginsdk.CategorizeActionError(pluginsdk.ActionErrorNotFound, err)
+	case errors.Is(err, watches.ErrInvalidWatch):
+		return pluginsdk.CategorizeActionError(pluginsdk.ActionErrorInvalidArgument, err)
+	case errors.Is(err, watches.ErrWatchExists):
+		return pluginsdk.CategorizeActionError(pluginsdk.ActionErrorConflict, err)
 	case errors.Is(err, watches.ErrWatchPaused):
+		return pluginsdk.CategorizeActionError(pluginsdk.ActionErrorConflict, err)
+	case errors.Is(err, watches.ErrConnectionChanged):
 		return pluginsdk.CategorizeActionError(pluginsdk.ActionErrorConflict, err)
 	default:
 		return err

@@ -37,7 +37,7 @@ export function ReviewDetailPanel({
           taskId,
           body: {
             review_key: reviewKey,
-            include: ["files", "commits", "participants", "threads", "status"],
+            include: ["files", "participants", "threads", "status", "viewer"],
           },
         }
       : scopedWorkspaceId
@@ -47,10 +47,10 @@ export function ReviewDetailPanel({
               review_key: reviewKey,
               include: [
                 "files",
-                "commits",
                 "participants",
                 "threads",
                 "status",
+                "viewer",
               ],
             },
           }

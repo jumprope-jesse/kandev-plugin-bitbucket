@@ -49,11 +49,94 @@ func TestConnectionResolver_CredentialGenerationChangesOnSaveAndDisappearsOnDisc
 	require.NoError(t, err)
 	require.NotZero(t, first.CredentialGeneration)
 	require.Greater(t, second.CredentialGeneration, first.CredentialGeneration)
+	require.NotEmpty(t, first.ConnectionBinding)
+	require.Equal(t, first.ConnectionBinding, second.ConnectionBinding, "credential rotation on the same connection must keep watches bound")
 
 	require.NoError(t, resolver.Disconnect(context.Background(), "workspace-1"))
 	_, found, err := resolver.Load(context.Background(), "workspace-1")
 	require.NoError(t, err)
 	require.False(t, found)
+}
+
+func TestConnectionResolver_ConnectionBindingChangesAcrossReplacementAndReconnect(t *testing.T) {
+	host := newConnectionHost()
+	resolver, err := NewConnectionResolver(host)
+	require.NoError(t, err)
+	first, err := resolver.Save(context.Background(), "workspace-1", ConnectionInput{
+		Product: domain.ProductCloud, CloudWorkspace: "acme", AuthMethod: "api_token", AuthIdentity: "dev@example.test", Token: "first-token",
+	})
+	require.NoError(t, err)
+	replacement, err := resolver.Save(context.Background(), "workspace-1", ConnectionInput{
+		Product: domain.ProductCloud, CloudWorkspace: "other", AuthMethod: "api_token", AuthIdentity: "dev@example.test", Token: "other-token",
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, first.ConnectionBinding, replacement.ConnectionBinding)
+
+	require.NoError(t, resolver.Disconnect(context.Background(), "workspace-1"))
+	reconnected, err := resolver.Save(context.Background(), "workspace-1", ConnectionInput{
+		Product: domain.ProductCloud, CloudWorkspace: "acme", AuthMethod: "api_token", AuthIdentity: "dev@example.test", Token: "new-token",
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, first.ConnectionBinding, reconnected.ConnectionBinding, "a deleted connection epoch must never be reused")
+}
+
+func TestConnectionResolver_DisconnectRevokesCachedOAuthRefreshGeneration(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}`))
+	}))
+	defer server.Close()
+	tokenURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	host := newConnectionHost()
+	resolver, err := NewConnectionResolver(host)
+	require.NoError(t, err)
+	resolver.httpClient = server.Client()
+	settings, err := resolver.Save(context.Background(), "workspace-1", ConnectionInput{
+		Product: domain.ProductCloud, CloudWorkspace: "acme", AuthMethod: "oauth",
+		OAuthClientID: "client-id", OAuthClientSecret: "client-secret", OAuthRedirectURL: "https://plugin.example.test/callback",
+	})
+	require.NoError(t, err)
+	scope := oauthCredentialScope("workspace-1", settings)
+	registration := auth.OAuthRegistration{ClientID: "client-id", ClientSecret: "client-secret", TokenURL: tokenURL}
+	_, err = resolver.oauthRefresher().Refresh(context.Background(), scope, registration, "old-refresh")
+	require.NoError(t, err)
+
+	require.NoError(t, resolver.Disconnect(context.Background(), "workspace-1"))
+	_, err = resolver.oauthRefresher().Refresh(context.Background(), scope, registration, "old-refresh")
+	require.ErrorIs(t, err, auth.ErrCredentialRevoked)
+}
+
+func TestConnectionResolver_TargetReplacementRevokesPreviousOAuthConnectionEpoch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}`))
+	}))
+	defer server.Close()
+	tokenURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	host := newConnectionHost()
+	resolver, err := NewConnectionResolver(host)
+	require.NoError(t, err)
+	resolver.httpClient = server.Client()
+	first, err := resolver.Save(context.Background(), "workspace-1", ConnectionInput{
+		Product: domain.ProductCloud, CloudWorkspace: "acme", AuthMethod: "oauth",
+		OAuthClientID: "client-id", OAuthClientSecret: "client-secret", OAuthRedirectURL: "https://plugin.example.test/callback",
+	})
+	require.NoError(t, err)
+	registration := auth.OAuthRegistration{ClientID: "client-id", ClientSecret: "client-secret", TokenURL: tokenURL}
+	firstScope := oauthCredentialScope("workspace-1", first)
+	_, err = resolver.oauthRefresher().Refresh(context.Background(), firstScope, registration, "old-refresh")
+	require.NoError(t, err)
+
+	replacement, err := resolver.Save(context.Background(), "workspace-1", ConnectionInput{
+		Product: domain.ProductCloud, CloudWorkspace: "other", AuthMethod: "oauth",
+	})
+	require.NoError(t, err)
+	require.Equal(t, first.OAuthGeneration, replacement.OAuthGeneration)
+	require.NotEqual(t, first.ConnectionBinding, replacement.ConnectionBinding)
+	_, err = resolver.oauthRefresher().Refresh(context.Background(), firstScope, registration, "old-refresh")
+	require.ErrorIs(t, err, auth.ErrCredentialRevoked)
+	_, err = resolver.oauthRefresher().Refresh(context.Background(), oauthCredentialScope("workspace-1", replacement), registration, "old-refresh")
+	require.NoError(t, err)
 }
 
 func TestConnectionResolver_RejectsCredentialBearingBaseURL(t *testing.T) {

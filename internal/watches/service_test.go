@@ -227,6 +227,63 @@ func TestRun_ConcurrentPollsCreateAtMostOneTask(t *testing.T) {
 	require.Equal(t, 1, tasks.createCalls)
 }
 
+func TestRun_DoesNotConflatePullRequestsAfterRepositoryRecreation(t *testing.T) {
+	repository := &memoryRepository{snapshots: map[string]Snapshot{
+		"workspace-1": {Watches: map[string]Watch{
+			"watch-1": {ID: "watch-1", WorkspaceID: "workspace-1", Status: StatusRunning},
+		}},
+	}}
+	provider := &mutableProvider{items: []PullRequest{completePullRequest("repo-old")}}
+	tasks := &recordingTasks{}
+	service, err := NewService(Options{Repository: repository, Provider: provider, Tasks: tasks})
+	require.NoError(t, err)
+
+	first, err := service.Run(context.Background(), "workspace-1", "watch-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, first.Created)
+	provider.items = []PullRequest{completePullRequest("repo-new")}
+	second, err := service.Run(context.Background(), "workspace-1", "watch-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, second.Created)
+	require.Equal(t, 2, tasks.createCalls)
+	require.Len(t, repository.snapshots["workspace-1"].Watches["watch-1"].Links, 2)
+}
+
+func TestRun_PausesWatchWhenConnectionBindingChanges(t *testing.T) {
+	repository := &memoryRepository{snapshots: map[string]Snapshot{
+		"workspace-1": {Watches: map[string]Watch{
+			"watch-1": {ID: "watch-1", WorkspaceID: "workspace-1", Status: StatusRunning, ConnectionBinding: "connection-old"},
+		}},
+	}}
+	provider := &bindingProvider{binding: "connection-new", items: []PullRequest{completePullRequest("repo-new")}}
+	service, err := NewService(Options{Repository: repository, Provider: provider, Tasks: &recordingTasks{}})
+	require.NoError(t, err)
+
+	_, err = service.Run(context.Background(), "workspace-1", "watch-1")
+
+	require.ErrorIs(t, err, ErrConnectionChanged)
+	require.Equal(t, StatusPaused, repository.snapshots["workspace-1"].Watches["watch-1"].Status)
+	require.Zero(t, provider.calls, "a stale watch must pause before querying the replacement connection")
+}
+
+func TestCreateAndResume_BindWatchToCurrentConnection(t *testing.T) {
+	repository := &memoryRepository{snapshots: map[string]Snapshot{"workspace-1": {}}}
+	provider := &bindingProvider{binding: "connection-one"}
+	service, err := NewService(Options{Repository: repository, Provider: provider, Tasks: &recordingTasks{}})
+	require.NoError(t, err)
+
+	created, err := service.Create(context.Background(), Watch{ID: "watch-1", WorkspaceID: "workspace-1"})
+	require.NoError(t, err)
+	require.Equal(t, "connection-one", created.ConnectionBinding)
+	_, err = service.Pause(context.Background(), "workspace-1", "watch-1")
+	require.NoError(t, err)
+	provider.binding = "connection-two"
+	resumed, err := service.Resume(context.Background(), "workspace-1", "watch-1")
+	require.NoError(t, err)
+	require.Equal(t, "connection-two", resumed.ConnectionBinding)
+	require.Empty(t, resumed.Cursor)
+}
+
 func TestReset_PreviewsAndDeletesOnlyWatchOwnedTaskTrees(t *testing.T) {
 	repository := &memoryRepository{snapshots: map[string]Snapshot{
 		"workspace-1": {Watches: map[string]Watch{
@@ -349,6 +406,29 @@ func TestWatchControls_PersistFiltersPresetsStatusAndSafeDelete(t *testing.T) {
 	require.Contains(t, events.names, "watch.deleted")
 }
 
+func TestRefreshTaskLinkUpdatesMutableDisplayKeyWithoutChangingIdentity(t *testing.T) {
+	link := TaskLink{
+		PullRequestKey: "old/repo#42", PullRequestURL: "https://bitbucket.org/old/repo/pull-requests/42",
+		TaskID: "task-1", Owned: true, ProviderID: "bitbucket", ProviderScope: "https://bitbucket.org",
+		RepositoryID: "repo-uuid", PullRequestNumber: 42,
+	}
+	storageKey := link.storageKey()
+	repository := &memoryRepository{snapshots: map[string]Snapshot{"workspace-1": {Watches: map[string]Watch{
+		"watch-1": {ID: "watch-1", WorkspaceID: "workspace-1", Links: map[string]TaskLink{storageKey: link}},
+	}}}}
+	service, err := NewService(Options{Repository: repository, Provider: staticProvider{}, Tasks: &recordingTasks{}})
+	require.NoError(t, err)
+
+	require.NoError(t, service.RefreshTaskLink(
+		context.Background(), "workspace-1", "task-1", storageKey,
+		"new/repo#42", "https://bitbucket.org/new/repo/pull-requests/42",
+	))
+	updated := repository.snapshots["workspace-1"].Watches["watch-1"].Links[storageKey]
+	require.Equal(t, "new/repo#42", updated.PullRequestKey)
+	require.Equal(t, "https://bitbucket.org/new/repo/pull-requests/42", updated.PullRequestURL)
+	require.Equal(t, storageKey, updated.storageKey())
+}
+
 func TestReset_RespectsCancelledActionContext(t *testing.T) {
 	repository := &memoryRepository{snapshots: map[string]Snapshot{"workspace-1": {Watches: map[string]Watch{
 		"watch-1": {ID: "watch-1", WorkspaceID: "workspace-1", Links: map[string]TaskLink{"owned": {PullRequestKey: "owned", TaskID: "owned-root", Owned: true}}},
@@ -431,6 +511,39 @@ func (r *memoryRepository) Save(_ context.Context, workspaceID string, snapshot 
 type staticProvider struct {
 	items      []PullRequest
 	nextCursor string
+}
+
+type mutableProvider struct {
+	items []PullRequest
+}
+
+func (p *mutableProvider) ListPullRequests(context.Context, Watch) ([]PullRequest, string, error) {
+	return p.items, "", nil
+}
+
+type bindingProvider struct {
+	binding string
+	items   []PullRequest
+	calls   int
+}
+
+func (p *bindingProvider) ConnectionBinding(context.Context, string) (string, error) {
+	return p.binding, nil
+}
+
+func (p *bindingProvider) ListPullRequests(context.Context, Watch) ([]PullRequest, string, error) {
+	p.calls++
+	return p.items, "", nil
+}
+
+func completePullRequest(repositoryID string) PullRequest {
+	return PullRequest{
+		Key: "workspace/repo#42", RepositoryID: repositoryID, Number: 42,
+		Repository: RemoteRepository{
+			ProviderID: "bitbucket", ProviderHost: "https://bitbucket.org", ProviderScope: "https://bitbucket.org",
+			OwnerOrProject: "workspace", ProviderRepositoryID: repositoryID, Name: "repo", CloneURL: "https://bitbucket.org/workspace/repo.git",
+		},
+	}
 }
 
 type cursorPage struct {

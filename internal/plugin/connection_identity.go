@@ -16,6 +16,7 @@ type connectionIdentity struct {
 	Product domain.Product
 	Host    string
 	Scope   string
+	Binding string
 }
 
 func connectionIdentityForResolver(
@@ -36,7 +37,7 @@ func connectionIdentityForResolver(
 	if !found {
 		return connectionIdentity{}, true, nil
 	}
-	identity := connectionIdentity{Product: settings.Product}
+	identity := connectionIdentity{Product: settings.Product, Binding: settings.ConnectionBinding}
 	if settings.Product == domain.ProductCloud {
 		identity.Host = "bitbucket.org"
 		identity.Scope = "https://bitbucket.org"

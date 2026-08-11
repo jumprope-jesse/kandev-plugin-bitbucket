@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -268,8 +269,8 @@ func TestWorkflows_PullRequestAssociationsPaginatesWorkspaceTasksAndSkipsEmptyLi
 	})
 	require.NoError(t, err)
 	require.JSONEq(t, `{"associations":[
-		{"review_key":"workspace/repo#42","task_id":"task-1","task_title":"Fix auth"},
-		{"review_key":"workspace/repo#43","task_id":"task-2","task_title":"Review race"}
+		{"review_key":"workspace/repo#42","repository_id":"workspace/repo","provider_scope":"https://bitbucket.org","number":42,"task_id":"task-1","task_title":"Fix auth"},
+		{"review_key":"workspace/repo#43","repository_id":"workspace/repo","provider_scope":"https://bitbucket.org","number":43,"task_id":"task-2","task_title":"Review race"}
 	]}`, string(response.Body))
 	require.Equal(t, []string{"", "page-2"}, tasks.cursors)
 	require.Equal(t, []pluginsdk.TaskFilter{
@@ -303,7 +304,7 @@ func TestWorkflows_PullRequestAssociationsHonorsVisibleReviewKeys(t *testing.T) 
 	})
 
 	require.NoError(t, err)
-	require.JSONEq(t, `{"associations":[{"review_key":"workspace/repo#43","task_id":"task-2","task_title":"Other"}]}`, string(response.Body))
+	require.JSONEq(t, `{"associations":[{"review_key":"workspace/repo#43","repository_id":"workspace/repo","provider_scope":"https://bitbucket.org","number":43,"task_id":"task-2","task_title":"Other"}]}`, string(response.Body))
 }
 
 func TestWorkflows_PullRequestAssociationsHidesLinksFromPreviousConnection(t *testing.T) {
@@ -388,7 +389,8 @@ func TestWorkflows_PullRequestAssociationsHidesWatchLinksFromPreviousConnection(
 		Links: map[string]watches.TaskLink{
 			"PROJECT/repo#42": {
 				PullRequestKey: "PROJECT/repo#42", TaskID: "watch-task", Owned: true,
-				ProviderID: "bitbucket", ProviderHost: "old.example.test",
+				ProviderID: "bitbucket", ProviderHost: "old.example.test", ProviderScope: "https://old.example.test",
+				RepositoryID: "repo-42", PullRequestNumber: 42,
 			},
 		},
 	})
@@ -422,7 +424,8 @@ func TestWorkflows_PullRequestAssociationsAcceptsCurrentOriginWatchLink(t *testi
 		Links: map[string]watches.TaskLink{
 			"workspace/repo#42": {
 				PullRequestKey: "workspace/repo#42", TaskID: "watch-task", Owned: true,
-				ProviderID: "bitbucket", ProviderHost: "https://bitbucket.org",
+				ProviderID: "bitbucket", ProviderHost: "https://bitbucket.org", ProviderScope: "https://bitbucket.org",
+				RepositoryID: "repo-uuid", PullRequestNumber: 42,
 			},
 		},
 	})
@@ -434,7 +437,7 @@ func TestWorkflows_PullRequestAssociationsAcceptsCurrentOriginWatchLink(t *testi
 	})
 
 	require.NoError(t, err)
-	require.JSONEq(t, `{"associations":[{"review_key":"workspace/repo#42","task_id":"watch-task","task_title":"Current watch"}]}`, string(response.Body))
+	require.JSONEq(t, `{"associations":[{"review_key":"workspace/repo#42","repository_id":"repo-uuid","provider_scope":"https://bitbucket.org","number":42,"task_id":"watch-task","task_title":"Current watch"}]}`, string(response.Body))
 }
 
 func TestWorkflows_PullRequestAssociationsScopesWatchLinksToDataCenterContext(t *testing.T) {
@@ -459,12 +462,14 @@ func TestWorkflows_PullRequestAssociationsScopesWatchLinksToDataCenterContext(t 
 		Links: map[string]watches.TaskLink{
 			"PROJECT/old#41": {
 				PullRequestKey: "PROJECT/old#41", TaskID: "old-task", Owned: true,
-				ProviderID: "bitbucket", ProviderHost: "https://bitbucket.example.test",
+				ProviderID: "bitbucket", ProviderHost: "https://bitbucket.example.test", ProviderScope: "https://bitbucket.example.test/previous",
+				RepositoryID: "repo-old", PullRequestNumber: 41,
 				ConnectionScope: "https://bitbucket.example.test/previous",
 			},
 			"PROJECT/current#42": {
 				PullRequestKey: "PROJECT/current#42", TaskID: "current-task", Owned: true,
-				ProviderID: "bitbucket", ProviderHost: "https://bitbucket.example.test",
+				ProviderID: "bitbucket", ProviderHost: "https://bitbucket.example.test", ProviderScope: "https://bitbucket.example.test/current",
+				RepositoryID: "repo-current", PullRequestNumber: 42,
 				ConnectionScope: "https://bitbucket.example.test/current",
 			},
 		},
@@ -477,7 +482,7 @@ func TestWorkflows_PullRequestAssociationsScopesWatchLinksToDataCenterContext(t 
 	})
 
 	require.NoError(t, err)
-	require.JSONEq(t, `{"associations":[{"review_key":"PROJECT/current#42","task_id":"current-task","task_title":"Current context"}]}`, string(response.Body))
+	require.JSONEq(t, `{"associations":[{"review_key":"PROJECT/current#42","repository_id":"repo-current","provider_scope":"https://bitbucket.example.test/current","number":42,"task_id":"current-task","task_title":"Current context"}]}`, string(response.Body))
 }
 
 func TestWorkflows_WatchOwnedLinksAppearInTaskAndWorkspaceAssociations(t *testing.T) {
@@ -493,12 +498,16 @@ func TestWorkflows_WatchOwnedLinksAppearInTaskAndWorkspaceAssociations(t *testin
 	_, err = workflows.watches.Create(ctx, watches.Watch{
 		ID: "watch-1", WorkspaceID: "workspace-1",
 		Links: map[string]watches.TaskLink{
-			pullRequest.Key(): {PullRequestKey: pullRequest.Key(), TaskID: "watch-task", Owned: true},
+			pullRequest.Key(): {
+				PullRequestKey: pullRequest.Key(), TaskID: "watch-task", Owned: true,
+				ProviderID: "bitbucket", ProviderScope: pullRequest.Repository.ProviderScope,
+				RepositoryID: pullRequest.Repository.ID, PullRequestNumber: int64(pullRequest.Number),
+			},
 		},
 	})
 	require.NoError(t, err)
 	_, err = workflows.links.Link(ctx, "watch-task", PullRequestLink{
-		Key: pullRequest.Key(), RepositoryID: "workspace/repo", URL: pullRequest.URL, Number: int64(pullRequest.Number),
+		Key: pullRequest.Key(), RepositoryID: pullRequest.Repository.ID, URL: pullRequest.URL, Number: int64(pullRequest.Number),
 	})
 	require.NoError(t, err)
 	workflows, err = NewWorkflows(host, staticResolver{provider: provider})
@@ -519,7 +528,7 @@ func TestWorkflows_WatchOwnedLinksAppearInTaskAndWorkspaceAssociations(t *testin
 		ActionKey: "pullrequests.associations", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
 	})
 	require.NoError(t, err)
-	require.JSONEq(t, `{"associations":[{"review_key":"workspace/repo#42","task_id":"watch-task","task_title":"Watch-created task"}]}`, string(workspaceResponse.Body))
+	require.JSONEq(t, `{"associations":[{"review_key":"workspace/repo#42","repository_id":"repo-uuid","provider_scope":"https://bitbucket.org","number":42,"task_id":"watch-task","task_title":"Watch-created task"}]}`, string(workspaceResponse.Body))
 
 	_, err = workflows.HandleAction(ctx, &pluginsdk.PluginActionRequest{
 		ActionKey: "pullrequests.unlink",
@@ -569,7 +578,11 @@ func TestWorkflows_TaskScopedExplicitGetRequiresManualOrWatchAssociation(t *test
 	_, err = workflows.watches.Create(ctx, watches.Watch{
 		ID: "watch-1", WorkspaceID: "workspace-1",
 		Links: map[string]watches.TaskLink{
-			pullRequest.Key(): {PullRequestKey: pullRequest.Key(), TaskID: "watch-task", Owned: true},
+			pullRequest.Key(): {
+				PullRequestKey: pullRequest.Key(), TaskID: "watch-task", Owned: true,
+				ProviderID: "bitbucket", ProviderScope: pullRequest.Repository.ProviderScope,
+				RepositoryID: pullRequest.Repository.ID, PullRequestNumber: int64(pullRequest.Number),
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -601,6 +614,20 @@ func TestWorkflows_PullRequestGetDoesNotMasqueradeReviewFailureAsEmptyData(t *te
 	require.Nil(t, response)
 }
 
+func TestWorkflows_PullRequestGetHonorsReviewProjection(t *testing.T) {
+	provider := &workflowProvider{pullRequest: testPullRequest()}
+	workflows, err := NewWorkflows(newConnectionHost(), staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	_, err = workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.inspect", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body: []byte(`{"review_key":"workspace/repo#42","include":["participants","thread_count","status","viewer"]}`),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []domain.ReviewProjection{{Participants: true, Statuses: true, Viewer: true, ThreadCount: true}}, provider.reviewProjections)
+}
+
 func TestWorkflows_TaskGetAutoLinksOpenPullRequestForVerifiedCheckoutBranch(t *testing.T) {
 	host := autoLinkHost(
 		[]pluginsdk.TaskRepository{{RepositoryID: "repo-1", CheckoutBranch: "refs/heads/feature/auth"}},
@@ -627,6 +654,40 @@ func TestWorkflows_TaskGetAutoLinksOpenPullRequestForVerifiedCheckoutBranch(t *t
 	require.Equal(t, pullRequest.Repository.Slug, provider.searchQueries[0].Repository.Slug)
 	require.Equal(t, "OPEN", provider.searchQueries[0].State)
 	require.Equal(t, 100, provider.searchQueries[0].Limit)
+}
+
+func TestWorkflows_TaskGetKeepsAssociationAcrossRepositoryRename(t *testing.T) {
+	ctx := context.Background()
+	host := &associationHost{
+		connectionHost: newConnectionHost(),
+		tasks: &associationTaskReader{pages: map[string]associationTaskPage{
+			"": {tasks: []pluginsdk.Task{{ID: "task-1", Title: "Renamed repository"}}},
+		}},
+	}
+	pullRequest := testPullRequest()
+	pullRequest.Repository.Namespace = "new-workspace"
+	pullRequest.Repository.Slug = "new-repo"
+	pullRequest.URL = "https://bitbucket.org/new-workspace/new-repo/pull-requests/42"
+	provider := &workflowProvider{pullRequest: pullRequest, repositories: []domain.Repository{pullRequest.Repository}}
+	workflows, err := NewWorkflows(host, staticResolver{provider: provider})
+	require.NoError(t, err)
+	_, err = workflows.links.Link(ctx, "task-1", PullRequestLink{
+		Key: "old-workspace/old-repo#42", RepositoryID: pullRequest.Repository.ID,
+		URL: "https://bitbucket.org/old-workspace/old-repo/pull-requests/42", Number: 42,
+	})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(ctx, &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.get",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1"},
+	})
+	require.NoError(t, err)
+	require.Contains(t, string(response.Body), `"review_key":"new-workspace/new-repo#42"`)
+	require.Equal(t, []string{""}, provider.repositoryQueries, "immutable lookup must not filter by a stale repository slug")
+	links, err := workflows.links.List(ctx, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, "new-workspace/new-repo#42", links[0].Key)
+	require.Equal(t, pullRequest.URL, links[0].URL)
 }
 
 func TestWorkflows_TaskGetDoesNotAutoRelinkAfterExplicitUnlink(t *testing.T) {
@@ -695,6 +756,7 @@ func TestWorkflows_TaskGetAutoLinksAcrossVerifiedTaskRepositories(t *testing.T) 
 	first.Source.Name = "feature/one"
 	first.URL = "https://bitbucket.org/workspace/one/pull-requests/41"
 	second := testPullRequest()
+	second.Repository.ID = "repo-uuid-two"
 	second.Repository.Slug = "two"
 	second.Number = 42
 	second.Source.Name = "feature/two"
@@ -854,6 +916,27 @@ func TestWorkflows_TaskLinkDoesNotRetargetAfterDataCenterHostChanges(t *testing.
 	require.NoError(t, err)
 	require.JSONEq(t, `{"pull_requests":[],"unavailable_pull_requests":[{"key":"ENG/repo#42","reason":"connection_changed"}]}`, string(response.Body))
 	require.Zero(t, provider.getPullRequestCalls, "a link must not be fetched from a new Bitbucket host")
+}
+
+func TestWorkflows_TaskLinkDoesNotRetargetAfterRepositoryRecreation(t *testing.T) {
+	pullRequest := testPullRequest()
+	provider := &workflowProvider{pullRequest: pullRequest, repositories: []domain.Repository{pullRequest.Repository}}
+	workflows, err := NewWorkflows(newConnectionHost(), staticResolver{provider: provider})
+	require.NoError(t, err)
+	_, err = workflows.links.Link(context.Background(), "task-1", PullRequestLink{
+		Key: pullRequest.Key(), RepositoryID: "deleted-repository-uuid",
+		URL: pullRequest.URL, Number: int64(pullRequest.Number),
+		Product: domain.ProductCloud, Host: "bitbucket.org", ConnectionScope: "https://bitbucket.org",
+	})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "pullrequests.get", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1"}, Body: []byte(`{"view":"task"}`),
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{"pull_requests":[],"unavailable_pull_requests":[{"key":"workspace/repo#42","reason":"repository_unavailable"}]}`, string(response.Body))
+	require.Zero(t, provider.getPullRequestCalls, "a recreated repository at the same path must not receive the old link")
 }
 
 func TestWorkflows_HidesProviderSecretsFromCredentialRPC(t *testing.T) {
@@ -1205,7 +1288,9 @@ func TestWorkflows_TasksLaunchMapsNativeTaskOptionsAndTrustedPullRequestReposito
 	require.Equal(t, "https://bitbucket.org/fork/repo.git", created.Repositories[0].Remote.CloneURL)
 	require.Equal(t, "main", requireStringPointer(t, created.Repositories[0].BaseBranch))
 	require.Equal(t, "feature/fork", requireStringPointer(t, created.Repositories[0].CheckoutBranch))
-	require.Equal(t, "manual:workspace/repo#42:launch-123", created.Metadata["reservation"])
+	reservationIdentity, err := pullRequestReservationIdentity(pullRequest)
+	require.NoError(t, err)
+	require.Equal(t, "manual:"+reservationIdentity+":launch-123", created.Metadata["reservation"])
 	links, err := workflows.links.List(ctx, "created-task")
 	require.NoError(t, err)
 	require.Len(t, links, 1)
@@ -1224,6 +1309,17 @@ func TestTaskLaunchReservationScopesRetriesToOneDialogLaunch(t *testing.T) {
 	require.NotEqual(t, first, second)
 	_, err = taskLaunchReservation("workspace/repo#42", "attacker:value")
 	require.ErrorContains(t, err, "launch_id is invalid")
+}
+
+func TestPullRequestReservationIdentityChangesAfterRepositoryRecreation(t *testing.T) {
+	pullRequest := testPullRequest()
+	first, err := pullRequestReservationIdentity(pullRequest)
+	require.NoError(t, err)
+	pullRequest.Repository.ID = "recreated-repository-uuid"
+	second, err := pullRequestReservationIdentity(pullRequest)
+	require.NoError(t, err)
+
+	require.NotEqual(t, first, second)
 }
 
 func TestWorkflows_TasksLaunchUsesSafeDefaults(t *testing.T) {
@@ -1283,8 +1379,10 @@ func TestWorkflows_TasksLaunchAssociationFailureReturnsCreatedTaskWithoutRetryab
 func TestWorkflows_TasksLaunchReusesReservedTaskAndRepairsAssociation(t *testing.T) {
 	ctx := context.Background()
 	pullRequest := launchablePullRequest(t)
+	reservationIdentity, err := pullRequestReservationIdentity(pullRequest)
+	require.NoError(t, err)
 	tasks := &taskReader{listed: []pluginsdk.Task{{
-		ID: "existing-task", Metadata: map[string]any{sourceMetadataKey: map[string]any{"reservation": "manual:" + pullRequest.Key()}},
+		ID: "existing-task", Metadata: map[string]any{sourceMetadataKey: map[string]any{"reservation": "manual:" + reservationIdentity}},
 	}}}
 	host := &scopedConnectionHost{connectionHost: newConnectionHost(), tasks: tasks, repositories: &repositoryReader{}}
 	workflows, err := NewWorkflows(host, staticResolver{provider: &workflowProvider{pullRequest: pullRequest}})
@@ -1360,6 +1458,23 @@ func TestReviewView_MarksCurrentViewerAndApproval(t *testing.T) {
 	require.NotContains(t, participants[0], "is_current_user")
 }
 
+func TestReviewView_BoundsLazyDetailBelowHostActionLimit(t *testing.T) {
+	large := strings.Repeat("x", 16*1024)
+	review := domain.Review{PullRequest: testPullRequest(), Diff: strings.Repeat("d", 2*1024*1024)}
+	for index := 0; index < 300; index++ {
+		review.Files = append(review.Files, domain.ReviewFile{Path: fmt.Sprintf("file-%03d.go", index), Patch: large})
+		review.Commits = append(review.Commits, domain.Commit{Hash: fmt.Sprintf("commit-%03d", index), Message: large})
+		review.Threads = append(review.Threads, domain.Thread{ID: fmt.Sprint(index), Comments: []domain.Comment{{ID: fmt.Sprint(index), Body: large, Author: "Reviewer"}}})
+		review.Statuses = append(review.Statuses, domain.BuildStatus{Key: fmt.Sprintf("build-%03d", index), Name: large, State: "SUCCESSFUL"})
+	}
+
+	encoded, err := json.Marshal(reviewView(review))
+
+	require.NoError(t, err)
+	require.Less(t, len(encoded), 900*1024, "projected review detail must fit below the host's 1 MiB action cap")
+	require.Contains(t, string(encoded), `"truncated_sections"`)
+}
+
 func testPullRequest() domain.PullRequest {
 	return domain.PullRequest{
 		Repository: domain.Repository{ID: "repo-uuid", ProviderScope: "https://bitbucket.org", Namespace: "workspace", Slug: "repo"}, Number: 42, Title: "Fix auth", State: "OPEN", URL: "https://bitbucket.org/workspace/repo/pull-requests/42",
@@ -1413,8 +1528,10 @@ type workflowProvider struct {
 	repositories             []domain.Repository
 	repositoryPages          map[string]domain.RepositoryPage
 	repositoryPageCursors    []string
+	repositoryQueries        []string
 	listRepositoryLimit      int
 	reviewErr                error
+	reviewProjections        []domain.ReviewProjection
 }
 
 func (p *workflowProvider) Capabilities() domain.Capabilities {
@@ -1431,8 +1548,9 @@ func (p *workflowProvider) ListRepositories(_ context.Context, _ string, limit i
 	}
 	return []domain.Repository{testRepositoryWithIdentity(p.pullRequest.Repository)}, nil
 }
-func (p *workflowProvider) ListRepositoriesPage(_ context.Context, _ string, query domain.RepositoryQuery) (domain.RepositoryPage, error) {
+func (p *workflowProvider) ListRepositoriesPage(_ context.Context, search string, query domain.RepositoryQuery) (domain.RepositoryPage, error) {
 	p.listRepositoryLimit = query.Limit
+	p.repositoryQueries = append(p.repositoryQueries, search)
 	p.repositoryPageCursors = append(p.repositoryPageCursors, query.Cursor)
 	if p.repositoryPages != nil {
 		page, found := p.repositoryPages[query.Cursor]
@@ -1509,6 +1627,10 @@ func (p *workflowProvider) GetReview(context.Context, domain.Repository, int) (d
 		return domain.Review{}, p.reviewErr
 	}
 	return domain.Review{PullRequest: testPullRequestWithIdentity(p.pullRequest)}, nil
+}
+func (p *workflowProvider) GetReviewProjected(ctx context.Context, repository domain.Repository, number int, projection domain.ReviewProjection) (domain.Review, error) {
+	p.reviewProjections = append(p.reviewProjections, projection)
+	return p.GetReview(ctx, repository, number)
 }
 func (p *workflowProvider) ApplyReviewAction(context.Context, domain.PullRequest, domain.ReviewAction) (domain.PullRequest, error) {
 	p.actions++

@@ -16,7 +16,11 @@ func (w *Workflows) launchWorkspaceTask(ctx context.Context, workspaceID string,
 	if err != nil {
 		return nil, err
 	}
-	reservation, err := taskLaunchReservation(pullRequest.Key(), input.LaunchID)
+	reservationIdentity, err := pullRequestReservationIdentity(pullRequest)
+	if err != nil {
+		return nil, err
+	}
+	reservation, err := taskLaunchReservation(reservationIdentity, input.LaunchID)
 	if err != nil {
 		return nil, err
 	}
@@ -49,20 +53,31 @@ func taskLaunchReservation(pullRequestKey, launchID string) (string, error) {
 		return reservation, nil
 	}
 	if len(launchID) > 128 {
-		return "", fmt.Errorf("launch_id is invalid")
+		return "", invalidActionError("launch_id is invalid")
 	}
 	for _, char := range launchID {
 		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '-' && char != '_' {
-			return "", fmt.Errorf("launch_id is invalid")
+			return "", invalidActionError("launch_id is invalid")
 		}
 	}
 	return reservation + ":" + launchID, nil
 }
 
+func pullRequestReservationIdentity(pullRequest domain.PullRequest) (string, error) {
+	identity, complete := (domain.PullRequestIdentity{
+		ProviderID: "bitbucket", ProviderScope: pullRequest.Repository.ProviderScope,
+		RepositoryID: pullRequest.Repository.ID, Number: int64(pullRequest.Number),
+	}).StorageKey()
+	if !complete {
+		return "", conflictActionError("pull request immutable identity is unavailable")
+	}
+	return identity, nil
+}
+
 func nativeTaskOptions(input launchTaskInput) (nativeTaskInput, string, error) {
 	if input.Task != nil {
 		if input.Preset != "" || input.Launch != (watches.Launch{}) {
-			return nativeTaskInput{}, "", fmt.Errorf("native and legacy task settings cannot be combined")
+			return nativeTaskInput{}, "", invalidActionError("native and legacy task settings cannot be combined")
 		}
 		return *input.Task, "", nil
 	}

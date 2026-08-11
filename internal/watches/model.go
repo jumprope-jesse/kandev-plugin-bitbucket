@@ -5,11 +5,17 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"kandev-plugin-bitbucket/internal/domain"
 )
 
 var (
-	ErrWatchNotFound = errors.New("watch not found")
-	ErrWatchPaused   = errors.New("watch is paused")
+	ErrWatchNotFound                = errors.New("watch not found")
+	ErrInvalidWatch                 = errors.New("invalid watch")
+	ErrWatchExists                  = errors.New("watch already exists")
+	ErrWatchPaused                  = errors.New("watch is paused")
+	ErrConnectionChanged            = errors.New("watch connection changed")
+	ErrConnectionBindingUnsupported = errors.New("watch connection binding is unsupported")
 )
 
 type Status string
@@ -51,7 +57,8 @@ type Preset struct {
 	Filter Filter `json:"filter"`
 }
 
-// PullRequest is a canonical provider item. Key must be stable across polls.
+// PullRequest is a canonical provider item. Key is a mutable display locator;
+// persistence uses provider scope, immutable repository ID, and Number.
 type PullRequest struct {
 	Key             string           `json:"key"`
 	RepositoryID    string           `json:"repository_id"`
@@ -93,27 +100,31 @@ type Reservation struct {
 // TaskLink records a task associated with a watch. Only owned links are
 // eligible for reset/delete cascade cleanup.
 type TaskLink struct {
-	PullRequestKey  string `json:"pull_request_key"`
-	TaskID          string `json:"task_id"`
-	Owned           bool   `json:"owned"`
-	ProviderID      string `json:"provider_id,omitempty"`
-	ProviderHost    string `json:"provider_host,omitempty"`
-	ConnectionScope string `json:"connection_scope,omitempty"`
-	PullRequestURL  string `json:"pull_request_url,omitempty"`
+	PullRequestKey    string `json:"pull_request_key"`
+	TaskID            string `json:"task_id"`
+	Owned             bool   `json:"owned"`
+	ProviderID        string `json:"provider_id,omitempty"`
+	ProviderHost      string `json:"provider_host,omitempty"`
+	ConnectionScope   string `json:"connection_scope,omitempty"`
+	PullRequestURL    string `json:"pull_request_url,omitempty"`
+	RepositoryID      string `json:"repository_id,omitempty"`
+	ProviderScope     string `json:"provider_scope,omitempty"`
+	PullRequestNumber int64  `json:"pull_request_number,omitempty"`
 }
 
 type Watch struct {
-	ID           string                 `json:"id"`
-	WorkspaceID  string                 `json:"workspace_id"`
-	Status       Status                 `json:"status"`
-	Filter       Filter                 `json:"filter"`
-	Launch       Launch                 `json:"launch"`
-	Presets      map[string]Preset      `json:"presets,omitempty"`
-	Cursor       string                 `json:"cursor,omitempty"`
-	LastPolled   time.Time              `json:"last_polled,omitempty"`
-	Failures     int                    `json:"failures,omitempty"`
-	Links        map[string]TaskLink    `json:"links,omitempty"`
-	Reservations map[string]Reservation `json:"reservations,omitempty"`
+	ID                string                 `json:"id"`
+	WorkspaceID       string                 `json:"workspace_id"`
+	ConnectionBinding string                 `json:"connection_binding,omitempty"`
+	Status            Status                 `json:"status"`
+	Filter            Filter                 `json:"filter"`
+	Launch            Launch                 `json:"launch"`
+	Presets           map[string]Preset      `json:"presets,omitempty"`
+	Cursor            string                 `json:"cursor,omitempty"`
+	LastPolled        time.Time              `json:"last_polled,omitempty"`
+	Failures          int                    `json:"failures,omitempty"`
+	Links             map[string]TaskLink    `json:"links,omitempty"`
+	Reservations      map[string]Reservation `json:"reservations,omitempty"`
 }
 
 type Snapshot struct {
@@ -127,6 +138,10 @@ type Repository interface {
 
 type Provider interface {
 	ListPullRequests(context.Context, Watch) ([]PullRequest, string, error)
+}
+
+type connectionBindingProvider interface {
+	ConnectionBinding(context.Context, string) (string, error)
 }
 
 type Creation struct {
@@ -170,4 +185,26 @@ type ResetPreview struct {
 
 type ResetResult struct {
 	DeletedTaskIDs []string
+}
+
+func (pullRequest PullRequest) storageKey() string {
+	identity, complete := (domain.PullRequestIdentity{
+		ProviderID: pullRequest.Repository.ProviderID, ProviderScope: pullRequest.Repository.ProviderScope,
+		RepositoryID: pullRequest.RepositoryID, Number: pullRequest.Number,
+	}).StorageKey()
+	if complete {
+		return identity
+	}
+	return pullRequest.Key
+}
+
+func (link TaskLink) storageKey() string {
+	identity, complete := (domain.PullRequestIdentity{
+		ProviderID: link.ProviderID, ProviderScope: link.ProviderScope,
+		RepositoryID: link.RepositoryID, Number: link.PullRequestNumber,
+	}).StorageKey()
+	if complete {
+		return identity
+	}
+	return link.PullRequestKey
 }

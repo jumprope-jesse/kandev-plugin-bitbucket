@@ -1,5 +1,6 @@
 import {
   displayPullRequestAuthor,
+  pullRequestAssociationIdentity,
   relativeTimeLabel,
   taskLaunchPresets,
   type PullRequest,
@@ -119,7 +120,14 @@ export function DashboardPullRequestList({
             pullRequest.statusTone,
           ),
         );
-        const tasks = tasksByReview[pullRequest.key] ?? pullRequest.tasks;
+        const identity = pullRequestAssociationIdentity(
+          pullRequest.repositoryId,
+          pullRequest.number,
+        );
+        const tasks =
+          tasksByReview[pullRequest.key] ??
+          (identity ? tasksByReview[identity] : undefined) ??
+          pullRequest.tasks;
         return h(ui.ChangeRequestRow, {
           key: pullRequest.key,
           stateIcon: pullRequestStateIcon(host, pullRequest),

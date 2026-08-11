@@ -64,14 +64,14 @@ func (r *ConnectionResolver) connectionSecretWrites(
 		token := strings.TrimSpace(input.Token)
 		if token == "" {
 			if !found {
-				return nil, fmt.Errorf("Bitbucket token credential is required")
+				return nil, invalidConnectionInput("Bitbucket token credential is required")
 			}
 			stored, present, err := r.loadTokenCredential(ctx, workspaceID, previous.CredentialGeneration)
 			if err != nil {
 				return nil, fmt.Errorf("load Bitbucket credential: %w", err)
 			}
 			if !present || strings.TrimSpace(stored) == "" {
-				return nil, fmt.Errorf("Bitbucket token credential is required")
+				return nil, invalidConnectionInput("Bitbucket token credential is required")
 			}
 			token = stored
 		}

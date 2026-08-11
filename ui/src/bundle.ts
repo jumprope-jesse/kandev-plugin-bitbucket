@@ -16,8 +16,13 @@ function makeIntegrationSettings(host: PluginHost): Component {
     return host.jsx(
       "div",
       { className: "bb-plugin-settings" },
-      host.jsx(ConnectionHealth, { host, workspaceId: scopedWorkspaceId }),
+      host.jsx(ConnectionHealth, {
+        key: scopedWorkspaceId || "unscoped",
+        host,
+        workspaceId: scopedWorkspaceId,
+      }),
       host.jsx(Watches, {
+        key: `watches:${scopedWorkspaceId || "unscoped"}`,
         host,
         workspaceId: scopedWorkspaceId,
         filter: {},

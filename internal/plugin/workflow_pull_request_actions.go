@@ -100,7 +100,7 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 				return nil, associationErr
 			}
 			if !allowed {
-				return nil, fmt.Errorf("Bitbucket pull request is not associated with the verified task")
+				return nil, forbiddenActionError("Bitbucket pull request is not associated with the verified task")
 			}
 		}
 		provider, pullRequest, err := w.pullRequestLookup(ctx, request.Context.WorkspaceID, lookup)
@@ -110,14 +110,18 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 		if err := requireCapability(provider, domain.CapabilityPullRequests); err != nil {
 			return nil, err
 		}
-		review, err := provider.GetReview(ctx, pullRequest.Repository, pullRequest.Number)
+		projection, err := parseReviewProjection(lookup.Include)
+		if err != nil {
+			return nil, err
+		}
+		review, err := projectedReview(ctx, provider, pullRequest.Repository, pullRequest.Number, projection)
 		if err != nil {
 			return nil, fmt.Errorf("get pull request review: %w", err)
 		}
 		return actionResponse(reviewView(review))
 	case "pullrequests.create":
 		if request.Context.TaskID == "" {
-			return nil, fmt.Errorf("verified task context is required")
+			return nil, forbiddenActionError("verified task context is required")
 		}
 		var input taskCreatePullRequestInput
 		if err := decodeAction(request.Body, &input); err != nil {
@@ -145,14 +149,22 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 		}
 		return actionResponse(view)
 	case "reviews.get":
-		provider, pullRequest, err := w.pullRequest(ctx, request.Context.WorkspaceID, request.Body)
+		var lookup pullRequestLookup
+		if err := decodeAction(request.Body, &lookup); err != nil {
+			return nil, err
+		}
+		provider, pullRequest, err := w.pullRequestLookup(ctx, request.Context.WorkspaceID, lookup)
 		if err != nil {
 			return nil, err
 		}
 		if err := requireCapability(provider, domain.CapabilityReview); err != nil {
 			return nil, err
 		}
-		review, err := provider.GetReview(ctx, pullRequest.Repository, pullRequest.Number)
+		projection, err := parseReviewProjection(lookup.Include)
+		if err != nil {
+			return nil, err
+		}
+		review, err := projectedReview(ctx, provider, pullRequest.Repository, pullRequest.Number, projection)
 		if err != nil {
 			return nil, fmt.Errorf("get review: %w", err)
 		}
@@ -198,7 +210,7 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 			return w.launchWorkspaceTask(ctx, request.Context.WorkspaceID, pullRequest, input)
 		}
 		if input.Task != nil {
-			return nil, fmt.Errorf("native task settings are only supported by tasks.launch")
+			return nil, invalidActionError("native task settings are only supported by tasks.launch")
 		}
 		if request.ActionKey == "pullrequests.launch" && !input.Launch.StartAgent {
 			input.Launch.StartAgent = true
@@ -206,14 +218,18 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 		if err := applyLaunchPreset(&input.Launch, input.Preset); err != nil {
 			return nil, err
 		}
-		taskID, err := w.tasks.Create(ctx, watches.Creation{WorkspaceID: request.Context.WorkspaceID, Watch: watches.Watch{ID: "manual", Launch: input.Launch}, PullRequest: watchPullRequest(pullRequest), ReservationToken: "manual:" + pullRequest.Key()})
+		reservationIdentity, err := pullRequestReservationIdentity(pullRequest)
+		if err != nil {
+			return nil, err
+		}
+		taskID, err := w.tasks.Create(ctx, watches.Creation{WorkspaceID: request.Context.WorkspaceID, Watch: watches.Watch{ID: "manual", Launch: input.Launch}, PullRequest: watchPullRequest(pullRequest), ReservationToken: "manual:" + reservationIdentity})
 		if err != nil {
 			return nil, err
 		}
 		return actionResponse(map[string]any{"task_id": taskID})
 	case "links.link", "pullrequests.link":
 		if request.Context.TaskID == "" {
-			return nil, fmt.Errorf("verified task context is required")
+			return nil, forbiddenActionError("verified task context is required")
 		}
 		_, pullRequest, err := w.pullRequest(ctx, request.Context.WorkspaceID, request.Body)
 		if err != nil {
@@ -230,7 +246,7 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 		return actionResponse(links)
 	case "links.unlink", "pullrequests.unlink":
 		if request.Context.TaskID == "" {
-			return nil, fmt.Errorf("verified task context is required")
+			return nil, forbiddenActionError("verified task context is required")
 		}
 		var input unlinkInput
 		if err := decodeAction(request.Body, &input); err != nil {
@@ -254,6 +270,6 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 		}
 		return actionResponse(links)
 	default:
-		return nil, fmt.Errorf("unsupported Bitbucket action %q", request.ActionKey)
+		return nil, notFoundActionError("unsupported Bitbucket action %q", request.ActionKey)
 	}
 }

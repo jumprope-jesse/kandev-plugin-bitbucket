@@ -34,6 +34,74 @@ func TestRuntime_MapsExpectedActionFailuresToDomainResponses(t *testing.T) {
 	require.NotContains(t, string(response.Body), "cannot unmarshal")
 }
 
+func TestRuntime_MapsLocalWorkflowFailuresToTypedResponses(t *testing.T) {
+	provider := &workflowProvider{pullRequest: testPullRequest()}
+	workflows, err := NewWorkflows(newConnectionHost(), staticResolver{provider: provider})
+	require.NoError(t, err)
+	runtime := &Runtime{workflows: workflows}
+	tests := []struct {
+		name       string
+		request    *pluginsdk.PluginActionRequest
+		wantStatus int
+		wantCode   pluginsdk.ActionErrorCode
+	}{
+		{
+			name:       "unsafe repository URL",
+			request:    &pluginsdk.PluginActionRequest{ActionKey: "repositories.inspect", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"}, Body: []byte(`{"url":"http://bitbucket.org/workspace/repo"}`)},
+			wantStatus: http.StatusBadRequest, wantCode: pluginsdk.ActionErrorInvalidArgument,
+		},
+		{
+			name:       "missing task authorization",
+			request:    &pluginsdk.PluginActionRequest{ActionKey: "pullrequests.create", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"}, Body: []byte(`{}`)},
+			wantStatus: http.StatusForbidden, wantCode: pluginsdk.ActionErrorPermissionDenied,
+		},
+		{
+			name:       "missing pull request",
+			request:    &pluginsdk.PluginActionRequest{ActionKey: "pullrequests.inspect", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"}, Body: []byte(`{"review_key":"workspace/missing#42"}`)},
+			wantStatus: http.StatusNotFound, wantCode: pluginsdk.ActionErrorNotFound,
+		},
+		{
+			name:       "unknown launch preset",
+			request:    &pluginsdk.PluginActionRequest{ActionKey: "pullrequests.launch", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"}, Body: []byte(`{"review_key":"workspace/repo#42","preset":"unknown"}`)},
+			wantStatus: http.StatusBadRequest, wantCode: pluginsdk.ActionErrorInvalidArgument,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response, actionErr := runtime.HandleAction(context.Background(), test.request)
+			require.NoError(t, actionErr)
+			require.Equal(t, test.wantStatus, response.Status)
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(response.Body, &body))
+			require.Equal(t, string(test.wantCode), body["code"])
+		})
+	}
+}
+
+func TestRuntime_MapsConnectionAndWatchValidationToTypedResponses(t *testing.T) {
+	host := newConnectionHost()
+	resolver, err := NewConnectionResolver(host)
+	require.NoError(t, err)
+	workflows, err := NewWorkflows(host, resolver)
+	require.NoError(t, err)
+	runtime := &Runtime{workflows: workflows}
+
+	response, err := runtime.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "connection.save", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body: []byte(`{"product":"cloud","auth_method":"api_token","auth_identity":"dev@example.test","token":"token"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadRequest, response.Status)
+	require.JSONEq(t, `{"code":"invalid_argument","error":"Invalid Bitbucket action request."}`, string(response.Body))
+
+	response, err = runtime.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "watches.create", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"}, Body: []byte(`{}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadRequest, response.Status)
+	require.JSONEq(t, `{"code":"invalid_argument","error":"Invalid Bitbucket action request."}`, string(response.Body))
+}
+
 func TestRuntime_PreservesProviderRateLimitWithoutLeakingDetails(t *testing.T) {
 	provider := &workflowProvider{
 		pullRequest: testPullRequest(),

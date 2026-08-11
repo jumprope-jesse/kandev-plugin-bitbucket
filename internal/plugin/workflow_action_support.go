@@ -62,7 +62,7 @@ func boundedLimit(limit int) int {
 
 func applyLaunchPreset(launch *watches.Launch, preset string) error {
 	if launch == nil {
-		return fmt.Errorf("launch settings are required")
+		return invalidActionError("launch settings are required")
 	}
 	switch strings.ToLower(strings.TrimSpace(preset)) {
 	case "", "default":
@@ -76,7 +76,7 @@ func applyLaunchPreset(launch *watches.Launch, preset string) error {
 			launch.Prompt = "Implement the Bitbucket pull request changes and run relevant tests."
 		}
 	default:
-		return fmt.Errorf("unknown Bitbucket launch preset")
+		return invalidActionError("unknown Bitbucket launch preset")
 	}
 	return nil
 }

@@ -99,6 +99,35 @@ type Review struct {
 	Participants []Participant
 	Threads      []Thread
 	Statuses     []BuildStatus
+	// UnresolvedThreadCount is populated by lightweight projections when the
+	// provider can report it without downloading comment bodies.
+	UnresolvedThreadCount *int
+}
+
+// ReviewProjection declares exactly which potentially expensive review
+// sections a caller needs. PullRequest is always returned.
+type ReviewProjection struct {
+	Diff         bool
+	Files        bool
+	Commits      bool
+	Participants bool
+	Threads      bool
+	Statuses     bool
+	Viewer       bool
+	ThreadCount  bool
+}
+
+func FullReviewProjection() ReviewProjection {
+	return ReviewProjection{
+		Diff: true, Files: true, Commits: true, Participants: true,
+		Threads: true, Statuses: true, Viewer: true,
+	}
+}
+
+// ProjectedReviewProvider is an additive adapter capability. Callers retain a
+// bounded fallback for older Provider implementations.
+type ProjectedReviewProvider interface {
+	GetReviewProjected(context.Context, Repository, int, ReviewProjection) (Review, error)
 }
 
 // Mutation names capability-gated provider actions.

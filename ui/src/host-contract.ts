@@ -117,6 +117,8 @@ export type ReviewTaskAssociation = {
   providerId: "bitbucket";
   taskId: string;
   reviewKey: string;
+  repositoryId?: string;
+  changeRequestNumber?: string | number;
 };
 
 export type PluginRegistry = {

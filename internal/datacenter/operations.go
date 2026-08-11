@@ -58,6 +58,10 @@ func (c *Client) CreatePullRequest(ctx context.Context, input domain.CreatePullR
 }
 
 func (c *Client) GetReview(ctx context.Context, repository domain.Repository, number int) (domain.Review, error) {
+	return c.GetReviewProjected(ctx, repository, number, domain.FullReviewProjection())
+}
+
+func (c *Client) GetReviewProjected(ctx context.Context, repository domain.Repository, number int, projection domain.ReviewProjection) (domain.Review, error) {
 	if !c.Capabilities().Supports(domain.CapabilityReview) {
 		return domain.Review{}, fmt.Errorf("Data Center does not support %s for this authentication mode", domain.CapabilityReview)
 	}
@@ -74,39 +78,73 @@ func (c *Client) GetReview(ctx context.Context, repository domain.Repository, nu
 		return domain.Review{}, err
 	}
 	pr.Capabilities = c.Capabilities()
-	diffEndpoint := c.repositoryEndpoint(repository, "pull-requests", fmt.Sprint(number)+".diff")
-	diff, err := c.getText(ctx, &diffEndpoint)
-	if err != nil {
-		return domain.Review{}, err
+	diff := ""
+	if projection.Diff {
+		diffEndpoint := c.repositoryEndpoint(repository, "pull-requests", fmt.Sprint(number)+".diff")
+		diff, err = c.getText(ctx, &diffEndpoint)
+		if err != nil {
+			return domain.Review{}, err
+		}
 	}
-	files, err := c.reviewFiles(ctx, repository, number)
-	if err != nil {
-		return domain.Review{}, err
+	var files []domain.ReviewFile
+	if projection.Files {
+		files, err = c.reviewFiles(ctx, repository, number)
+		if err != nil {
+			return domain.Review{}, err
+		}
+		if !projection.Diff {
+			for index := range files {
+				files[index].Patch = ""
+			}
+		}
 	}
-	commits, err := c.reviewCommits(ctx, repository, number)
-	if err != nil {
-		return domain.Review{}, err
+	var commits []domain.Commit
+	if projection.Commits {
+		commits, err = c.reviewCommits(ctx, repository, number)
+		if err != nil {
+			return domain.Review{}, err
+		}
 	}
-	comments, err := c.reviewComments(ctx, repository, number)
-	if err != nil {
-		return domain.Review{}, err
+	var comments []reviewComment
+	if projection.Threads {
+		comments, err = c.reviewComments(ctx, repository, number)
+		if err != nil {
+			return domain.Review{}, err
+		}
 	}
-	if !isPathSegment(pr.Source.Commit) {
-		return domain.Review{}, fmt.Errorf("Data Center pull request source commit is invalid")
+	var statuses []domain.BuildStatus
+	if projection.Statuses {
+		if !isPathSegment(pr.Source.Commit) {
+			return domain.Review{}, fmt.Errorf("Data Center pull request source commit is invalid")
+		}
+		statuses, err = c.reviewStatuses(ctx, pr.Source.Commit)
+		if err != nil {
+			return domain.Review{}, err
+		}
 	}
-	statuses, err := c.reviewStatuses(ctx, pr.Source.Commit)
-	if err != nil {
-		return domain.Review{}, err
+	var participants []domain.Participant
+	if projection.Participants {
+		participants = mapParticipants(payload.Participants)
+	}
+	viewerID := ""
+	if projection.Viewer {
+		viewerID = strings.TrimSpace(c.authentication.Username)
+	}
+	var threadCount *int
+	if projection.ThreadCount && projection.Threads {
+		count := len(mapReviewThreads(comments))
+		threadCount = &count
 	}
 	return domain.Review{
-		PullRequest:  pr,
-		ViewerID:     strings.TrimSpace(c.authentication.Username),
-		Diff:         diff,
-		Files:        files,
-		Commits:      commits,
-		Participants: mapParticipants(payload.Participants),
-		Threads:      mapReviewThreads(comments),
-		Statuses:     statuses,
+		PullRequest:           pr,
+		ViewerID:              viewerID,
+		Diff:                  diff,
+		Files:                 files,
+		Commits:               commits,
+		Participants:          participants,
+		Threads:               mapReviewThreads(comments),
+		Statuses:              statuses,
+		UnresolvedThreadCount: threadCount,
 	}, nil
 }
 

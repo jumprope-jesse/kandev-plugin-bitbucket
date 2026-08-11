@@ -1,5 +1,9 @@
 import { action } from "./actions";
-import type { PluginHost, ReviewSummary, ReviewTaskAssociation } from "./host-contract";
+import type {
+  PluginHost,
+  ReviewSummary,
+  ReviewTaskAssociation,
+} from "./host-contract";
 import {
   loadTaskPullRequestDetails,
   reviewSummaryForPullRequest,
@@ -17,7 +21,9 @@ export const reviewStore = (() => {
     set(taskId: string, pullRequests: PullRequestWithStatus[]) {
       snapshots.set(
         taskId,
-        pullRequests.map((pullRequest) => reviewSummaryForPullRequest(pullRequest)),
+        pullRequests.map((pullRequest) =>
+          reviewSummaryForPullRequest(pullRequest),
+        ),
       );
       listeners.get(taskId)?.forEach((listener) => listener());
     },
@@ -32,7 +38,9 @@ export const reviewStore = (() => {
     },
     clear() {
       snapshots.clear();
-      listeners.forEach((taskListeners) => taskListeners.forEach((listener) => listener()));
+      listeners.forEach((taskListeners) =>
+        taskListeners.forEach((listener) => listener()),
+      );
       listeners.clear();
     },
   };
@@ -50,13 +58,26 @@ export const associationStore = (() => {
       snapshots.set(
         workspaceId,
         Object.entries(associations).flatMap(([reviewKey, tasks]) =>
-          tasks.map((task) => ({ providerId: "bitbucket", taskId: task.taskId, reviewKey })),
+          reviewKey.startsWith("repository:")
+            ? []
+            : tasks.map((task) => ({
+                providerId: "bitbucket",
+                taskId: task.taskId,
+                reviewKey,
+                ...(task.repositoryId && task.changeRequestNumber
+                  ? {
+                      repositoryId: task.repositoryId,
+                      changeRequestNumber: task.changeRequestNumber,
+                    }
+                  : {}),
+              })),
         ),
       );
       listeners.get(workspaceId)?.forEach((listener) => listener());
     },
     subscribe(workspaceId: string, listener: () => void): () => void {
-      const workspaceListeners = listeners.get(workspaceId) ?? new Set<() => void>();
+      const workspaceListeners =
+        listeners.get(workspaceId) ?? new Set<() => void>();
       workspaceListeners.add(listener);
       listeners.set(workspaceId, workspaceListeners);
       return () => {

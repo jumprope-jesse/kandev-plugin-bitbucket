@@ -232,6 +232,46 @@ func TestDataCenterGetReviewMapsGoldenReviewData(t *testing.T) {
 	require.Equal(t, domain.Repository{ID: "84", ProviderScope: server.URL + "/bitbucket", Namespace: "FORK", Slug: "fork-widgets", CloneURL: mustURL(t, server.URL+"/bitbucket/scm/FORK/fork-widgets.git")}, review.PullRequest.SourceRepository)
 }
 
+func TestDataCenterProjectedReviewSkipsDiffFilesCommitsComments(t *testing.T) {
+	pullRequest, err := os.ReadFile("testdata/review-pullrequest.json")
+	require.NoError(t, err)
+	paths := make([]string, 0)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/bitbucket/rest/api/latest/projects/ENG/repos/widgets/pull-requests/42":
+			_, _ = w.Write(pullRequest)
+		case "/bitbucket/rest/build-status/latest/commits/source-hash":
+			_, _ = w.Write([]byte(`{"isLastPage":true,"values":[{"key":"ci","name":"CI","state":"SUCCESSFUL"}]}`))
+		default:
+			t.Fatalf("unexpected heavy Data Center review request %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{
+		ConnectionOptions: ConnectionOptions{BaseURL: server.URL + "/bitbucket", AllowInsecureHTTP: true},
+		HTTPClient:        server.Client(), TokenSource: staticTokenSource("dc-token"),
+		Authentication: Authentication{Mode: AuthenticationPAT, Username: "dev"},
+	})
+	require.NoError(t, err)
+
+	review, err := client.GetReviewProjected(context.Background(), domain.Repository{Namespace: "ENG", Slug: "widgets"}, 42, domain.ReviewProjection{
+		Participants: true, Statuses: true,
+	})
+
+	require.NoError(t, err)
+	require.NotEmpty(t, review.Participants)
+	require.NotEmpty(t, review.Statuses)
+	require.Empty(t, review.Diff)
+	require.Empty(t, review.Files)
+	require.Empty(t, review.Commits)
+	require.Empty(t, review.Threads)
+	require.Equal(t, []string{
+		"/bitbucket/rest/api/latest/projects/ENG/repos/widgets/pull-requests/42",
+		"/bitbucket/rest/build-status/latest/commits/source-hash",
+	}, paths)
+}
+
 func TestMapParticipantsPreservesNeedsWorkVerdict(t *testing.T) {
 	needsWork := dataCenterParticipantPayload{Role: "REVIEWER", Status: "NEEDS_WORK"}
 	needsWork.User.Slug, needsWork.User.DisplayName = "ada", "Ada"

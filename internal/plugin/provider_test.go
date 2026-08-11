@@ -72,6 +72,31 @@ func TestWatchProviderResumesOpaqueProviderPagesWithoutMissingPastFirstPage(t *t
 	require.Equal(t, []string{"", "provider-page-2"}, pager.cursors)
 }
 
+func TestWatchProviderRejectsCursorAfterRepositoryRecreation(t *testing.T) {
+	oldPullRequest := testPullRequest()
+	pager := &pagedWorkflowProvider{workflowProvider: workflowProvider{
+		pullRequest:  oldPullRequest,
+		repositories: []domain.Repository{oldPullRequest.Repository},
+	}, pages: map[string]domain.PullRequestPage{
+		"": {PullRequests: []domain.PullRequest{oldPullRequest}, NextCursor: "provider-page-2"},
+	}}
+	watchProvider, err := NewWatchProvider(staticResolver{provider: pager})
+	require.NoError(t, err)
+	watch := watches.Watch{ID: "watch-1", WorkspaceID: "workspace-1"}
+	_, cursor, err := watchProvider.ListPullRequests(context.Background(), watch)
+	require.NoError(t, err)
+	require.NotEmpty(t, cursor)
+
+	recreated := oldPullRequest.Repository
+	recreated.ID = "recreated-repository-uuid"
+	pager.repositories = []domain.Repository{recreated}
+	watch.Cursor = cursor
+	_, _, err = watchProvider.ListPullRequests(context.Background(), watch)
+
+	require.ErrorContains(t, err, "cursor repository is unavailable")
+	require.Equal(t, []string{""}, pager.cursors, "an old provider cursor must not run against the replacement repository")
+}
+
 func pullRequestNumbers(pullRequests []watches.PullRequest) []int64 {
 	numbers := make([]int64, 0, len(pullRequests))
 	for _, pullRequest := range pullRequests {

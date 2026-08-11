@@ -119,6 +119,64 @@ func TestRefresherKeepsCompletedRefreshesGenerationKeyed(t *testing.T) {
 	require.Equal(t, int32(2), calls.Load())
 }
 
+func TestRefresherRejectsRevokedInFlightCredentialGeneration(t *testing.T) {
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		_, _ = w.Write([]byte(`{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}`))
+	}))
+	defer server.Close()
+
+	tokenURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	refresher := NewRefresher(server.Client(), time.Now)
+	registration := OAuthRegistration{ClientID: "client-id", ClientSecret: "client-secret", TokenURL: tokenURL}
+	oldScope := CredentialScope{WorkspaceID: "workspace-a", Generation: 3, ConnectionBinding: "connection-old"}
+	result := make(chan error, 1)
+	go func() {
+		_, refreshErr := refresher.Refresh(context.Background(), oldScope, registration, "old-refresh")
+		result <- refreshErr
+	}()
+
+	<-started
+	refresher.Invalidate(oldScope)
+	close(release)
+	require.ErrorIs(t, <-result, ErrCredentialRevoked)
+
+	_, err = refresher.Refresh(context.Background(), oldScope, registration, "old-refresh")
+	require.ErrorIs(t, err, ErrCredentialRevoked)
+	replacementScope := CredentialScope{WorkspaceID: "workspace-a", Generation: 3, ConnectionBinding: "connection-new"}
+	_, err = refresher.Refresh(context.Background(), replacementScope, registration, "old-refresh")
+	require.NoError(t, err)
+	require.Equal(t, int32(2), calls.Load())
+}
+
+func TestRefresherPurgesExpiredCompletedCredentials(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"access_token":"new-access","refresh_token":"new-refresh","expires_in":60}`))
+	}))
+	defer server.Close()
+
+	tokenURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	refresher := NewRefresher(server.Client(), func() time.Time { return now })
+	registration := OAuthRegistration{ClientID: "client-id", ClientSecret: "client-secret", TokenURL: tokenURL}
+	_, err = refresher.Refresh(context.Background(), CredentialScope{WorkspaceID: "expired", Generation: 1}, registration, "old-refresh")
+	require.NoError(t, err)
+	require.Len(t, refresher.completed, 1)
+
+	now = now.Add(2 * time.Minute)
+	_, err = refresher.Refresh(context.Background(), CredentialScope{WorkspaceID: "current", Generation: 1}, registration, "old-refresh")
+	require.NoError(t, err)
+	require.Len(t, refresher.completed, 1)
+}
+
 func TestRefresherDoesNotForwardOAuthSecretsThroughRedirects(t *testing.T) {
 	var redirectedCalls atomic.Int32
 	redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

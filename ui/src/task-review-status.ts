@@ -22,6 +22,7 @@ export type PullRequestWithStatus = PullRequest & {
   statuses?: BuildStatus[];
   participants?: ReviewDetail["participants"];
   threads?: ReviewDetail["threads"];
+  unresolvedThreadCount?: number;
 };
 
 export type ChangeRequestStatusView = {
@@ -79,7 +80,7 @@ export async function loadTaskPullRequestDetails(
         body: {
           review_key: pullRequest.key,
           pull_request_id: pullRequest.id,
-          include: ["participants", "threads", "status"],
+          include: ["participants", "status"],
         },
       },
       { signal },
@@ -133,9 +134,10 @@ export function changeRequestStatusView(
       participant.verdict !== "approved" &&
       !participant.approved,
   ).length;
-  const unresolvedComments = "threads" in pullRequest && Array.isArray(pullRequest.threads)
-    ? pullRequest.threads.filter((thread) => !thread.resolved).length
-    : 0;
+  const unresolvedComments = pullRequest.unresolvedThreadCount ??
+    ("threads" in pullRequest && Array.isArray(pullRequest.threads)
+      ? pullRequest.threads.filter((thread) => !thread.resolved).length
+      : 0);
   const providerUpdatedAt = pullRequest.updatedAt ? Date.parse(pullRequest.updatedAt) : Number.NaN;
   const updatedAt = Number.isFinite(providerUpdatedAt) ? providerUpdatedAt : refreshedAt;
   const pipelineState = states.includes("failure")

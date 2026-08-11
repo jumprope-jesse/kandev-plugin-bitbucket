@@ -273,13 +273,34 @@ func hydrateRepositoryIdentity(
 	if candidate.ID != "" && candidate.ProviderScope != "" {
 		return candidate, nil
 	}
-	repositories, err := listAllRepositories(ctx, provider, candidate.Slug)
+	repositories, err := listAllRepositories(ctx, provider, "")
 	if err != nil {
 		return domain.Repository{}, err
 	}
 	for _, repository := range repositories {
 		if strings.EqualFold(repository.Namespace, candidate.Namespace) &&
 			strings.EqualFold(repository.Slug, candidate.Slug) && repository.ID != "" && repository.ProviderScope != "" {
+			return repository, nil
+		}
+	}
+	return domain.Repository{}, fmt.Errorf("repository immutable identity is unavailable")
+}
+
+func persistedRepository(
+	ctx context.Context,
+	provider domain.Provider,
+	repositoryID string,
+	providerScope string,
+) (domain.Repository, error) {
+	if strings.TrimSpace(repositoryID) == "" || strings.TrimSpace(providerScope) == "" {
+		return domain.Repository{}, fmt.Errorf("repository immutable identity is unavailable")
+	}
+	repositories, err := listAllRepositories(ctx, provider, "")
+	if err != nil {
+		return domain.Repository{}, err
+	}
+	for _, repository := range repositories {
+		if repository.ID == repositoryID && repository.ProviderScope == providerScope {
 			return repository, nil
 		}
 	}

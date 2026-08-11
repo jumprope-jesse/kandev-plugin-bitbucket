@@ -39,7 +39,7 @@ func (w *Workflows) taskPullRequests(ctx context.Context, workspaceID, taskID st
 			return nil, err
 		}
 		if !available {
-			if _, watchOwned := watchAssociations[taskID][link.Key]; !watchOwned {
+			if !hasWatchAssociationKey(watchAssociations[taskID], link.Key) {
 				unavailable = append(unavailable, map[string]any{"key": link.Key, "reason": "connection_changed"})
 			}
 			continue
@@ -48,33 +48,39 @@ func (w *Workflows) taskPullRequests(ctx context.Context, workspaceID, taskID st
 		if !ok {
 			continue
 		}
-		repository, err = hydrateRepositoryIdentity(ctx, provider, repository)
+		repository, err = persistedRepository(ctx, provider, link.RepositoryID, link.ConnectionScope)
 		if err != nil {
 			unavailable = append(unavailable, map[string]any{"key": link.Key, "reason": "repository_unavailable"})
 			continue
 		}
-		seen[link.Key] = struct{}{}
+		seen[pullRequestLinkStorageKey(link)] = struct{}{}
 		pullRequest, getErr := provider.GetPullRequest(ctx, repository, number)
-		if getErr == nil && pullRequest.Key() == link.Key {
+		if getErr == nil {
 			pullRequests = append(pullRequests, pullRequest)
+			if refreshed, linkErr := w.linkForPullRequest(ctx, workspaceID, pullRequest); linkErr == nil {
+				_, _ = w.links.Link(ctx, taskID, refreshed)
+			}
 		}
 	}
-	watchKeys := sortedAssociationKeys(watchAssociations[taskID])
-	for _, key := range watchKeys {
-		if _, found := seen[key]; found {
+	watchIdentities := sortedWatchAssociationIdentities(watchAssociations[taskID])
+	for _, storageKey := range watchIdentities {
+		association := watchAssociations[taskID][storageKey]
+		if _, found := seen[storageKey]; found {
 			continue
 		}
-		repository, number, ok := parsePullRequestKey(key)
+		repository, number, ok := parsePullRequestKey(association.Key)
 		if !ok {
 			continue
 		}
-		repository, err = hydrateRepositoryIdentity(ctx, provider, repository)
+		repository, err = persistedRepository(ctx, provider, association.RepositoryID, association.ProviderScope)
 		if err != nil {
+			unavailable = append(unavailable, map[string]any{"key": association.Key, "reason": "repository_unavailable"})
 			continue
 		}
 		pullRequest, getErr := provider.GetPullRequest(ctx, repository, number)
-		if getErr == nil && pullRequest.Key() == key {
+		if getErr == nil {
 			pullRequests = append(pullRequests, pullRequest)
+			_ = w.watches.RefreshTaskLink(ctx, workspaceID, taskID, storageKey, pullRequest.Key(), pullRequest.URL)
 		}
 	}
 	response := map[string]any{"pull_requests": pullRequestViews(pullRequests)}
@@ -109,7 +115,7 @@ func (w *Workflows) pullRequestAssociations(
 			if err != nil {
 				return nil, fmt.Errorf("list task pull request links: %w", err)
 			}
-			keys := make(map[string]struct{}, len(links)+len(watchAssociations[task.ID]))
+			associationsByIdentity := make(map[string]watchAssociation, len(links)+len(watchAssociations[task.ID]))
 			for _, link := range links {
 				matchesConnection, err := w.linkMatchesConnection(ctx, workspaceID, link)
 				if err != nil {
@@ -118,19 +124,24 @@ func (w *Workflows) pullRequestAssociations(
 				if !matchesConnection || !visibleAssociationKey(visible, link.Key) {
 					continue
 				}
-				keys[link.Key] = struct{}{}
+				identity := pullRequestLinkStorageKey(link)
+				associationsByIdentity[identity] = watchAssociation{
+					Key: link.Key, RepositoryID: link.RepositoryID,
+					ProviderScope: link.ConnectionScope, Number: link.Number,
+				}
 			}
-			for key := range watchAssociations[task.ID] {
+			for identity, association := range watchAssociations[task.ID] {
+				key := association.Key
 				if !visibleAssociationKey(visible, key) {
 					continue
 				}
-				keys[key] = struct{}{}
+				associationsByIdentity[identity] = association
 			}
-			for _, key := range sortedAssociationKeys(keys) {
+			for _, association := range sortedAssociations(associationsByIdentity) {
 				associations = append(associations, map[string]any{
-					"review_key": key,
-					"task_id":    task.ID,
-					"task_title": task.Title,
+					"review_key": association.Key, "repository_id": association.RepositoryID,
+					"provider_scope": association.ProviderScope, "number": association.Number,
+					"task_id": task.ID, "task_title": task.Title,
 				})
 			}
 		}
@@ -162,7 +173,14 @@ func visibleAssociationKey(filter map[string]struct{}, key string) bool {
 	return found
 }
 
-func (w *Workflows) watchOwnedAssociations(ctx context.Context, workspaceID string) (map[string]map[string]struct{}, error) {
+type watchAssociation struct {
+	Key           string
+	RepositoryID  string
+	ProviderScope string
+	Number        int64
+}
+
+func (w *Workflows) watchOwnedAssociations(ctx context.Context, workspaceID string) (map[string]map[string]watchAssociation, error) {
 	configured, err := w.watches.List(ctx, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("list watch-owned pull request links: %w", err)
@@ -171,8 +189,11 @@ func (w *Workflows) watchOwnedAssociations(ctx context.Context, workspaceID stri
 	if err != nil {
 		return nil, err
 	}
-	associations := make(map[string]map[string]struct{})
+	associations := make(map[string]map[string]watchAssociation)
 	for _, watch := range configured {
+		if bound && identity.Binding != "" && watch.ConnectionBinding != identity.Binding {
+			continue
+		}
 		for mapKey, link := range watch.Links {
 			if !link.Owned || link.TaskID == "" || !watchLinkMatchesConnection(link, identity, bound) {
 				continue
@@ -181,16 +202,53 @@ func (w *Workflows) watchOwnedAssociations(ctx context.Context, workspaceID stri
 			if key == "" {
 				key = mapKey
 			}
-			if _, _, ok := parsePullRequestKey(key); !ok {
+			repository, number, ok := parsePullRequestKey(key)
+			if !ok || link.RepositoryID == "" || link.ProviderScope == "" || link.PullRequestNumber != int64(number) ||
+				(bound && !sameConnectionScope(link.ProviderScope, identity.Scope)) || repository.Namespace == "" {
 				continue
 			}
 			if associations[link.TaskID] == nil {
-				associations[link.TaskID] = make(map[string]struct{})
+				associations[link.TaskID] = make(map[string]watchAssociation)
 			}
-			associations[link.TaskID][key] = struct{}{}
+			storageKey := linkStorageKey(link)
+			if storageKey == "" {
+				continue
+			}
+			associations[link.TaskID][storageKey] = watchAssociation{
+				Key: key, RepositoryID: link.RepositoryID, ProviderScope: link.ProviderScope, Number: link.PullRequestNumber,
+			}
 		}
 	}
 	return associations, nil
+}
+
+func linkStorageKey(link watches.TaskLink) string {
+	key, complete := (domain.PullRequestIdentity{
+		ProviderID: link.ProviderID, ProviderScope: link.ProviderScope,
+		RepositoryID: link.RepositoryID, Number: link.PullRequestNumber,
+	}).StorageKey()
+	if !complete {
+		return ""
+	}
+	return key
+}
+
+func hasWatchAssociationKey(associations map[string]watchAssociation, key string) bool {
+	for _, association := range associations {
+		if association.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedWatchAssociationIdentities(associations map[string]watchAssociation) []string {
+	keys := make([]string, 0, len(associations))
+	for key := range associations {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func watchLinkMatchesConnection(
@@ -225,6 +283,20 @@ func sortedAssociationKeys(keys map[string]struct{}) []string {
 	return result
 }
 
+func sortedAssociations(values map[string]watchAssociation) []watchAssociation {
+	result := make([]watchAssociation, 0, len(values))
+	for _, association := range values {
+		result = append(result, association)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Key != result[j].Key {
+			return result[i].Key < result[j].Key
+		}
+		return result[i].RepositoryID < result[j].RepositoryID
+	})
+	return result
+}
+
 func (w *Workflows) taskHasPullRequestAssociation(ctx context.Context, workspaceID, taskID, key string) (bool, error) {
 	links, err := w.links.List(ctx, taskID)
 	if err != nil {
@@ -246,8 +318,7 @@ func (w *Workflows) taskHasPullRequestAssociation(ctx context.Context, workspace
 	if err != nil {
 		return false, err
 	}
-	_, found := watchAssociations[taskID][key]
-	return found, nil
+	return hasWatchAssociationKey(watchAssociations[taskID], key), nil
 }
 
 func (w *Workflows) pullRequestLookupKey(ctx context.Context, workspaceID string, lookup pullRequestLookup) (string, error) {

@@ -5,8 +5,16 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"kandev-plugin-bitbucket/internal/domain"
+)
+
+const (
+	maxReviewViewDiffBytes        = 64 * 1024
+	maxReviewViewDescriptionBytes = 16 * 1024
+	maxReviewViewTextBytes        = 1024
+	maxReviewViewEntries          = 100
 )
 
 func repositoryViews(repositories []domain.Repository) []map[string]any {
@@ -51,7 +59,8 @@ func pullRequestView(pullRequest domain.PullRequest) map[string]any {
 	}
 	return map[string]any{
 		"id": strconv.Itoa(pullRequest.Number), "review_key": pullRequest.Key(), "number": pullRequest.Number,
-		"title": pullRequest.Title, "description": pullRequest.Description, "url": pullRequest.URL,
+		"title":       boundedViewText(pullRequest.Title, maxReviewViewTextBytes),
+		"description": boundedViewText(pullRequest.Description, maxReviewViewDescriptionBytes), "url": pullRequest.URL,
 		"repository_id":   pullRequest.Repository.ID,
 		"provider_scope":  pullRequest.Repository.ProviderScope,
 		"repository_name": pullRequest.Repository.Slug, "repository": repositoryViews([]domain.Repository{pullRequest.Repository})[0],
@@ -65,20 +74,39 @@ func pullRequestView(pullRequest domain.PullRequest) map[string]any {
 
 func reviewView(review domain.Review) map[string]any {
 	view := pullRequestView(review.PullRequest)
-	files := make([]map[string]any, 0, len(review.Files))
-	for _, file := range review.Files {
+	truncated := make(map[string]struct{})
+	files := make([]map[string]any, 0, min(len(review.Files), maxReviewViewEntries))
+	for _, file := range review.Files[:min(len(review.Files), maxReviewViewEntries)] {
+		patch, patchTruncated := boundedViewTextWithFlag(file.Patch, maxReviewViewTextBytes)
+		if patchTruncated {
+			truncated["files"] = struct{}{}
+		}
 		files = append(files, map[string]any{
-			"path": file.Path, "status": file.Status, "additions": file.Additions, "deletions": file.Deletions, "patch": file.Patch,
+			"path": boundedViewText(file.Path, maxReviewViewTextBytes), "status": file.Status,
+			"additions": file.Additions, "deletions": file.Deletions, "patch": patch,
 		})
 	}
-	commits := make([]map[string]any, 0, len(review.Commits))
-	for _, commit := range review.Commits {
-		commits = append(commits, map[string]any{"id": commit.Hash, "hash": commit.Hash, "message": commit.Message, "author": commit.Author})
+	if len(review.Files) > len(files) {
+		truncated["files"] = struct{}{}
 	}
-	participants := make([]map[string]any, 0, len(review.Participants))
+	commits := make([]map[string]any, 0, min(len(review.Commits), maxReviewViewEntries))
+	for _, commit := range review.Commits[:min(len(review.Commits), maxReviewViewEntries)] {
+		message, messageTruncated := boundedViewTextWithFlag(commit.Message, maxReviewViewTextBytes)
+		if messageTruncated {
+			truncated["commits"] = struct{}{}
+		}
+		commits = append(commits, map[string]any{
+			"id": commit.Hash, "hash": commit.Hash, "message": message,
+			"author": boundedViewText(commit.Author, maxReviewViewTextBytes),
+		})
+	}
+	if len(review.Commits) > len(commits) {
+		truncated["commits"] = struct{}{}
+	}
+	participants := make([]map[string]any, 0, min(len(review.Participants), maxReviewViewEntries))
 	viewerKnown := strings.TrimSpace(review.ViewerID) != ""
 	viewerApproved := false
-	for _, participant := range review.Participants {
+	for _, participant := range review.Participants[:min(len(review.Participants), maxReviewViewEntries)] {
 		verdict := participant.Verdict
 		if verdict == "" {
 			if participant.Approved {
@@ -88,7 +116,7 @@ func reviewView(review domain.Review) map[string]any {
 			}
 		}
 		participantView := map[string]any{
-			"id": participant.ID, "name": participant.Name, "role": participant.Role,
+			"id": participant.ID, "name": boundedViewText(participant.Name, maxReviewViewTextBytes), "role": participant.Role,
 			"approved": participant.Approved, "verdict": verdict,
 		}
 		if viewerKnown && strings.EqualFold(participant.ID, review.ViewerID) {
@@ -97,20 +125,60 @@ func reviewView(review domain.Review) map[string]any {
 		}
 		participants = append(participants, participantView)
 	}
-	threads := make([]map[string]any, 0, len(review.Threads))
-	for _, thread := range review.Threads {
-		threadView := map[string]any{"id": thread.ID, "comments": thread.Comments}
-		if len(thread.Comments) > 0 {
-			threadView["author"] = thread.Comments[0].Author
-			threadView["body"] = thread.Comments[0].Body
+	if len(review.Participants) > len(participants) {
+		truncated["participants"] = struct{}{}
+	}
+	threads := make([]map[string]any, 0, min(len(review.Threads), maxReviewViewEntries))
+	commentCount := 0
+	for _, thread := range review.Threads[:min(len(review.Threads), maxReviewViewEntries)] {
+		comments := make([]map[string]any, 0, min(len(thread.Comments), maxReviewViewEntries-commentCount))
+		for _, comment := range thread.Comments {
+			if commentCount == maxReviewViewEntries {
+				truncated["threads"] = struct{}{}
+				break
+			}
+			body, bodyTruncated := boundedViewTextWithFlag(comment.Body, maxReviewViewTextBytes)
+			if bodyTruncated {
+				truncated["threads"] = struct{}{}
+			}
+			createdAt := ""
+			if !comment.When.IsZero() {
+				createdAt = comment.When.UTC().Format(time.RFC3339)
+			}
+			comments = append(comments, map[string]any{
+				"id": comment.ID, "parent_id": comment.ParentID,
+				"author": boundedViewText(comment.Author, maxReviewViewTextBytes), "body": body, "created_at": createdAt,
+			})
+			commentCount++
+		}
+		threadView := map[string]any{"id": thread.ID, "comments": comments}
+		if len(comments) > 0 {
+			threadView["author"] = comments[0]["author"]
+			threadView["body"] = comments[0]["body"]
 		}
 		threads = append(threads, threadView)
 	}
-	statuses := make([]map[string]any, 0, len(review.Statuses))
-	for _, status := range review.Statuses {
-		statuses = append(statuses, map[string]any{"key": status.Key, "name": status.Name, "state": status.State, "url": status.URL, "target": status.Target})
+	if len(review.Threads) > len(threads) {
+		truncated["threads"] = struct{}{}
 	}
-	view["diff"] = review.Diff
+	statuses := make([]map[string]any, 0, min(len(review.Statuses), maxReviewViewEntries))
+	for _, status := range review.Statuses[:min(len(review.Statuses), maxReviewViewEntries)] {
+		name, nameTruncated := boundedViewTextWithFlag(status.Name, maxReviewViewTextBytes)
+		if nameTruncated {
+			truncated["statuses"] = struct{}{}
+		}
+		statuses = append(statuses, map[string]any{
+			"key": status.Key, "name": name, "state": status.State, "url": status.URL, "target": status.Target,
+		})
+	}
+	if len(review.Statuses) > len(statuses) {
+		truncated["statuses"] = struct{}{}
+	}
+	diff, diffTruncated := boundedViewTextWithFlag(review.Diff, maxReviewViewDiffBytes)
+	if diffTruncated {
+		truncated["diff"] = struct{}{}
+	}
+	view["diff"] = diff
 	view["files"] = files
 	view["commits"] = commits
 	view["participants"] = participants
@@ -119,7 +187,34 @@ func reviewView(review domain.Review) map[string]any {
 	}
 	view["threads"] = threads
 	view["statuses"] = statuses
+	if review.UnresolvedThreadCount != nil {
+		view["unresolved_thread_count"] = *review.UnresolvedThreadCount
+	}
+	if len(truncated) > 0 {
+		sections := make([]string, 0, len(truncated))
+		for section := range truncated {
+			sections = append(sections, section)
+		}
+		sort.Strings(sections)
+		view["truncated_sections"] = sections
+	}
 	return view
+}
+
+func boundedViewText(value string, maxBytes int) string {
+	bounded, _ := boundedViewTextWithFlag(value, maxBytes)
+	return bounded
+}
+
+func boundedViewTextWithFlag(value string, maxBytes int) (string, bool) {
+	if len(value) <= maxBytes {
+		return value, false
+	}
+	value = value[:maxBytes]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value, true
 }
 
 func actionCapabilities(capabilities domain.Capabilities) []string {

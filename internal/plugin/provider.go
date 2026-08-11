@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -28,6 +29,20 @@ func NewWatchProvider(resolver ProviderResolver) (*WatchProvider, error) {
 		return nil, fmt.Errorf("provider resolver is required")
 	}
 	return &WatchProvider{resolver: resolver}, nil
+}
+
+func (p *WatchProvider) ConnectionBinding(ctx context.Context, workspaceID string) (string, error) {
+	identity, bound, err := connectionIdentityForResolver(ctx, p.resolver, workspaceID)
+	if err != nil {
+		return "", err
+	}
+	if !bound {
+		return "", watches.ErrConnectionBindingUnsupported
+	}
+	if identity.Binding == "" {
+		return "", watches.ErrConnectionBindingUnsupported
+	}
+	return identity.Binding, nil
 }
 
 func (p *WatchProvider) ListPullRequests(ctx context.Context, watch watches.Watch) ([]watches.PullRequest, string, error) {
@@ -58,11 +73,13 @@ func (p *WatchProvider) ListPullRequests(ctx context.Context, watch watches.Watc
 	return nil, "", fmt.Errorf("Bitbucket connection does not support restart-safe pull request paging")
 }
 
-const watchCursorVersion = 1
+const watchCursorVersion = 2
 
 type watchPageCursor struct {
 	Version        int    `json:"version"`
-	Repository     string `json:"repository"`
+	FilterHash     string `json:"filter_hash"`
+	ProviderScope  string `json:"provider_scope"`
+	RepositoryID   string `json:"repository_id"`
 	State          string `json:"state"`
 	ProviderCursor string `json:"provider_cursor,omitempty"`
 }
@@ -81,15 +98,23 @@ func (p *WatchProvider) listPullRequestPage(ctx context.Context, provider domain
 	if len(groups) == 0 {
 		return nil, "", nil
 	}
-	current, found := parseWatchPageCursor(watch.Cursor)
+	filterHash := watchFilterHash(watch.Filter)
+	current, found, err := parseWatchPageCursor(watch.Cursor, filterHash)
+	if err != nil {
+		return nil, "", err
+	}
 	groupIndex := 0
 	providerCursor := ""
 	if found {
+		groupIndex = -1
 		for index, group := range groups {
-			if group.repository.Namespace+"/"+group.repository.Slug == current.Repository && group.state == current.State {
+			if group.repository.ProviderScope == current.ProviderScope && group.repository.ID == current.RepositoryID && group.state == current.State {
 				groupIndex, providerCursor = index, current.ProviderCursor
 				break
 			}
+		}
+		if groupIndex < 0 {
+			return nil, "", fmt.Errorf("watch cursor repository is unavailable")
 		}
 	}
 	group := groups[groupIndex]
@@ -111,11 +136,11 @@ func (p *WatchProvider) listPullRequestPage(ctx context.Context, provider domain
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Key < result[j].Key })
 	if page.NextCursor != "" {
-		return result, encodeWatchPageCursor(watchPageCursor{Version: watchCursorVersion, Repository: group.repository.Namespace + "/" + group.repository.Slug, State: group.state, ProviderCursor: page.NextCursor}), nil
+		return result, encodeWatchPageCursor(newWatchPageCursor(filterHash, group, page.NextCursor)), nil
 	}
 	if groupIndex+1 < len(groups) {
 		next := groups[groupIndex+1]
-		return result, encodeWatchPageCursor(watchPageCursor{Version: watchCursorVersion, Repository: next.repository.Namespace + "/" + next.repository.Slug, State: next.state}), nil
+		return result, encodeWatchPageCursor(newWatchPageCursor(filterHash, next, "")), nil
 	}
 	return result, "", nil
 }
@@ -142,19 +167,36 @@ func encodeWatchPageCursor(cursor watchPageCursor) string {
 	return base64.RawURLEncoding.EncodeToString(encoded)
 }
 
-func parseWatchPageCursor(raw string) (watchPageCursor, bool) {
+func newWatchPageCursor(filterHash string, group watchQueryGroup, providerCursor string) watchPageCursor {
+	return watchPageCursor{
+		Version: watchCursorVersion, FilterHash: filterHash,
+		ProviderScope: group.repository.ProviderScope, RepositoryID: group.repository.ID,
+		State: group.state, ProviderCursor: providerCursor,
+	}
+}
+
+func parseWatchPageCursor(raw, filterHash string) (watchPageCursor, bool, error) {
 	if raw == "" || len(raw) > 8192 {
-		return watchPageCursor{}, false
+		if raw == "" {
+			return watchPageCursor{}, false, nil
+		}
+		return watchPageCursor{}, false, fmt.Errorf("watch cursor is invalid")
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
-		return watchPageCursor{}, false
+		return watchPageCursor{}, false, fmt.Errorf("watch cursor is invalid")
 	}
 	var cursor watchPageCursor
-	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.Version != watchCursorVersion || cursor.Repository == "" {
-		return watchPageCursor{}, false
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.Version != watchCursorVersion ||
+		cursor.FilterHash != filterHash || cursor.ProviderScope == "" || cursor.RepositoryID == "" {
+		return watchPageCursor{}, false, fmt.Errorf("watch cursor is invalid")
 	}
-	return cursor, true
+	return cursor, true, nil
+}
+
+func watchFilterHash(filter watches.Filter) string {
+	encoded, _ := json.Marshal(filter)
+	return fmt.Sprintf("%x", sha256.Sum256(encoded))
 }
 
 func watchStates(states []string) []string {
@@ -199,25 +241,13 @@ func filterRepositories(ctx context.Context, provider domain.Provider, filter wa
 		return repositories, nil
 	}
 	immutableIDs := make(map[string]struct{}, len(filter.RepositoryIDs))
-	legacyIDs := make([]string, 0, len(filter.RepositoryIDs))
 	for _, requestedID := range filter.RepositoryIDs {
-		matched := false
-		for _, repository := range repositories {
-			if repository.ID != "" && repository.ID == requestedID {
-				immutableIDs[requestedID] = struct{}{}
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			legacyIDs = append(legacyIDs, requestedID)
-		}
+		immutableIDs[requestedID] = struct{}{}
 	}
 	filtered := make([]domain.Repository, 0, len(repositories))
 	for _, repository := range repositories {
 		_, immutableMatch := immutableIDs[repository.ID]
-		legacyID := repository.Namespace + "/" + repository.Slug
-		if immutableMatch || containsFold(legacyIDs, legacyID) || containsFold(legacyIDs, repository.Slug) {
+		if immutableMatch && repository.ID != "" && repository.ProviderScope != "" {
 			filtered = append(filtered, repository)
 		}
 	}
@@ -241,7 +271,7 @@ func watchPullRequest(pullRequest domain.PullRequest) watches.PullRequest {
 	}
 	repository := remoteRepositoryFromDomain(sourceRepository, pullRequest.Destination.Name, pullRequest.Source.Name)
 	return watches.PullRequest{
-		Key: pullRequest.Key(), RepositoryID: repository.ProviderRepositoryID, Repository: repository,
+		Key: pullRequest.Key(), RepositoryID: pullRequest.Repository.ID, Repository: repository,
 		Number: int64(pullRequest.Number), Title: pullRequest.Title, URL: pullRequest.URL, State: pullRequest.State, Author: pullRequest.Author,
 		UpdatedAt: time.Now().UTC(), Attributes: map[string]any{"capabilities": pullRequest.Capabilities},
 	}

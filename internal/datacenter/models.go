@@ -145,7 +145,7 @@ type reviewDiffLine struct {
 }
 
 const (
-	maxReviewComments = 1000
-	maxReviewEntries  = 1000
-	maxReviewPages    = 100
+	maxReviewComments = 200
+	maxReviewEntries  = 200
+	maxReviewPages    = 10
 )

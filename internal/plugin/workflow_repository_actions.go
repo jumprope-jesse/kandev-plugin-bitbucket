@@ -61,7 +61,7 @@ func (w *Workflows) handleRepositoryAction(ctx context.Context, request *plugins
 		}
 		parsed, err := url.Parse(input.URL)
 		if err != nil || parsed.User != nil || parsed.Host == "" || parsed.Scheme != "https" {
-			return nil, fmt.Errorf("repository URL must be a credential-free HTTPS URL")
+			return nil, invalidActionError("repository URL must be a credential-free HTTPS URL")
 		}
 		provider, err := w.provider(ctx, request.Context.WorkspaceID)
 		if err != nil {
@@ -71,21 +71,21 @@ func (w *Workflows) handleRepositoryAction(ctx context.Context, request *plugins
 		if err == nil {
 			repository, err = hydrateRepositoryIdentity(ctx, provider, repository)
 			if err != nil {
-				return nil, fmt.Errorf("Bitbucket repository is unavailable")
+				return nil, notFoundActionError("Bitbucket repository is unavailable")
 			}
 			return actionResponse(repositoryViews([]domain.Repository{repository})[0])
 		}
 		locator, inspectErr := provider.InspectPullRequestURL(input.URL)
 		if inspectErr != nil {
-			return nil, fmt.Errorf("Bitbucket repository is unavailable")
+			return nil, notFoundActionError("Bitbucket repository is unavailable")
 		}
 		locator.Repository, inspectErr = hydrateRepositoryIdentity(ctx, provider, locator.Repository)
 		if inspectErr != nil {
-			return nil, fmt.Errorf("Bitbucket repository is unavailable")
+			return nil, notFoundActionError("Bitbucket repository is unavailable")
 		}
 		pullRequest, getErr := provider.GetPullRequest(ctx, locator.Repository, locator.Number)
 		if getErr != nil {
-			return nil, fmt.Errorf("Bitbucket pull request is unavailable")
+			return nil, notFoundActionError("Bitbucket pull request is unavailable")
 		}
 		repositoryView := repositoryViews([]domain.Repository{pullRequest.Repository})[0]
 		repositoryView["base_branch"] = pullRequest.Destination.Name
@@ -95,6 +95,6 @@ func (w *Workflows) handleRepositoryAction(ctx context.Context, request *plugins
 			"base_branch": pullRequest.Destination.Name, "head_branch": pullRequest.Source.Name,
 		})
 	default:
-		return nil, fmt.Errorf("unsupported Bitbucket action %q", request.ActionKey)
+		return nil, notFoundActionError("unsupported Bitbucket action %q", request.ActionKey)
 	}
 }

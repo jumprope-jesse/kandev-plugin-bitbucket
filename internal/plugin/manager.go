@@ -179,6 +179,9 @@ func (m *Manager) PollWorkspace(ctx context.Context, workspaceID string) error {
 			continue
 		}
 		if _, err := m.watches.Run(ctx, workspaceID, watch.ID); err != nil {
+			if errors.Is(err, watches.ErrConnectionChanged) {
+				continue
+			}
 			m.emit(ctx, "watch.poll_failed", map[string]any{"workspace_id": workspaceID, "watch_id": watch.ID})
 			watchErrors = append(watchErrors, err)
 			if delay := providerRetryAfter(err, m.now()); delay > retryAfter {

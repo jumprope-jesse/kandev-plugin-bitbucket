@@ -2,7 +2,6 @@ package plugin
 
 import (
 	"context"
-	"fmt"
 
 	"kandev-plugin-bitbucket/internal/watches"
 
@@ -143,6 +142,6 @@ func (w *Workflows) handleWatchAction(ctx context.Context, request *pluginsdk.Pl
 		}
 		return actionResponse(result)
 	default:
-		return nil, fmt.Errorf("unsupported Bitbucket action %q", request.ActionKey)
+		return nil, notFoundActionError("unsupported Bitbucket action %q", request.ActionKey)
 	}
 }

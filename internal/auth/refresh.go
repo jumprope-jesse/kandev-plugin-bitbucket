@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -26,9 +27,14 @@ type OAuthRegistration struct {
 
 // CredentialScope keys credentials to a workspace and its current generation.
 type CredentialScope struct {
-	WorkspaceID string
-	Generation  uint64
+	WorkspaceID       string
+	Generation        uint64
+	ConnectionBinding string
 }
+
+// ErrCredentialRevoked prevents a superseded connection from publishing a
+// refresh result after its credential generation has been invalidated.
+var ErrCredentialRevoked = errors.New("OAuth credential generation was revoked")
 
 // Credential contains an in-memory OAuth access/refresh token pair.
 type Credential struct {
@@ -85,6 +91,7 @@ type Refresher struct {
 	mu        sync.Mutex
 	inFlight  map[string]*refreshCall
 	completed map[string]completedRefresh
+	revoked   map[string]struct{}
 }
 
 type refreshCall struct {
@@ -116,7 +123,21 @@ func NewRefresher(httpClient *http.Client, now func() time.Time) *Refresher {
 		now:        now,
 		inFlight:   make(map[string]*refreshCall),
 		completed:  make(map[string]completedRefresh),
+		revoked:    make(map[string]struct{}),
 	}
+}
+
+// Invalidate permanently revokes one connection-bound credential generation
+// for this process. The non-secret tombstone also fences in-flight exchanges.
+func (r *Refresher) Invalidate(scope CredentialScope) {
+	if r == nil || scope.WorkspaceID == "" || scope.Generation == 0 {
+		return
+	}
+	key := credentialScopeKey(scope)
+	r.mu.Lock()
+	delete(r.completed, key)
+	r.revoked[key] = struct{}{}
+	r.mu.Unlock()
 }
 
 // Refresh exchanges a rotating refresh token once per workspace generation.
@@ -127,8 +148,13 @@ func (r *Refresher) Refresh(ctx context.Context, scope CredentialScope, registra
 	if refreshToken == "" {
 		return Credential{}, fmt.Errorf("refresh token is required")
 	}
-	key := scope.WorkspaceID + "\x00" + fmt.Sprint(scope.Generation)
+	key := credentialScopeKey(scope)
 	r.mu.Lock()
+	r.purgeExpiredCompletedLocked(r.now())
+	if _, revoked := r.revoked[key]; revoked {
+		r.mu.Unlock()
+		return Credential{}, ErrCredentialRevoked
+	}
 	if completed := r.completed[key]; completed.generation == scope.Generation &&
 		completed.refreshToken == refreshToken && completed.credential.ExpiresAt.After(r.now()) {
 		r.mu.Unlock()
@@ -152,6 +178,10 @@ func (r *Refresher) Refresh(ctx context.Context, scope CredentialScope, registra
 		"refresh_token": {refreshToken},
 	})
 	r.mu.Lock()
+	if _, revoked := r.revoked[key]; revoked {
+		credential = Credential{}
+		err = ErrCredentialRevoked
+	}
 	call.credential = credential
 	call.err = err
 	if err == nil {
@@ -165,6 +195,18 @@ func (r *Refresher) Refresh(ctx context.Context, scope CredentialScope, registra
 	close(call.done)
 	r.mu.Unlock()
 	return credential, err
+}
+
+func credentialScopeKey(scope CredentialScope) string {
+	return scope.WorkspaceID + "\x00" + fmt.Sprint(scope.Generation) + "\x00" + scope.ConnectionBinding
+}
+
+func (r *Refresher) purgeExpiredCompletedLocked(now time.Time) {
+	for key, completed := range r.completed {
+		if !completed.credential.ExpiresAt.After(now) {
+			delete(r.completed, key)
+		}
+	}
 }
 
 // ExchangeAuthorizationCode consumes a one-time PKCE state before token exchange.

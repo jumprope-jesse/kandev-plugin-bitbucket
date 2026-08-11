@@ -68,14 +68,14 @@ func TestCloudSearchPullRequestsPagePreservesProviderCursorAndAuthor(t *testing.
 		}
 		require.Equal(t, "OPEN", r.URL.Query().Get("state"))
 		require.Equal(t, "50", r.URL.Query().Get("pagelen"))
-		next := fmt.Sprintf("%s/2.0/repositories/acme/widgets/pullrequests?page=2", server.URL)
+		next := fmt.Sprintf("%s/2.0/repositories/acme/widgets/pullrequests?page=2&pagelen=50&state=OPEN", server.URL)
 		_, _ = w.Write([]byte(fmt.Sprintf(`{"values":[{"id":1,"title":"One","state":"OPEN","author":{"account_id":"account-1"},"links":{"html":{"href":"https://bitbucket.org/acme/widgets/pull-requests/1"}},"source":{"branch":{"name":"one"}},"destination":{"branch":{"name":"main"},"repository":{"mainbranch":{"name":"main"}}}}],"next":%q}`, next)))
 	}))
 	defer server.Close()
 	base, err := url.Parse(server.URL + "/2.0")
 	require.NoError(t, err)
 	client := NewClient(ClientOptions{APIBase: base, HTTPClient: server.Client(), TokenSource: staticTokenSource("cloud-token")})
-	query := domain.PullRequestQuery{Repository: domain.Repository{Namespace: "acme", Slug: "widgets"}, State: "OPEN", Limit: 100}
+	query := domain.PullRequestQuery{Repository: domain.Repository{ID: "repo-uuid", ProviderScope: "https://bitbucket.org", Namespace: "acme", Slug: "widgets"}, State: "OPEN", Limit: 100}
 
 	first, err := client.SearchPullRequestsPage(context.Background(), query)
 	require.NoError(t, err)
@@ -87,6 +87,39 @@ func TestCloudSearchPullRequestsPagePreservesProviderCursorAndAuthor(t *testing.
 	require.Equal(t, "account-2", second.PullRequests[0].Author)
 	require.Empty(t, second.NextCursor)
 	require.Equal(t, 2, requests)
+}
+
+func TestCloudSearchPullRequestsPageCursorIsBoundToImmutableRepositoryAndQuery(t *testing.T) {
+	requests := 0
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		next := fmt.Sprintf("%s/2.0/repositories/acme/widgets/pullrequests?page=2&pagelen=50&q=title%%7E%%22race%%22&state=OPEN", server.URL)
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"values":[],"next":%q}`, next)))
+	}))
+	defer server.Close()
+	base, err := url.Parse(server.URL + "/2.0")
+	require.NoError(t, err)
+	client := NewClient(ClientOptions{APIBase: base, HTTPClient: server.Client(), TokenSource: staticTokenSource("cloud-token")})
+	query := domain.PullRequestQuery{
+		Repository: domain.Repository{ID: "repo-original", ProviderScope: "https://bitbucket.org", Namespace: "acme", Slug: "widgets"},
+		Text:       "race", State: "OPEN", Limit: 100,
+	}
+	page, err := client.SearchPullRequestsPage(context.Background(), query)
+	require.NoError(t, err)
+	require.NotEmpty(t, page.NextCursor)
+
+	recreated := query
+	recreated.Repository.ID = "repo-recreated"
+	recreated.Cursor = page.NextCursor
+	_, err = client.SearchPullRequestsPage(context.Background(), recreated)
+	require.ErrorContains(t, err, "cursor")
+	changedQuery := query
+	changedQuery.Text = "other"
+	changedQuery.Cursor = page.NextCursor
+	_, err = client.SearchPullRequestsPage(context.Background(), changedQuery)
+	require.ErrorContains(t, err, "cursor")
+	require.Equal(t, 1, requests, "invalid cursors must fail before any provider request")
 }
 
 func TestCloudMapsPullRequestDisplayAuthorAndCreatedTime(t *testing.T) {
@@ -117,7 +150,7 @@ func TestCloudSearchPullRequestsPageAllStatesUsesOpaqueStateContinuation(t *test
 	base, err := url.Parse(server.URL + "/2.0")
 	require.NoError(t, err)
 	client := NewClient(ClientOptions{APIBase: base, HTTPClient: server.Client(), TokenSource: staticTokenSource("cloud-token")})
-	query := domain.PullRequestQuery{Repository: domain.Repository{Namespace: "acme", Slug: "widgets"}, State: "ALL", Limit: 100}
+	query := domain.PullRequestQuery{Repository: domain.Repository{ID: "repo-uuid", ProviderScope: "https://bitbucket.org", Namespace: "acme", Slug: "widgets"}, State: "ALL", Limit: 100}
 
 	for index := 0; index < 4; index++ {
 		page, err := client.SearchPullRequestsPage(context.Background(), query)
@@ -219,6 +252,44 @@ func TestCloudGetReviewMapsGoldenReviewData(t *testing.T) {
 	}, review.Files)
 	require.Equal(t, "main", review.PullRequest.Repository.DefaultBranch)
 	require.Equal(t, domain.Repository{ID: "{repo-forked-widgets}", ProviderScope: "https://bitbucket.org", Namespace: "forker", Slug: "forked-widgets", CloneURL: mustURL(t, "https://bitbucket.org/forker/forked-widgets.git")}, review.PullRequest.SourceRepository)
+}
+
+func TestCloudProjectedReviewSkipsDiffFilesCommitsCommentsAndViewer(t *testing.T) {
+	pullRequest, err := os.ReadFile("testdata/review-pullrequest.json")
+	require.NoError(t, err)
+	paths := make([]string, 0)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/2.0/repositories/acme/widgets/pullrequests/42":
+			_, _ = w.Write(pullRequest)
+		case "/2.0/repositories/acme/widgets/commit/source-hash/statuses":
+			_, _ = w.Write([]byte(`{"values":[{"key":"ci","name":"CI","state":"SUCCESSFUL"}]}`))
+		default:
+			t.Fatalf("unexpected heavy Cloud review request %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	baseURL, err := url.Parse(server.URL + "/2.0")
+	require.NoError(t, err)
+	client := NewClient(ClientOptions{APIBase: baseURL, HTTPClient: server.Client(), TokenSource: staticTokenSource("cloud-token")})
+
+	review, err := client.GetReviewProjected(context.Background(), domain.Repository{Namespace: "acme", Slug: "widgets"}, 42, domain.ReviewProjection{
+		Participants: true, Statuses: true,
+	})
+
+	require.NoError(t, err)
+	require.NotEmpty(t, review.Participants)
+	require.NotEmpty(t, review.Statuses)
+	require.Empty(t, review.Diff)
+	require.Empty(t, review.Files)
+	require.Empty(t, review.Commits)
+	require.Empty(t, review.Threads)
+	require.Empty(t, review.ViewerID)
+	require.Equal(t, []string{
+		"/2.0/repositories/acme/widgets/pullrequests/42",
+		"/2.0/repositories/acme/widgets/commit/source-hash/statuses",
+	}, paths)
 }
 
 func TestMapParticipantsPreservesChangesRequestedVerdict(t *testing.T) {

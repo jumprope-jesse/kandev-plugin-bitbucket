@@ -37,8 +37,9 @@ type LinkStore struct {
 }
 
 type linkState struct {
-	Links          []PullRequestLink `json:"links"`
-	SuppressedKeys []string          `json:"suppressed_keys,omitempty"`
+	Links                []PullRequestLink `json:"links"`
+	SuppressedIdentities []string          `json:"suppressed_identities,omitempty"`
+	LegacySuppressedKeys []string          `json:"suppressed_keys,omitempty"`
 }
 
 func NewLinkStore(host StateHost) (*LinkStore, error) {
@@ -102,11 +103,16 @@ func (s *LinkStore) Link(ctx context.Context, taskID string, link PullRequestLin
 	if err != nil {
 		return nil, err
 	}
-	wasSuppressed := containsKey(state.SuppressedKeys, normalized.Key)
-	state.SuppressedKeys = removeKey(state.SuppressedKeys, normalized.Key)
-	for _, existing := range state.Links {
-		if existing.Key == normalized.Key {
-			if wasSuppressed {
+	identity := pullRequestLinkStorageKey(normalized)
+	wasSuppressed := containsKey(state.SuppressedIdentities, identity) || containsKey(state.LegacySuppressedKeys, normalized.Key)
+	state.SuppressedIdentities = removeKey(state.SuppressedIdentities, identity)
+	state.LegacySuppressedKeys = removeKey(state.LegacySuppressedKeys, normalized.Key)
+	for index, existing := range state.Links {
+		if pullRequestLinkStorageKey(existing) == identity {
+			if existing != normalized {
+				state.Links[index] = normalized
+			}
+			if wasSuppressed || existing != normalized {
 				if err := s.save(ctx, taskID, state); err != nil {
 					return nil, err
 				}
@@ -137,11 +143,14 @@ func (s *LinkStore) AutoLink(ctx context.Context, taskID string, link PullReques
 	if err != nil {
 		return nil, err
 	}
-	if containsKey(state.SuppressedKeys, normalized.Key) {
+	identity := pullRequestLinkStorageKey(normalized)
+	legacyIdentity := strings.HasPrefix(identity, "legacy:")
+	if containsKey(state.SuppressedIdentities, identity) ||
+		(legacyIdentity && containsKey(state.LegacySuppressedKeys, normalized.Key)) {
 		return state.Links, nil
 	}
 	for _, existing := range state.Links {
-		if existing.Key == normalized.Key {
+		if pullRequestLinkStorageKey(existing) == identity {
 			return state.Links, nil
 		}
 	}
@@ -166,17 +175,24 @@ func (s *LinkStore) Unlink(ctx context.Context, taskID, key string) ([]PullReque
 		return nil, err
 	}
 	kept := state.Links[:0]
+	suppressed := make([]string, 0)
 	for _, link := range state.Links {
 		if link.Key != key {
 			kept = append(kept, link)
+			continue
+		}
+		if identity := pullRequestLinkStorageKey(link); identity != "" {
+			suppressed = append(suppressed, identity)
 		}
 	}
 	state.Links = kept
-	if !containsKey(state.SuppressedKeys, key) {
-		state.SuppressedKeys = append(state.SuppressedKeys, key)
-		if len(state.SuppressedKeys) > maxSuppressedPullRequests {
-			state.SuppressedKeys = state.SuppressedKeys[len(state.SuppressedKeys)-maxSuppressedPullRequests:]
+	for _, identity := range suppressed {
+		if !containsKey(state.SuppressedIdentities, identity) {
+			state.SuppressedIdentities = append(state.SuppressedIdentities, identity)
 		}
+	}
+	if len(state.SuppressedIdentities) > maxSuppressedPullRequests {
+		state.SuppressedIdentities = state.SuppressedIdentities[len(state.SuppressedIdentities)-maxSuppressedPullRequests:]
 	}
 	if err := s.save(ctx, taskID, state); err != nil {
 		return nil, err
@@ -244,6 +260,10 @@ func normalizePullRequestLink(link PullRequestLink) (PullRequestLink, bool, erro
 	if link.Product != domain.ProductCloud && link.Product != domain.ProductDataCenter {
 		return PullRequestLink{}, false, fmt.Errorf("unsupported Bitbucket product")
 	}
+	if link.ConnectionScope == "" && link.Product == domain.ProductCloud {
+		link.ConnectionScope = "https://bitbucket.org"
+		changed = true
+	}
 	if link.ConnectionScope != "" {
 		scope, err := normalizeConnectionScope(link.ConnectionScope)
 		if err != nil || !urlWithinConnectionScope(link.URL, scope) {
@@ -255,4 +275,20 @@ func normalizePullRequestLink(link PullRequestLink) (PullRequestLink, bool, erro
 		}
 	}
 	return link, changed, nil
+}
+
+func pullRequestLinkStorageKey(link PullRequestLink) string {
+	scope := link.ConnectionScope
+	if scope == "" && link.Product == domain.ProductCloud {
+		scope = "https://bitbucket.org"
+	}
+	identity, complete := (domain.PullRequestIdentity{
+		ProviderID: "bitbucket", ProviderScope: scope, RepositoryID: link.RepositoryID, Number: link.Number,
+	}).StorageKey()
+	if complete {
+		return identity
+	}
+	// Legacy records without a verifiable provider scope remain isolated by
+	// their old display key until they can be explicitly replaced.
+	return "legacy:" + link.Key
 }

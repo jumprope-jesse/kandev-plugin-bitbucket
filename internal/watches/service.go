@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -61,6 +62,17 @@ func (s *Service) Run(ctx context.Context, workspaceID, watchID string) (RunResu
 	if watch.Status == StatusPaused {
 		return RunResult{}, ErrWatchPaused
 	}
+	if changed, bindingErr := s.connectionChanged(ctx, watch); bindingErr != nil {
+		return RunResult{}, bindingErr
+	} else if changed {
+		watch.Status = StatusPaused
+		snapshot.Watches[watch.ID] = watch
+		if err := s.repository.Save(ctx, workspaceID, snapshot); err != nil {
+			return RunResult{}, fmt.Errorf("save watch after connection change: %w", err)
+		}
+		s.emit(ctx, "watch.connection_changed", map[string]any{"workspace_id": workspaceID, "watch_id": watchID})
+		return RunResult{}, ErrConnectionChanged
+	}
 
 	items, cursor, err := s.provider.ListPullRequests(ctx, watch)
 	if err != nil {
@@ -99,7 +111,7 @@ func (s *Service) Run(ctx context.Context, workspaceID, watchID string) (RunResu
 
 func (s *Service) Create(ctx context.Context, watch Watch) (Watch, error) {
 	if watch.ID == "" || watch.WorkspaceID == "" {
-		return Watch{}, fmt.Errorf("watch and workspace ids are required")
+		return Watch{}, fmt.Errorf("%w: watch and workspace ids are required", ErrInvalidWatch)
 	}
 	unlock := s.locks.lock(watch.WorkspaceID)
 	defer unlock()
@@ -111,7 +123,12 @@ func (s *Service) Create(ctx context.Context, watch Watch) (Watch, error) {
 		snapshot.Watches = make(map[string]Watch)
 	}
 	if _, exists := snapshot.Watches[watch.ID]; exists {
-		return Watch{}, fmt.Errorf("watch %q already exists", watch.ID)
+		return Watch{}, fmt.Errorf("%w: %q", ErrWatchExists, watch.ID)
+	}
+	if binding, bound, err := s.currentConnectionBinding(ctx, watch.WorkspaceID); err != nil {
+		return Watch{}, err
+	} else if bound {
+		watch.ConnectionBinding = binding
 	}
 	normalizeWatch(&watch)
 	snapshot.Watches[watch.ID] = watch
@@ -131,7 +148,7 @@ func (s *Service) Get(ctx context.Context, workspaceID, watchID string) (Watch, 
 
 func (s *Service) List(ctx context.Context, workspaceID string) ([]Watch, error) {
 	if workspaceID == "" {
-		return nil, fmt.Errorf("workspace id is required")
+		return nil, fmt.Errorf("%w: workspace id is required", ErrInvalidWatch)
 	}
 	unlock := s.locks.lock(workspaceID)
 	defer unlock()
@@ -158,7 +175,7 @@ func (s *Service) List(ctx context.Context, workspaceID string) ([]Watch, error)
 // unowned link prevents a later poll from recreating or reattaching it.
 func (s *Service) DetachTaskLink(ctx context.Context, workspaceID, taskID, pullRequestKey string) error {
 	if workspaceID == "" || taskID == "" || pullRequestKey == "" {
-		return fmt.Errorf("workspace, task, and pull request key are required")
+		return fmt.Errorf("%w: workspace, task, and pull request key are required", ErrInvalidWatch)
 	}
 	unlock := s.locks.lock(workspaceID)
 	defer unlock()
@@ -169,14 +186,19 @@ func (s *Service) DetachTaskLink(ctx context.Context, workspaceID, taskID, pullR
 	changed := false
 	for id, watch := range snapshot.Watches {
 		normalizeWatch(&watch)
-		link, found := watch.Links[pullRequestKey]
-		if !found || link.TaskID != taskID || !link.Owned {
-			continue
+		watchChanged := false
+		for storageKey, link := range watch.Links {
+			if link.PullRequestKey != pullRequestKey || link.TaskID != taskID || !link.Owned {
+				continue
+			}
+			link.Owned = false
+			watch.Links[storageKey] = link
+			watchChanged = true
 		}
-		link.Owned = false
-		watch.Links[pullRequestKey] = link
-		snapshot.Watches[id] = watch
-		changed = true
+		if watchChanged {
+			snapshot.Watches[id] = watch
+			changed = true
+		}
 	}
 	if !changed {
 		return nil
@@ -192,13 +214,53 @@ func (s *Service) DetachTaskLink(ctx context.Context, workspaceID, taskID, pullR
 	return nil
 }
 
+// RefreshTaskLink updates mutable display attributes while preserving the
+// immutable map key and watch ownership.
+func (s *Service) RefreshTaskLink(
+	ctx context.Context,
+	workspaceID, taskID, storageKey, pullRequestKey, pullRequestURL string,
+) error {
+	if workspaceID == "" || taskID == "" || storageKey == "" || pullRequestKey == "" {
+		return fmt.Errorf("%w: workspace, task, storage, and pull request keys are required", ErrInvalidWatch)
+	}
+	unlock := s.locks.lock(workspaceID)
+	defer unlock()
+	snapshot, err := s.repository.Load(ctx, workspaceID)
+	if err != nil {
+		return fmt.Errorf("load watch snapshot: %w", err)
+	}
+	changed := false
+	for id, watch := range snapshot.Watches {
+		normalizeWatch(&watch)
+		link, found := watch.Links[storageKey]
+		if !found || link.TaskID != taskID || !link.Owned {
+			continue
+		}
+		if link.PullRequestKey == pullRequestKey && link.PullRequestURL == pullRequestURL {
+			continue
+		}
+		link.PullRequestKey = pullRequestKey
+		link.PullRequestURL = pullRequestURL
+		watch.Links[storageKey] = link
+		snapshot.Watches[id] = watch
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	if err := s.repository.Save(ctx, workspaceID, snapshot); err != nil {
+		return fmt.Errorf("save refreshed watch link: %w", err)
+	}
+	return nil
+}
+
 // Recover finalizes durable reservations left in creating state when the
 // process stopped after the host created a task but before state was saved.
 // It never creates or deletes tasks; a later Run safely retries reservations
 // that the host cannot find.
 func (s *Service) Recover(ctx context.Context, workspaceID string) (int, error) {
 	if workspaceID == "" {
-		return 0, fmt.Errorf("workspace id is required")
+		return 0, fmt.Errorf("%w: workspace id is required", ErrInvalidWatch)
 	}
 	unlock := s.locks.lock(workspaceID)
 	defer unlock()
@@ -263,10 +325,16 @@ func (s *Service) reconcileCreatingReservations(
 		reservation.State = ReservationCreated
 		watch.Reservations[key] = reservation
 		link := reservation.Link
-		link.PullRequestKey = key
+		if link.PullRequestKey == "" {
+			link.PullRequestKey = key
+		}
 		link.TaskID = taskID
 		link.Owned = true
-		watch.Links[key] = link
+		storageKey := link.storageKey()
+		if storageKey == "" {
+			storageKey = key
+		}
+		watch.Links[storageKey] = link
 		recovered++
 	}
 	return recovered, nil
@@ -288,6 +356,15 @@ func (s *Service) setStatus(ctx context.Context, workspaceID, watchID string, st
 		return Watch{}, err
 	}
 	watch.Status = status
+	if status == StatusRunning {
+		if binding, bound, bindErr := s.currentConnectionBinding(ctx, workspaceID); bindErr != nil {
+			return Watch{}, bindErr
+		} else if bound {
+			watch.ConnectionBinding = binding
+			watch.Cursor = ""
+			watch.Failures = 0
+		}
+	}
 	snapshot.Watches[watch.ID] = watch
 	if err := s.repository.Save(ctx, workspaceID, snapshot); err != nil {
 		return Watch{}, fmt.Errorf("save watch status: %w", err)
@@ -315,7 +392,7 @@ func (s *Service) SetFilter(ctx context.Context, workspaceID, watchID string, fi
 
 func (s *Service) SavePreset(ctx context.Context, workspaceID, watchID string, preset Preset) (Watch, error) {
 	if preset.ID == "" || preset.Name == "" {
-		return Watch{}, fmt.Errorf("preset id and name are required")
+		return Watch{}, fmt.Errorf("%w: preset id and name are required", ErrInvalidWatch)
 	}
 	unlock := s.locks.lock(workspaceID)
 	defer unlock()
@@ -336,11 +413,15 @@ func (s *Service) ensureTask(ctx context.Context, workspaceID string, snapshot S
 	if item.Key == "" {
 		return false, false, snapshot, watch, fmt.Errorf("watched pull request key is required")
 	}
-	if existing, exists := watch.Links[item.Key]; exists {
+	storageKey := item.storageKey()
+	if storageKey == "" {
+		return false, false, snapshot, watch, fmt.Errorf("watched pull request immutable identity is required")
+	}
+	if existing, exists := watch.Links[storageKey]; exists {
 		upgraded := taskLinkForPullRequest(item, existing.TaskID)
 		upgraded.Owned = existing.Owned
-		if existing.ProviderID != upgraded.ProviderID || existing.ProviderHost != upgraded.ProviderHost {
-			watch.Links[item.Key] = upgraded
+		if existing != upgraded {
+			watch.Links[storageKey] = upgraded
 			snapshot.Watches[watch.ID] = watch
 			if saveErr := s.repository.Save(ctx, workspaceID, snapshot); saveErr != nil {
 				return false, false, snapshot, watch, fmt.Errorf("save upgraded task link: %w", saveErr)
@@ -348,11 +429,11 @@ func (s *Service) ensureTask(ctx context.Context, workspaceID string, snapshot S
 		}
 		return false, true, snapshot, watch, nil
 	}
-	if reservation, exists := watch.Reservations[item.Key]; exists {
+	if reservation, exists := watch.Reservations[storageKey]; exists {
 		if reservation.TaskID != "" {
-			watch.Links[item.Key] = taskLinkForPullRequest(item, reservation.TaskID)
+			watch.Links[storageKey] = taskLinkForPullRequest(item, reservation.TaskID)
 			reservation.State = ReservationCreated
-			watch.Reservations[item.Key] = reservation
+			watch.Reservations[storageKey] = reservation
 			snapshot.Watches[watch.ID] = watch
 			if saveErr := s.repository.Save(ctx, workspaceID, snapshot); saveErr != nil {
 				return false, false, snapshot, watch, fmt.Errorf("save recovered task link: %w", saveErr)
@@ -364,10 +445,10 @@ func (s *Service) ensureTask(ctx context.Context, workspaceID string, snapshot S
 			return false, false, snapshot, watch, fmt.Errorf("find creating reservation: %w", findErr)
 		}
 		if found {
-			watch.Links[item.Key] = taskLinkForPullRequest(item, foundTaskID)
+			watch.Links[storageKey] = taskLinkForPullRequest(item, foundTaskID)
 			reservation.State = ReservationCreated
 			reservation.TaskID = foundTaskID
-			watch.Reservations[item.Key] = reservation
+			watch.Reservations[storageKey] = reservation
 			snapshot.Watches[watch.ID] = watch
 			if saveErr := s.repository.Save(ctx, workspaceID, snapshot); saveErr != nil {
 				return false, false, snapshot, watch, fmt.Errorf("save recovered reservation: %w", saveErr)
@@ -376,7 +457,7 @@ func (s *Service) ensureTask(ctx context.Context, workspaceID string, snapshot S
 		}
 	}
 
-	reservation, exists := watch.Reservations[item.Key]
+	reservation, exists := watch.Reservations[storageKey]
 	if !exists {
 		token, tokenErr := s.token()
 		if tokenErr != nil {
@@ -386,7 +467,7 @@ func (s *Service) ensureTask(ctx context.Context, workspaceID string, snapshot S
 			Token: token, State: ReservationCreating, CreatedAt: s.now().UTC(),
 			Link: taskLinkForPullRequest(item, ""),
 		}
-		watch.Reservations[item.Key] = reservation
+		watch.Reservations[storageKey] = reservation
 		snapshot.Watches[watch.ID] = watch
 		if saveErr := s.repository.Save(ctx, workspaceID, snapshot); saveErr != nil {
 			return false, false, snapshot, watch, fmt.Errorf("persist creating reservation: %w", saveErr)
@@ -404,8 +485,8 @@ func (s *Service) ensureTask(ctx context.Context, workspaceID string, snapshot S
 	}
 	reservation.State = ReservationCreated
 	reservation.TaskID = taskID
-	watch.Reservations[item.Key] = reservation
-	watch.Links[item.Key] = taskLinkForPullRequest(item, taskID)
+	watch.Reservations[storageKey] = reservation
+	watch.Links[storageKey] = taskLinkForPullRequest(item, taskID)
 	snapshot.Watches[watch.ID] = watch
 	if saveErr := s.repository.Save(ctx, workspaceID, snapshot); saveErr != nil {
 		return false, false, snapshot, watch, fmt.Errorf("persist created task link: %w", saveErr)
@@ -416,19 +497,22 @@ func (s *Service) ensureTask(ctx context.Context, workspaceID string, snapshot S
 
 func taskLinkForPullRequest(item PullRequest, taskID string) TaskLink {
 	return TaskLink{
-		PullRequestKey:  item.Key,
-		TaskID:          taskID,
-		Owned:           true,
-		ProviderID:      item.Repository.ProviderID,
-		ProviderHost:    item.Repository.ProviderHost,
-		ConnectionScope: item.ConnectionScope,
-		PullRequestURL:  item.URL,
+		PullRequestKey:    item.Key,
+		TaskID:            taskID,
+		Owned:             true,
+		ProviderID:        item.Repository.ProviderID,
+		ProviderHost:      item.Repository.ProviderHost,
+		ConnectionScope:   item.ConnectionScope,
+		PullRequestURL:    item.URL,
+		RepositoryID:      item.RepositoryID,
+		ProviderScope:     item.Repository.ProviderScope,
+		PullRequestNumber: item.Number,
 	}
 }
 
 func (s *Service) loadWatch(ctx context.Context, workspaceID, watchID string) (Snapshot, Watch, error) {
 	if workspaceID == "" || watchID == "" {
-		return Snapshot{}, Watch{}, fmt.Errorf("workspace and watch ids are required")
+		return Snapshot{}, Watch{}, fmt.Errorf("%w: workspace and watch ids are required", ErrInvalidWatch)
 	}
 	snapshot, err := s.repository.Load(ctx, workspaceID)
 	if err != nil {
@@ -455,6 +539,57 @@ func normalizeWatch(watch *Watch) {
 	if watch.Reservations == nil {
 		watch.Reservations = make(map[string]Reservation)
 	}
+	migrateWatchIdentityKeys(watch)
+}
+
+func migrateWatchIdentityKeys(watch *Watch) {
+	links := make(map[string]TaskLink, len(watch.Links))
+	for key, link := range watch.Links {
+		if link.PullRequestKey == "" {
+			link.PullRequestKey = key
+		}
+		storageKey := link.storageKey()
+		if storageKey == "" {
+			storageKey = key
+		}
+		links[storageKey] = link
+	}
+	reservations := make(map[string]Reservation, len(watch.Reservations))
+	for key, reservation := range watch.Reservations {
+		storageKey := reservation.Link.storageKey()
+		if storageKey == "" {
+			storageKey = key
+		}
+		reservations[storageKey] = reservation
+	}
+	watch.Links = links
+	watch.Reservations = reservations
+}
+
+func (s *Service) currentConnectionBinding(ctx context.Context, workspaceID string) (string, bool, error) {
+	provider, supported := s.provider.(connectionBindingProvider)
+	if !supported {
+		return "", false, nil
+	}
+	binding, err := provider.ConnectionBinding(ctx, workspaceID)
+	if err != nil {
+		if errors.Is(err, ErrConnectionBindingUnsupported) {
+			return "", false, nil
+		}
+		return "", true, fmt.Errorf("resolve watch connection binding: %w", err)
+	}
+	if binding == "" {
+		return "", true, fmt.Errorf("watch connection binding is unavailable")
+	}
+	return binding, true, nil
+}
+
+func (s *Service) connectionChanged(ctx context.Context, watch Watch) (bool, error) {
+	binding, bound, err := s.currentConnectionBinding(ctx, watch.WorkspaceID)
+	if err != nil || !bound {
+		return false, err
+	}
+	return watch.ConnectionBinding == "" || watch.ConnectionBinding != binding, nil
 }
 
 func (s *Service) emit(ctx context.Context, name string, payload map[string]any) {
@@ -482,7 +617,8 @@ func (s *Service) PreviewReset(ctx context.Context, workspaceID, watchID string)
 		}
 	}
 	var taskIDs []string
-	for _, link := range ownedLinks(watch) {
+	for _, record := range ownedLinks(watch) {
+		link := record.link
 		preview, previewErr := s.tasks.PreviewOwned(ctx, link.TaskID)
 		if previewErr != nil {
 			return ResetPreview{}, fmt.Errorf("preview owned task tree %q: %w", link.TaskID, previewErr)
@@ -510,14 +646,15 @@ func (s *Service) Reset(ctx context.Context, workspaceID, watchID string) (Reset
 	}
 	snapshot.Watches[watch.ID] = watch
 	var deletedTaskIDs []string
-	for _, link := range ownedLinks(watch) {
+	for _, record := range ownedLinks(watch) {
+		link := record.link
 		deleted, deleteErr := s.tasks.DeleteOwned(ctx, link.TaskID)
 		deletedTaskIDs = appendUnique(deletedTaskIDs, deleted...)
 		if deleteErr != nil {
 			return ResetResult{DeletedTaskIDs: deletedTaskIDs}, fmt.Errorf("delete owned task tree %q: %w", link.TaskID, deleteErr)
 		}
-		delete(watch.Links, link.PullRequestKey)
-		delete(watch.Reservations, link.PullRequestKey)
+		delete(watch.Links, record.storageKey)
+		delete(watch.Reservations, record.storageKey)
 		snapshot.Watches[watch.ID] = watch
 		if err := s.repository.Save(ctx, workspaceID, snapshot); err != nil {
 			return ResetResult{DeletedTaskIDs: deletedTaskIDs}, fmt.Errorf("save reset progress: %w", err)
@@ -557,14 +694,15 @@ func (s *Service) Delete(ctx context.Context, workspaceID, watchID string) (Rese
 	}
 	snapshot.Watches[watch.ID] = watch
 	var deletedTaskIDs []string
-	for _, link := range ownedLinks(watch) {
+	for _, record := range ownedLinks(watch) {
+		link := record.link
 		deleted, deleteErr := s.tasks.DeleteOwned(ctx, link.TaskID)
 		deletedTaskIDs = appendUnique(deletedTaskIDs, deleted...)
 		if deleteErr != nil {
 			return ResetResult{DeletedTaskIDs: deletedTaskIDs}, fmt.Errorf("delete owned task tree %q: %w", link.TaskID, deleteErr)
 		}
-		delete(watch.Links, link.PullRequestKey)
-		delete(watch.Reservations, link.PullRequestKey)
+		delete(watch.Links, record.storageKey)
+		delete(watch.Reservations, record.storageKey)
 		snapshot.Watches[watch.ID] = watch
 		if err := s.repository.Save(ctx, workspaceID, snapshot); err != nil {
 			return ResetResult{DeletedTaskIDs: deletedTaskIDs}, fmt.Errorf("save delete progress: %w", err)
@@ -578,7 +716,12 @@ func (s *Service) Delete(ctx context.Context, workspaceID, watchID string) (Rese
 	return ResetResult{DeletedTaskIDs: deletedTaskIDs}, nil
 }
 
-func ownedLinks(watch Watch) []TaskLink {
+type ownedLink struct {
+	storageKey string
+	link       TaskLink
+}
+
+func ownedLinks(watch Watch) []ownedLink {
 	keys := make([]string, 0, len(watch.Links))
 	for key, link := range watch.Links {
 		if link.Owned && link.TaskID != "" {
@@ -586,9 +729,9 @@ func ownedLinks(watch Watch) []TaskLink {
 		}
 	}
 	sort.Strings(keys)
-	links := make([]TaskLink, 0, len(keys))
+	links := make([]ownedLink, 0, len(keys))
 	for _, key := range keys {
-		links = append(links, watch.Links[key])
+		links = append(links, ownedLink{storageKey: key, link: watch.Links[key]})
 	}
 	return links
 }

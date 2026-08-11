@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -24,6 +25,12 @@ import (
 const connectionStateKey = "bitbucket.connection.v1"
 
 const maxOAuthFlowsPerWorkspace = 32
+
+var ErrInvalidConnectionInput = errors.New("invalid Bitbucket connection input")
+
+func invalidConnectionInput(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrInvalidConnectionInput, fmt.Sprintf(format, args...))
+}
 
 // ConnectionInput accepts a credential only for the duration of the action.
 // Token is deliberately excluded from ConnectionSettings and host state.
@@ -50,6 +57,9 @@ type ConnectionSettings struct {
 	OAuthRedirectURL     string         `json:"oauth_redirect_url,omitempty"`
 	OAuthGeneration      uint64         `json:"oauth_generation,omitempty"`
 	CredentialGeneration uint64         `json:"credential_generation,omitempty"`
+	// ConnectionBinding is a non-secret epoch used to fence persisted watches
+	// from a later account, tenant, or server connection.
+	ConnectionBinding string `json:"connection_binding,omitempty"`
 	// Secret identifiers pending best-effort deletion after a committed
 	// generation switch. Keeping this with the credential-free pointer makes
 	// revocation retryable across process restarts without exposing plaintext.
@@ -116,7 +126,40 @@ func (r *ConnectionResolver) Load(ctx context.Context, workspaceID string) (Conn
 	if settings.Disconnected {
 		return ConnectionSettings{}, false, nil
 	}
+	if settings.ConnectionBinding == "" {
+		settings, err = r.migrateConnectionBinding(ctx, workspaceID)
+		if err != nil {
+			return ConnectionSettings{}, false, err
+		}
+	}
 	return settings, true, nil
+}
+
+func (r *ConnectionResolver) migrateConnectionBinding(ctx context.Context, workspaceID string) (ConnectionSettings, error) {
+	r.connectionMu.Lock()
+	defer r.connectionMu.Unlock()
+	settings, found, err := r.loadConnectionRecord(ctx, workspaceID)
+	if err != nil {
+		return ConnectionSettings{}, err
+	}
+	if !found || settings.Disconnected {
+		return ConnectionSettings{}, fmt.Errorf("Bitbucket connection is not configured")
+	}
+	if settings.ConnectionBinding != "" {
+		return settings, nil
+	}
+	settings.ConnectionBinding, err = newConnectionBinding()
+	if err != nil {
+		return ConnectionSettings{}, err
+	}
+	value, err := encodeState(settings)
+	if err != nil {
+		return ConnectionSettings{}, fmt.Errorf("encode Bitbucket connection migration: %w", err)
+	}
+	if err := r.host.SetState(ctx, "workspace", workspaceID, connectionStateKey, value); err != nil {
+		return ConnectionSettings{}, fmt.Errorf("save Bitbucket connection migration: %w", err)
+	}
+	return settings, nil
 }
 
 func (r *ConnectionResolver) loadConnectionRecord(ctx context.Context, workspaceID string) (ConnectionSettings, bool, error) {
@@ -168,19 +211,27 @@ func (r *ConnectionResolver) Save(ctx context.Context, workspaceID string, input
 		CloudWorkspace: strings.TrimSpace(input.CloudWorkspace), AuthMethod: normalizedAuthMethod(input.AuthMethod), AuthIdentity: strings.TrimSpace(input.AuthIdentity),
 		CredentialGeneration: credentialGeneration,
 	}
+	if found && sameConnectionTarget(previous, settings) && previous.ConnectionBinding != "" {
+		settings.ConnectionBinding = previous.ConnectionBinding
+	} else {
+		settings.ConnectionBinding, err = newConnectionBinding()
+		if err != nil {
+			return ConnectionSettings{}, err
+		}
+	}
 	if settings.AuthMethod == "oauth" {
 		if strings.TrimSpace(input.Token) != "" {
-			return ConnectionSettings{}, fmt.Errorf("Bitbucket OAuth does not accept a token credential")
+			return ConnectionSettings{}, invalidConnectionInput("Bitbucket OAuth does not accept a token credential")
 		}
 		if err := r.configureOAuthSettings(ctx, workspaceID, &settings, previous, found, input); err != nil {
 			return ConnectionSettings{}, err
 		}
 	}
 	if settings.CloudWorkspace == "" && settings.Product == domain.ProductCloud {
-		return ConnectionSettings{}, fmt.Errorf("Bitbucket Cloud workspace is required")
+		return ConnectionSettings{}, invalidConnectionInput("Bitbucket Cloud workspace is required")
 	}
 	if err := validateConnection(settings); err != nil {
-		return ConnectionSettings{}, err
+		return ConnectionSettings{}, invalidConnectionInput("%v", err)
 	}
 	if err := r.validateTokenCredential(ctx, workspaceID, settings, previous, found, input.Token); err != nil {
 		return ConnectionSettings{}, err
@@ -221,14 +272,14 @@ func (r *ConnectionResolver) validateTokenCredential(
 		return nil
 	}
 	if !found || previous.Product != settings.Product || previous.AuthMethod != settings.AuthMethod || previous.AuthIdentity != settings.AuthIdentity {
-		return fmt.Errorf("Bitbucket token credential is required")
+		return invalidConnectionInput("Bitbucket token credential is required")
 	}
 	stored, present, err := r.loadTokenCredential(ctx, workspaceID, previous.CredentialGeneration)
 	if err != nil {
 		return fmt.Errorf("load Bitbucket credential: %w", err)
 	}
 	if !present || strings.TrimSpace(stored) == "" {
-		return fmt.Errorf("Bitbucket token credential is required")
+		return invalidConnectionInput("Bitbucket token credential is required")
 	}
 	return nil
 }
@@ -246,7 +297,7 @@ func (r *ConnectionResolver) Disconnect(ctx context.Context, workspaceID string)
 	if err != nil {
 		return err
 	}
-	r.invalidateOAuthWorkspace(workspaceID)
+	r.invalidateOAuthWorkspace(workspaceID, settings, found)
 	if found && settings.Disconnected {
 		return r.finishDisconnect(ctx, workspaceID, settings)
 	}
@@ -293,6 +344,22 @@ func nextCredentialGeneration(previous ConnectionSettings, found bool) (uint64, 
 		return 0, fmt.Errorf("Bitbucket credential generation exhausted")
 	}
 	return previous.CredentialGeneration + 1, nil
+}
+
+func sameConnectionTarget(previous, next ConnectionSettings) bool {
+	return previous.Product == next.Product &&
+		strings.TrimSpace(previous.BaseURL) == strings.TrimSpace(next.BaseURL) &&
+		strings.EqualFold(strings.TrimSpace(previous.CloudWorkspace), strings.TrimSpace(next.CloudWorkspace)) &&
+		previous.AuthMethod == next.AuthMethod &&
+		strings.EqualFold(strings.TrimSpace(previous.AuthIdentity), strings.TrimSpace(next.AuthIdentity))
+}
+
+func newConnectionBinding() (string, error) {
+	value := make([]byte, 18)
+	if _, err := rand.Read(value); err != nil {
+		return "", fmt.Errorf("create Bitbucket connection binding: %w", err)
+	}
+	return "bitbucket-connection:v1:" + base64.RawURLEncoding.EncodeToString(value), nil
 }
 
 func (r *ConnectionResolver) Provider(ctx context.Context, workspaceID string) (domain.Provider, error) {
@@ -348,7 +415,7 @@ func (r *ConnectionResolver) tokenSource(ctx context.Context, workspaceID string
 	if err != nil {
 		return nil, err
 	}
-	scope := auth.CredentialScope{WorkspaceID: workspaceID, Generation: settings.OAuthGeneration}
+	scope := oauthCredentialScope(workspaceID, settings)
 	return auth.NewRefreshingTokenSource(scope, registration, hostOAuthCredentialRepository{host: r.host}, r.oauthRefresher(), time.Now), nil
 }
 
@@ -376,7 +443,7 @@ func (r *ConnectionResolver) StartOAuth(ctx context.Context, workspaceID string)
 	if err != nil {
 		return nil, err
 	}
-	scope := auth.CredentialScope{WorkspaceID: workspaceID, Generation: settings.OAuthGeneration}
+	scope := oauthCredentialScope(workspaceID, settings)
 	r.oauthMu.Lock()
 	epoch := r.oauthEpoch[workspaceID]
 	r.oauthMu.Unlock()
@@ -541,7 +608,7 @@ func (r *ConnectionResolver) configureOAuthSettings(
 	canReuse := found && previous.AuthMethod == "oauth" && previous.Product == settings.Product && clientSecret == ""
 	if canReuse {
 		if (clientID != "" && clientID != previous.OAuthClientID) || (redirectURL != "" && redirectURL != previous.OAuthRedirectURL) {
-			return fmt.Errorf("Bitbucket OAuth client secret is required when registration changes")
+			return invalidConnectionInput("Bitbucket OAuth client secret is required when registration changes")
 		}
 		configured, err := r.oauthRegistrationConfiguredForGeneration(
 			ctx,
@@ -552,7 +619,7 @@ func (r *ConnectionResolver) configureOAuthSettings(
 			return err
 		}
 		if !configured {
-			return fmt.Errorf("Bitbucket OAuth client registration is required")
+			return invalidConnectionInput("Bitbucket OAuth client registration is required")
 		}
 		settings.OAuthClientID = previous.OAuthClientID
 		settings.OAuthRedirectURL = previous.OAuthRedirectURL
@@ -560,12 +627,12 @@ func (r *ConnectionResolver) configureOAuthSettings(
 		return nil
 	}
 	if clientID == "" || clientSecret == "" || redirectURL == "" {
-		return fmt.Errorf("Bitbucket OAuth client id, client secret, and redirect URL are required")
+		return invalidConnectionInput("Bitbucket OAuth client id, client secret, and redirect URL are required")
 	}
 	settings.OAuthClientID = clientID
 	settings.OAuthRedirectURL = redirectURL
 	if err := validateHTTPSURL(settings.OAuthRedirectURL, "Bitbucket OAuth redirect URL"); err != nil {
-		return err
+		return invalidConnectionInput("%v", err)
 	}
 	settings.OAuthGeneration = previous.OAuthGeneration + 1
 	if settings.OAuthGeneration == 0 {
@@ -611,8 +678,8 @@ func (r *ConnectionResolver) invalidateSupersededOAuth(workspaceID string, previ
 	}
 	previousOAuth := previous.AuthMethod == "oauth"
 	nextOAuth := next.AuthMethod == "oauth"
-	if previousOAuth && (!nextOAuth || previous.OAuthGeneration != next.OAuthGeneration) {
-		r.invalidateOAuthWorkspace(workspaceID)
+	if previousOAuth && (!nextOAuth || previous.OAuthGeneration != next.OAuthGeneration || previous.ConnectionBinding != next.ConnectionBinding) {
+		r.invalidateOAuthWorkspace(workspaceID, previous, true)
 	}
 }
 
@@ -644,15 +711,31 @@ func supersededCredentialKeys(workspaceID string, previous ConnectionSettings, f
 	return uniqueSecretKeys(keys)
 }
 
-func (r *ConnectionResolver) invalidateOAuthWorkspace(workspaceID string) {
+func (r *ConnectionResolver) invalidateOAuthWorkspace(workspaceID string, settings ConnectionSettings, hasSettings bool) {
 	r.oauthMu.Lock()
-	defer r.oauthMu.Unlock()
 	r.oauthEpoch[workspaceID]++
 	delete(r.oauthState, workspaceID)
 	for state, flow := range r.oauthFlows {
 		if flow.scope.WorkspaceID == workspaceID {
 			delete(r.oauthFlows, state)
 		}
+	}
+	r.oauthMu.Unlock()
+	if !hasSettings || settings.AuthMethod != "oauth" || settings.OAuthGeneration == 0 {
+		return
+	}
+	r.refresherMu.Lock()
+	refresher := r.refresher
+	r.refresherMu.Unlock()
+	if refresher != nil {
+		refresher.Invalidate(oauthCredentialScope(workspaceID, settings))
+	}
+}
+
+func oauthCredentialScope(workspaceID string, settings ConnectionSettings) auth.CredentialScope {
+	return auth.CredentialScope{
+		WorkspaceID: workspaceID, Generation: settings.OAuthGeneration,
+		ConnectionBinding: settings.ConnectionBinding,
 	}
 }
 

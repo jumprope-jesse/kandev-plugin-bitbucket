@@ -6,7 +6,7 @@ import {
 } from "../src/task-review-status";
 
 describe("Bitbucket task review status", () => {
-  it("hydrates every linked pull request with its full pipeline status", async () => {
+  it("hydrates every linked pull request with a lightweight status projection", async () => {
     const invoke = vi.fn()
       .mockResolvedValueOnce({
         pull_requests: [{
@@ -49,12 +49,13 @@ describe("Bitbucket task review status", () => {
       body: {
         review_key: "acme/widgets#42",
         pull_request_id: "42",
-        include: ["participants", "threads", "status"],
+        include: ["participants", "status"],
       },
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(details[0]?.statuses).toEqual([
       expect.objectContaining({ key: "pipeline", state: "FAILED" }),
     ]);
+    expect(details[0]?.unresolvedThreadCount).toBeUndefined();
   });
 
   it("maps provider state and builds to the host-native status contract", () => {

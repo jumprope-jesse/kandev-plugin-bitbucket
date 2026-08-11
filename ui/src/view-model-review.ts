@@ -345,6 +345,7 @@ export function normalizeReviewDetail(value: unknown): ReviewDetail | null {
         : [];
     }),
     viewerApproved: normalizeViewerApproval(source, participantItems),
+    unresolvedThreadCount: number(source.unresolved_thread_count),
   };
 }
 

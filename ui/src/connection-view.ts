@@ -50,6 +50,19 @@ export function ConnectionHealth({
   );
   const [disconnectOpen, setDisconnectOpen] = React.useState(false);
   React.useEffect(() => {
+    setSaving(false);
+    setMessage(null);
+    setProduct("cloud");
+    setBaseUrl("");
+    setCloudWorkspace("");
+    setAuthMethod("api_token");
+    setToken("");
+    setIdentity("");
+    setOAuthClientId("");
+    setOAuthClientSecret("");
+    setDisconnectOpen(false);
+  }, [scopedWorkspaceId]);
+  React.useEffect(() => {
     if (!connection.data) return;
     setProduct(text(details.product, "cloud"));
     setBaseUrl(text(details.base_url));

@@ -66,6 +66,51 @@ func TestLinkStore_ExplicitUnlinkSuppressesAutoLinkUntilManualRelink(t *testing.
 	require.Len(t, manual, 1)
 }
 
+func TestLinkStore_DoesNotConflateRecreatedRepositoryAtSamePath(t *testing.T) {
+	host := &stateRecordingHost{values: make(map[string]map[string]any)}
+	links, err := NewLinkStore(host)
+	require.NoError(t, err)
+	oldRepository := PullRequestLink{
+		Key: "ws/repo#42", RepositoryID: "repo-uuid-old",
+		URL: "https://bitbucket.org/ws/repo/pull-requests/42", Number: 42,
+		Product: domain.ProductCloud, ConnectionScope: "https://bitbucket.org",
+	}
+	newRepository := oldRepository
+	newRepository.RepositoryID = "repo-uuid-new"
+
+	_, err = links.Link(context.Background(), "task-1", oldRepository)
+	require.NoError(t, err)
+	linked, err := links.Link(context.Background(), "task-1", newRepository)
+	require.NoError(t, err)
+	require.Len(t, linked, 2, "a mutable repository path must not be the persisted identity")
+
+	_, err = links.Unlink(context.Background(), "task-1", oldRepository.Key)
+	require.NoError(t, err)
+	freshRepository := newRepository
+	freshRepository.RepositoryID = "repo-uuid-fresh"
+	automatic, err := links.AutoLink(context.Background(), "task-1", freshRepository)
+	require.NoError(t, err)
+	require.Len(t, automatic, 1, "unlink suppression must be scoped to immutable identities")
+	require.Equal(t, freshRepository.RepositoryID, automatic[0].RepositoryID)
+}
+
+func TestLinkStore_LegacyPathSuppressionDoesNotSuppressImmutableRepository(t *testing.T) {
+	host := &stateRecordingHost{values: make(map[string]map[string]any)}
+	legacy, err := encodeState(linkState{LegacySuppressedKeys: []string{"ws/repo#42"}})
+	require.NoError(t, err)
+	require.NoError(t, host.SetState(context.Background(), "task", "task-1", taskLinkStateKey, legacy))
+	links, err := NewLinkStore(host)
+	require.NoError(t, err)
+
+	linked, err := links.AutoLink(context.Background(), "task-1", PullRequestLink{
+		Key: "ws/repo#42", RepositoryID: "repo-uuid-new",
+		URL: "https://bitbucket.org/ws/repo/pull-requests/42", Number: 42,
+		Product: domain.ProductCloud, ConnectionScope: "https://bitbucket.org",
+	})
+	require.NoError(t, err)
+	require.Len(t, linked, 1, "legacy mutable-path suppression must not apply to immutable identities")
+}
+
 func TestLinkStore_ConcurrentLinksDoNotLoseUpdates(t *testing.T) {
 	host := &stateRecordingHost{values: make(map[string]map[string]any)}
 	links, err := NewLinkStore(host)

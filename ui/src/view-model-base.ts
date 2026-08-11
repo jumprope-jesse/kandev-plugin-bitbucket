@@ -1,11 +1,7 @@
 export type JsonRecord = Record<string, unknown>;
 
 export type ConnectionState =
-  | "unconfigured"
-  | "checking"
-  | "connected"
-  | "auth_required"
-  | "unavailable";
+  "unconfigured" | "checking" | "connected" | "auth_required" | "unavailable";
 
 /** Host RepositoryProviderRegistration contract. Never return plugin snake_case here. */
 export type RepositoryInspection = {
@@ -106,7 +102,18 @@ export type TaskRowLink = {
   id: string;
   taskId: string;
   fallbackTitle: string;
+  repositoryId?: string;
+  changeRequestNumber?: number;
 };
+
+export function pullRequestAssociationIdentity(
+  repositoryId: string | undefined,
+  number: number | undefined,
+): string | undefined {
+  return repositoryId && number && number > 0
+    ? `repository:${repositoryId}\u0000pull-request:${number}`
+    : undefined;
+}
 
 export type SavedQuery = {
   id: string;
@@ -174,6 +181,7 @@ export type ReviewDetail = PullRequest & {
   threads: ReviewThread[];
   statuses: BuildStatus[];
   viewerApproved?: boolean;
+  unresolvedThreadCount?: number;
 };
 
 export type HostChangeRequestDetail = {
@@ -281,7 +289,7 @@ export type WatchSummary = {
 
 export function integrationSettingsHref(workspaceId?: string): string {
   return workspaceId
-    ? `/settings/workspace/${encodeURIComponent(workspaceId)}/integrations/bitbucket`
+    ? `/settings/workspaces/${encodeURIComponent(workspaceId)}/integrations/bitbucket`
     : "/settings/integrations/bitbucket";
 }
 
@@ -474,8 +482,22 @@ export function normalizePullRequestAssociations(
     const reviewKey = string(source.review_key) ?? string(source.reviewKey);
     if (!reviewKey) continue;
     const links = normalizeTaskLinks([source], reviewKey);
-    if (links.length)
+    const repositoryId =
+      string(source.repository_id) ?? string(source.repositoryId);
+    const changeRequestNumber =
+      number(source.number) ?? number(source.changeRequestNumber);
+    for (const link of links) {
+      link.repositoryId = repositoryId;
+      link.changeRequestNumber = changeRequestNumber;
+    }
+    if (links.length) {
       result[reviewKey] = [...(result[reviewKey] ?? []), ...links];
+      const identity = pullRequestAssociationIdentity(
+        repositoryId,
+        changeRequestNumber,
+      );
+      if (identity) result[identity] = [...(result[identity] ?? []), ...links];
+    }
   }
   return result;
 }

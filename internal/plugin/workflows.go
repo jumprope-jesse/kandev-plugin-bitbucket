@@ -62,7 +62,10 @@ func NewWorkflows(host pluginsdk.Host, resolver ProviderResolver) (*Workflows, e
 
 func (w *Workflows) HandleAction(ctx context.Context, request *pluginsdk.PluginActionRequest) (*pluginsdk.PluginActionResponse, error) {
 	if request == nil {
-		return nil, fmt.Errorf("action request is required")
+		return nil, invalidActionError("action request is required")
+	}
+	if request.Context.WorkspaceID == "" {
+		return nil, forbiddenActionError("verified workspace context is required")
 	}
 	switch request.ActionKey {
 	case "connection.get", "health.get", "connection.disconnect", "connection.save", "oauth.start":
@@ -83,7 +86,7 @@ func (w *Workflows) HandleAction(ctx context.Context, request *pluginsdk.PluginA
 		response, err := w.handleWatchAction(ctx, request)
 		return response, categorizeWatchActionError(err)
 	default:
-		return nil, fmt.Errorf("unsupported Bitbucket action %q", request.ActionKey)
+		return nil, notFoundActionError("unsupported Bitbucket action %q", request.ActionKey)
 	}
 }
 
@@ -173,7 +176,7 @@ func (w *Workflows) GetGitCredentialBinding(ctx context.Context, request *plugin
 
 func (w *Workflows) provider(ctx context.Context, workspaceID string) (domain.Provider, error) {
 	if workspaceID == "" {
-		return nil, fmt.Errorf("verified workspace context is required")
+		return nil, forbiddenActionError("verified workspace context is required")
 	}
 	provider, err := w.resolver.Provider(ctx, workspaceID)
 	if err != nil {
@@ -204,7 +207,7 @@ func (w *Workflows) repository(ctx context.Context, workspaceID string, remote w
 	}
 	repository, err := domainRepository(remote)
 	if err != nil {
-		return nil, domain.Repository{}, err
+		return nil, domain.Repository{}, invalidActionError("invalid repository descriptor: %v", err)
 	}
 	return provider, repository, nil
 }
@@ -225,15 +228,15 @@ func (w *Workflows) pullRequestLookup(ctx context.Context, workspaceID string, i
 		}
 		repository, number, key, ok := pullRequestIdentity(provider, input.ReviewKey)
 		if !ok {
-			return nil, domain.PullRequest{}, fmt.Errorf("invalid Bitbucket pull request key")
+			return nil, domain.PullRequest{}, invalidActionError("invalid Bitbucket pull request key")
 		}
 		repository, err = hydrateRepositoryIdentity(ctx, provider, repository)
 		if err != nil {
-			return nil, domain.PullRequest{}, fmt.Errorf("Bitbucket repository is unavailable")
+			return nil, domain.PullRequest{}, notFoundActionError("Bitbucket repository is unavailable")
 		}
 		pullRequest, err := provider.GetPullRequest(ctx, repository, number)
 		if err != nil || pullRequest.Key() != key {
-			return nil, domain.PullRequest{}, fmt.Errorf("Bitbucket pull request is unavailable")
+			return nil, domain.PullRequest{}, notFoundActionError("Bitbucket pull request is unavailable")
 		}
 		return provider, pullRequest, nil
 	}
@@ -242,7 +245,7 @@ func (w *Workflows) pullRequestLookup(ctx context.Context, workspaceID string, i
 		return nil, domain.PullRequest{}, err
 	}
 	if input.Number <= 0 {
-		return nil, domain.PullRequest{}, fmt.Errorf("pull request number is required")
+		return nil, domain.PullRequest{}, invalidActionError("pull request number is required")
 	}
 	pullRequest, err := provider.GetPullRequest(ctx, repository, input.Number)
 	if err != nil {
