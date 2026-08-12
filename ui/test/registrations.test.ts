@@ -77,6 +77,11 @@ type Registry = {
     icon: string;
     matchesURL?: (url: string) => boolean;
     listRepositories(context: { workspaceId: string; signal: AbortSignal }): Promise<unknown[]>;
+    inspectURL(context: {
+      workspaceId: string;
+      url: string;
+      signal: AbortSignal;
+    }): Promise<unknown | null>;
     createChangeRequest?(context: Record<string, unknown>): Promise<Record<string, unknown>>;
     supportsDraft?: boolean;
   }) => void;
@@ -187,6 +192,7 @@ describe("Bitbucket plugin registrations", () => {
 
     vm.runInNewContext(source, {
       AbortController,
+      URL,
       window: {
         registerKandevPlugin(id: string, lifecycle: Registration["lifecycle"]) {
           registrations.push({ id, lifecycle });
@@ -199,6 +205,11 @@ describe("Bitbucket plugin registrations", () => {
       icon: string;
       matchesURL?: (url: string) => boolean;
       listRepositories(context: { workspaceId: string; signal: AbortSignal }): Promise<unknown[]>;
+      inspectURL(context: {
+        workspaceId: string;
+        url: string;
+        signal: AbortSignal;
+      }): Promise<unknown | null>;
       supportsDraft?: boolean;
       createChangeRequest?(context: Record<string, unknown>): Promise<Record<string, unknown>>;
     }> = [];
@@ -369,6 +380,20 @@ describe("Bitbucket plugin registrations", () => {
     expect(repositoryProviders[0]?.matchesURL).toBeUndefined();
     expect(repositoryProviders[0]?.supportsDraft).toBe(false);
     const controller = new AbortController();
+    for (const url of [
+      "git@bitbucket.org:workspace/repo.git",
+      "http://bitbucket.org/workspace/repo.git",
+      "https://token@bitbucket.org/workspace/repo.git",
+    ]) {
+      await expect(
+        repositoryProviders[0]?.inspectURL({
+          workspaceId: "workspace-1",
+          url,
+          signal: controller.signal,
+        }),
+      ).resolves.toBeNull();
+    }
+    expect(invocations).toHaveLength(0);
     actionResults.push({ repositories: [] });
     await repositoryProviders[0]?.listRepositories({
       workspaceId: "workspace-1",

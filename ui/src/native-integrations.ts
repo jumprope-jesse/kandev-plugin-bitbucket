@@ -15,6 +15,15 @@ import {
   reviewStore,
 } from "./review-store";
 
+function isCredentialFreeHTTPSURL(rawURL: string): boolean {
+  try {
+    const parsed = new URL(rawURL);
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password;
+  } catch {
+    return false;
+  }
+}
+
 export function registerNativeIntegrations(registry: PluginRegistry, host: PluginHost) {
   registry.registerRepositoryProvider({
     id: "bitbucket",
@@ -58,6 +67,11 @@ export function registerNativeIntegrations(registry: PluginRegistry, host: Plugi
         : [];
     },
     async inspectURL({ workspaceId: scopedWorkspaceId, url, signal }) {
+      // Keep the cheap frontend eligibility check aligned with the authenticated
+      // backend action. Returning null lets Kandev try its built-in or another
+      // registered provider instead of turning an unsupported SSH/HTTP URL into
+      // a provider failure.
+      if (!isCredentialFreeHTTPSURL(url)) return null;
       const response = await host.api.invokeAction<unknown>(
         action.repositoriesInspect,
         { workspaceId: scopedWorkspaceId, body: { url } },

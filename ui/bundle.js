@@ -2805,6 +2805,14 @@ async function refreshReviewStore(host, taskId, signal, workspaceId) {
 }
 
 // ui/src/native-integrations.ts
+function isCredentialFreeHTTPSURL(rawURL) {
+  try {
+    const parsed = new URL(rawURL);
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password;
+  } catch {
+    return false;
+  }
+}
 function registerNativeIntegrations(registry, host) {
   registry.registerRepositoryProvider({
     id: "bitbucket",
@@ -2846,6 +2854,7 @@ function registerNativeIntegrations(registry, host) {
       }) : [];
     },
     async inspectURL({ workspaceId: scopedWorkspaceId, url, signal }) {
+      if (!isCredentialFreeHTTPSURL(url)) return null;
       const response = await host.api.invokeAction(
         action.repositoriesInspect,
         { workspaceId: scopedWorkspaceId, body: { url } },
