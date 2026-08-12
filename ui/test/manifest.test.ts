@@ -17,4 +17,17 @@ describe("Bitbucket manifest", () => {
     expect(manifest).toContain('repository_providers: ["bitbucket"]');
     expect(manifest).toContain('source: "bitbucket"');
   });
+
+  it("materializes both pre-release Kandev SDKs in every packaging workflow", async () => {
+    const workflows = await Promise.all(
+      ["build.yml", "ci.yml", "release.yml"].map((name) =>
+        readFile(new URL(`../../.github/workflows/${name}`, import.meta.url), "utf8"),
+      ),
+    );
+
+    for (const workflow of workflows) {
+      expect(workflow).toContain("apps/backend");
+      expect(workflow).toContain("apps/packages/plugin-sdk");
+    }
+  });
 });

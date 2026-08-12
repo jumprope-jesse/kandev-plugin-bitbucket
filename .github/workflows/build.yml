@@ -27,9 +27,11 @@ jobs:
           repository: kdlbs/kandev
           # Pre-release contract pin. Replace this with the released host tag
           # through manifest.min_kandev_version before publishing the plugin.
-          ref: b1fa1bcff13e61a38bea6e0d78d12c7811c565c5
+          ref: c0771501f3eec27cff646096a56bf1c1d72d5177
           path: kandev
-          sparse-checkout: apps/backend
+          sparse-checkout: |
+            apps/backend
+            apps/packages/plugin-sdk
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
