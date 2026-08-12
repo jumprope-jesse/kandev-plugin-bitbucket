@@ -138,6 +138,47 @@ func uniqueSecretKeys(keys []string) []string {
 	return result
 }
 
+func supersededCredentialKeys(workspaceID string, previous ConnectionSettings, found bool, next ConnectionSettings) []string {
+	if !found {
+		return nil
+	}
+	previousOAuth := previous.AuthMethod == "oauth"
+	nextOAuth := next.AuthMethod == "oauth"
+	keys := make([]string, 0, 8)
+	if previousOAuth && (!nextOAuth || previous.OAuthGeneration != next.OAuthGeneration) {
+		keys = append(keys, oauthStateSecretKey(workspaceID))
+		if previous.OAuthGeneration != 0 {
+			keys = append(keys, oauthCredentialSecretKey(workspaceID, previous.OAuthGeneration))
+			keys = append(keys, oauthRegistrationSecretKey(workspaceID, previous.OAuthGeneration))
+		}
+		keys = append(keys, legacyOAuthRegistrationSecretKey(workspaceID))
+		if !nextOAuth {
+			keys = append(keys, legacyOAuthRegistrationSecretKey(workspaceID))
+		}
+	}
+	if !previousOAuth && (nextOAuth || previous.CredentialGeneration != next.CredentialGeneration) {
+		keys = append(
+			keys,
+			connectionSecretKey(workspaceID, previous.CredentialGeneration),
+			legacyConnectionSecretKey(workspaceID),
+		)
+	}
+	return uniqueSecretKeys(keys)
+}
+
+func (r *ConnectionResolver) deleteSecrets(ctx context.Context, keys ...string) error {
+	var firstErr error
+	for _, key := range keys {
+		if err := r.host.DeleteSecret(ctx, key); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr != nil {
+		return fmt.Errorf("delete Bitbucket credential: %w", firstErr)
+	}
+	return nil
+}
+
 func (r *ConnectionResolver) loadTokenCredential(
 	ctx context.Context,
 	workspaceID string,
