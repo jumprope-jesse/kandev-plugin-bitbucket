@@ -5,6 +5,7 @@ BIN := bin/kandev-plugin-bitbucket
 VERSION := 0.1.12
 STAGE := .build/stage
 PKG_OUT := kandev-plugin-bitbucket-$(VERSION).tar.gz
+KANDEV_BACKEND := ../kandev/apps/backend
 
 ## Build the plugin binary for the host platform (development use). kandev
 ## itself always installs from `make package`/`package-host` output, not this.
@@ -36,8 +37,10 @@ vet:
 ## Cross-compile server/plugin-<goos>-<goarch>[.exe] for every platform in
 ## manifest.yaml's runtime.executables, stage manifest.yaml + ui/ alongside
 ## them, and pack the tree into $(PKG_OUT) with
-## github.com/kandev/kandev/cmd/plugin-pack (resolved via the `replace` in
-## go.mod). Install the tarball via Settings > Plugins or curl -F package=@...
+## Kandev's cmd/plugin-pack using the sibling host module. Running the tool in
+## that module keeps its tool-only dependencies owned by Kandev rather than
+## leaking them into this plugin's go.sum. Install the tarball via Settings >
+## Plugins or curl -F package=@...
 package: build-ui
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)/server
@@ -49,7 +52,7 @@ package: build-ui
 	GOOS=darwin  GOARCH=amd64 go build -o $(STAGE)/server/plugin-darwin-amd64      ./server
 	GOOS=darwin  GOARCH=arm64 go build -o $(STAGE)/server/plugin-darwin-arm64      ./server
 	GOOS=windows GOARCH=amd64 go build -o $(STAGE)/server/plugin-windows-amd64.exe ./server
-	go run github.com/kandev/kandev/cmd/plugin-pack -dir $(STAGE) -out $(PKG_OUT)
+	go -C $(KANDEV_BACKEND) run ./cmd/plugin-pack -dir $(abspath $(STAGE)) -out $(abspath $(PKG_OUT))
 	rm -rf $(STAGE)
 	@echo "Wrote $(PKG_OUT)"
 
@@ -62,7 +65,7 @@ package-host: build-ui
 	mkdir -p $(STAGE)/ui
 	cp ui/bundle.js ui/plugin.css $(STAGE)/ui/
 	go build -o $(STAGE)/server/plugin-$$(go env GOOS)-$$(go env GOARCH)$$(go env GOEXE) ./server
-	go run github.com/kandev/kandev/cmd/plugin-pack -dir $(STAGE) -out $(PKG_OUT) -platform-only
+	go -C $(KANDEV_BACKEND) run ./cmd/plugin-pack -dir $(abspath $(STAGE)) -out $(abspath $(PKG_OUT)) -platform-only
 	rm -rf $(STAGE)
 	@echo "Wrote $(PKG_OUT)"
 
