@@ -12,6 +12,7 @@
     "e2e:live": "playwright test --config playwright.live.config.ts"
   },
   "devDependencies": {
+    "@kandev/plugin-sdk": "file:../kandev/apps/packages/plugin-sdk",
     "@types/node": "24.3.0",
     "@playwright/test": "1.55.0",
     "esbuild": "0.28.1",

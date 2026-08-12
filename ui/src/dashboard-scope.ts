@@ -138,11 +138,7 @@ export function MobileFilters({
         ui.SheetHeader,
         null,
         h(ui.SheetTitle, null, "Bitbucket filters"),
-        h(
-          ui.SheetDescription,
-          null,
-          "Narrow pull requests by repository and state.",
-        ),
+        h(ui.SheetDescription, null, "Narrow pull requests by repository and state."),
       ),
       h(
         "div",
@@ -153,16 +149,6 @@ export function MobileFilters({
       ),
     ),
   );
-}
-
-export function useHostStoreState(host: PluginHost): Record<string, unknown> {
-  const { React } = host;
-  const [state, setState] = React.useState(() => host.store.getState());
-  React.useEffect(
-    () => host.store.subscribe(() => setState(host.store.getState())),
-    [host],
-  );
-  return state;
 }
 
 export function ConnectionNotice({
@@ -209,8 +195,7 @@ export function ConnectionNotice({
               type: "button",
               variant: "outline",
               className: "min-h-11",
-              onClick: () =>
-                host.navigate(integrationSettingsHref(workspaceId)),
+              onClick: () => host.navigate(integrationSettingsHref(workspaceId)),
             },
             "Configure Bitbucket",
           ),

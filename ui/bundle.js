@@ -1,40 +1,4 @@
 // ui/src/view-model-base.ts
-function matchingHostRepositoryId(repositories, pullRequest) {
-  const providerRepositoryID = string(pullRequest.repositoryId)?.trim();
-  const providerScope = string(pullRequest.providerScope)?.trim();
-  if (providerRepositoryID && providerScope) {
-    const scopedMatches = repositories.filter((repository) => {
-      if ((string(repository.provider) ?? "").toLowerCase() !== "bitbucket")
-        return false;
-      const repositoryScope = string(repository.provider_scope)?.trim();
-      const repositoryID = string(repository.provider_repo_id)?.trim() ?? string(repository.provider_repository_id)?.trim();
-      return repositoryScope === providerScope && repositoryID === providerRepositoryID;
-    });
-    return scopedMatches.length === 1 ? string(scopedMatches[0].id) : void 0;
-  }
-  const target = canonicalRepositoryIdentity(pullRequest.repositoryId);
-  if (!target) return void 0;
-  const matches = repositories.filter((repository) => {
-    if ((string(repository.provider) ?? "").toLowerCase() !== "bitbucket")
-      return false;
-    const owner = string(repository.provider_owner);
-    const name = string(repository.provider_name);
-    const identities = [
-      string(repository.provider_repo_id),
-      string(repository.provider_repository_id),
-      owner && name ? `${owner}/${name}` : void 0
-    ];
-    return identities.some(
-      (identity) => canonicalRepositoryIdentity(identity) === target
-    );
-  });
-  if (matches.length !== 1) return void 0;
-  return string(matches[0].id);
-}
-function canonicalRepositoryIdentity(value) {
-  const identity = string(value)?.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
-  return identity?.toLowerCase();
-}
 function pullRequestAssociationIdentity(repositoryId, number2) {
   return repositoryId && number2 && number2 > 0 ? `repository:${repositoryId}\0pull-request:${number2}` : void 0;
 }
@@ -45,22 +9,6 @@ function displayPullRequestAuthor(author) {
   const value = author?.trim();
   if (!value || /^\d+:[a-z0-9-]{20,}$/i.test(value)) return void 0;
   return value;
-}
-function relativeTimeLabel(value, now = /* @__PURE__ */ new Date()) {
-  if (!value) return void 0;
-  const instant = new Date(value);
-  if (!Number.isFinite(instant.getTime())) return void 0;
-  const seconds = Math.floor((now.getTime() - instant.getTime()) / 1e3);
-  if (seconds < 10) return "just now";
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days === 1) return "yesterday";
-  if (days < 7) return `${days}d ago`;
-  return instant.toLocaleDateString();
 }
 function oauthStartInput(workspaceId) {
   return { workspaceId };
@@ -81,9 +29,6 @@ function record(value) {
 function string(value) {
   return typeof value === "string" && value.trim() ? value : void 0;
 }
-function activeWorkspaceIdFromState(state) {
-  return string(record(record(state).workspaces).activeId);
-}
 function number(value) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() && Number.isFinite(Number(value)))
@@ -98,14 +43,14 @@ function timestamp(value) {
     const date2 = new Date(value);
     return Number.isFinite(date2.getTime()) && date2.getUTCFullYear() > 1 ? date2.toISOString() : void 0;
   }
-  const text2 = string(value);
-  if (!text2) return void 0;
-  if (/^\d+$/.test(text2)) {
-    const date2 = new Date(Number(text2));
+  const text3 = string(value);
+  if (!text3) return void 0;
+  if (/^\d+$/.test(text3)) {
+    const date2 = new Date(Number(text3));
     return Number.isFinite(date2.getTime()) && date2.getUTCFullYear() > 1 ? date2.toISOString() : void 0;
   }
-  const date = new Date(text2);
-  return Number.isFinite(date.getTime()) && date.getUTCFullYear() > 1 ? text2 : void 0;
+  const date = new Date(text3);
+  return Number.isFinite(date.getTime()) && date.getUTCFullYear() > 1 ? text3 : void 0;
 }
 function boolean(value) {
   return typeof value === "boolean" ? value : void 0;
@@ -143,26 +88,22 @@ function toCapabilities(value) {
   if (typeof value === "string") {
     return value.split(",").map((capability) => capability.trim()).filter(Boolean);
   }
-  return array(value).flatMap(
-    (entry) => typeof entry === "string" ? [entry] : []
-  );
+  return array(value).flatMap((entry) => typeof entry === "string" ? [entry] : []);
 }
 function normalizeTaskLinks(value, reviewKey = "") {
-  return itemList(value, ["associations", "tasks", "items", "values"]).flatMap(
-    (entry) => {
-      const source = record(entry);
-      const taskId = string(source.task_id) ?? string(source.taskId);
-      const entryReviewKey = string(source.review_key) ?? string(source.reviewKey) ?? reviewKey;
-      if (!taskId || reviewKey && entryReviewKey !== reviewKey) return [];
-      return [
-        {
-          id: string(source.id) ?? `${entryReviewKey}:${taskId}`,
-          taskId,
-          fallbackTitle: string(source.task_title) ?? string(source.taskTitle) ?? string(source.title) ?? "Bitbucket task"
-        }
-      ];
-    }
-  );
+  return itemList(value, ["associations", "tasks", "items", "values"]).flatMap((entry) => {
+    const source = record(entry);
+    const taskId = string(source.task_id) ?? string(source.taskId);
+    const entryReviewKey = string(source.review_key) ?? string(source.reviewKey) ?? reviewKey;
+    if (!taskId || reviewKey && entryReviewKey !== reviewKey) return [];
+    return [
+      {
+        id: string(source.id) ?? `${entryReviewKey}:${taskId}`,
+        taskId,
+        fallbackTitle: string(source.task_title) ?? string(source.taskTitle) ?? string(source.title) ?? "Bitbucket task"
+      }
+    ];
+  });
 }
 function normalizePullRequestAssociations(value) {
   const result = {};
@@ -179,10 +120,7 @@ function normalizePullRequestAssociations(value) {
     }
     if (links.length) {
       result[reviewKey] = [...result[reviewKey] ?? [], ...links];
-      const identity = pullRequestAssociationIdentity(
-        repositoryId,
-        changeRequestNumber
-      );
+      const identity = pullRequestAssociationIdentity(repositoryId, changeRequestNumber);
       if (identity) result[identity] = [...result[identity] ?? [], ...links];
     }
   }
@@ -207,8 +145,7 @@ function normalizeReviewComment(value) {
 }
 function statusTone(state) {
   const normalized = state.toLowerCase();
-  if (/(success|passed|approved|merged|open)/.test(normalized))
-    return "success";
+  if (/(success|passed|approved|merged|open)/.test(normalized)) return "success";
   if (/(fail|declined|error|blocked)/.test(normalized)) return "danger";
   if (/(pending|build|review|draft)/.test(normalized)) return "warning";
   return "neutral";
@@ -920,14 +857,24 @@ function text(value, fallback = "") {
 function useActiveWorkspaceId(host) {
   const { React } = host;
   const [activeWorkspaceId, setActiveWorkspaceId] = React.useState(
-    () => activeWorkspaceIdFromState(host.store.getState())
+    () => host.context.getActiveWorkspaceId()
   );
   React.useEffect(() => {
-    const sync = () => setActiveWorkspaceId(activeWorkspaceIdFromState(host.store.getState()));
-    sync();
-    return host.store.subscribe(sync);
+    setActiveWorkspaceId(host.context.getActiveWorkspaceId());
+    return host.context.subscribeActiveWorkspace(setActiveWorkspaceId);
   }, [host]);
   return activeWorkspaceId;
+}
+function useTaskCreationContext(host, workspaceId) {
+  const { React } = host;
+  const read = () => workspaceId ? host.context.getTaskCreationContext(workspaceId) : null;
+  const [context, setContext] = React.useState(read);
+  React.useEffect(() => {
+    setContext(read());
+    if (!workspaceId) return;
+    return host.context.subscribeTaskCreationContext(workspaceId, setContext);
+  }, [host, workspaceId]);
+  return context;
 }
 var SAVED_QUERIES_KEY = "dashboard-saved-queries";
 function useSavedQueries(host, workspaceId) {
@@ -938,11 +885,7 @@ function useSavedQueries(host, workspaceId) {
       setQueries([]);
       return;
     }
-    const entry = await host.storage.get(
-      "workspace",
-      workspaceId,
-      SAVED_QUERIES_KEY
-    );
+    const entry = await host.storage.get("workspace", workspaceId, SAVED_QUERIES_KEY);
     setQueries(normalizeSavedQueries(entry?.value));
   };
   React.useEffect(() => {
@@ -952,11 +895,7 @@ function useSavedQueries(host, workspaceId) {
     }
     let active = true;
     const sync = async () => {
-      const entry = await host.storage.get(
-        "workspace",
-        workspaceId,
-        SAVED_QUERIES_KEY
-      );
+      const entry = await host.storage.get("workspace", workspaceId, SAVED_QUERIES_KEY);
       if (active) setQueries(normalizeSavedQueries(entry?.value));
     };
     void sync();
@@ -974,12 +913,7 @@ function useSavedQueries(host, workspaceId) {
     const normalized = normalizeSavedQueries(next);
     setQueries(normalized);
     try {
-      await host.storage.set(
-        "workspace",
-        workspaceId,
-        SAVED_QUERIES_KEY,
-        normalized
-      );
+      await host.storage.set("workspace", workspaceId, SAVED_QUERIES_KEY, normalized);
     } catch (error) {
       await load();
       throw error;
@@ -1031,13 +965,9 @@ function usePluginQuery(host, key, input, enabled = true) {
       };
     }
     setState((previous) => ({ ...previous, loading: true, error: null }));
-    void host.api.invokeAction(
-      key,
-      requestBody(JSON.parse(serializedInput)),
-      {
-        signal: controller.signal
-      }
-    ).then((data) => {
+    void host.api.invokeAction(key, requestBody(JSON.parse(serializedInput)), {
+      signal: controller.signal
+    }).then((data) => {
       if (active)
         setState({
           data,
@@ -1068,19 +998,16 @@ async function collectPluginActionPages(api, key, input, itemKey, signal) {
   let lastPage = {};
   for (let page = 0; page < 1e3; page += 1) {
     const body = { ...record2(input?.body), cursor };
-    const response = await api.invokeAction(
-      key,
-      requestBody({ ...input, body }),
-      { signal }
-    );
+    const response = await api.invokeAction(key, requestBody({ ...input, body }), {
+      signal
+    });
     if (signal.aborted) throw new DOMException("Request aborted", "AbortError");
     lastPage = record2(response);
     const pageItems = lastPage[itemKey];
     if (Array.isArray(pageItems)) items.push(...pageItems);
     const nextCursor = text(lastPage.next_cursor);
     if (!nextCursor) return { ...lastPage, [itemKey]: items, next_cursor: "" };
-    if (seenCursors.has(nextCursor))
-      throw new Error(`${key} pagination did not advance`);
+    if (seenCursors.has(nextCursor)) throw new Error(`${key} pagination did not advance`);
     seenCursors.add(nextCursor);
     cursor = nextCursor;
   }
@@ -1137,37 +1064,47 @@ function usePagedPluginQuery(host, key, input, itemKey, enabled = true) {
   const refresh = React.useCallback(() => setReload((value) => value + 1), []);
   return { ...state, refresh };
 }
-function useAbortableAction(host) {
-  const { React } = host;
-  const activeController = React.useRef(null);
-  React.useEffect(
-    () => () => {
-      activeController.current?.abort();
-    },
-    []
-  );
-  const invoke = async (key, input) => {
-    activeController.current?.abort();
-    const controller = new AbortController();
-    activeController.current = controller;
-    try {
-      const result = await host.api.invokeAction(key, input, {
-        signal: controller.signal
-      });
-      if (controller.signal.aborted)
-        throw new DOMException("Request aborted", "AbortError");
-      return result;
-    } finally {
-      if (activeController.current === controller)
-        activeController.current = null;
-    }
+function createAbortableOperation() {
+  let active = null;
+  let generation = 0;
+  let disposed = false;
+  const cancel = () => {
+    generation += 1;
+    active?.controller.abort();
+    active = null;
   };
   return {
-    invoke,
-    cancel() {
-      activeController.current?.abort();
+    begin() {
+      if (disposed) throw new DOMException("Operation aborted", "AbortError");
+      cancel();
+      const controller = new AbortController();
+      const operationGeneration = generation;
+      active = { controller, generation: operationGeneration };
+      const isCurrent = () => !disposed && active?.controller === controller && active.generation === operationGeneration && !controller.signal.aborted;
+      return {
+        signal: controller.signal,
+        isCurrent,
+        finish() {
+          if (!isCurrent()) return false;
+          active = null;
+          return true;
+        }
+      };
+    },
+    cancel,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      cancel();
     }
   };
+}
+function useAbortableOperation(host) {
+  const { React } = host;
+  const operation = React.useRef(null);
+  if (!operation.current) operation.current = createAbortableOperation();
+  React.useEffect(() => () => operation.current?.dispose(), []);
+  return operation.current;
 }
 function isAbortError(reason) {
   return record2(reason).name === "AbortError";
@@ -1203,11 +1140,7 @@ function pullRequestStateIcon(host, pullRequest) {
   });
 }
 function Badge(host, label, tone = "neutral") {
-  return host.jsx(
-    host.ui.Badge,
-    { className: `bb-badge bb-badge-${tone}` },
-    label
-  );
+  return host.jsx(host.ui.Badge, { className: `bb-badge bb-badge-${tone}` }, label);
 }
 function EmptyState(host, title, detail, actionLabel, onAction) {
   const { jsx: h, ui } = host;
@@ -1216,11 +1149,7 @@ function EmptyState(host, title, detail, actionLabel, onAction) {
     { className: "bb-empty", role: "status" },
     h("h2", null, title),
     h("p", null, detail),
-    actionLabel && onAction ? h(
-      ui.Button,
-      { type: "button", className: "min-h-11", onClick: onAction },
-      actionLabel
-    ) : null
+    actionLabel && onAction ? h(ui.Button, { type: "button", className: "min-h-11", onClick: onAction }, actionLabel) : null
   );
 }
 
@@ -1262,19 +1191,24 @@ function DisconnectConfirmation({
   const { jsx: h, ui, React } = host;
   const [disconnecting, setDisconnecting] = React.useState(false);
   const [error, setError] = React.useState(null);
+  const mutation = useAbortableOperation(host);
   const disconnect = async () => {
     setDisconnecting(true);
     setError(null);
+    const request = mutation.begin();
     try {
       await host.api.invokeAction(
         action.connectionDisconnect,
-        disconnectConnectionInput(workspaceId)
+        disconnectConnectionInput(workspaceId),
+        {
+          signal: request.signal
+        }
       );
-      onSuccess();
+      if (request.isCurrent()) onSuccess();
     } catch (reason) {
-      setError(errorMessage(reason));
+      if (request.isCurrent() && !isAbortError(reason)) setError(errorMessage(reason));
     } finally {
-      setDisconnecting(false);
+      if (request.finish()) setDisconnecting(false);
     }
   };
   return h(
@@ -1341,12 +1275,11 @@ function ConnectionHealth({
   const oauthRegistration = connectionOAuthRegistration(details);
   const [oauthClientId, setOAuthClientId] = React.useState("");
   const [oauthClientSecret, setOAuthClientSecret] = React.useState("");
-  const oauthCallbackUrl = deriveOAuthCallbackURL(
-    host.api.baseUrl,
-    window.location.origin
-  );
+  const oauthCallbackUrl = deriveOAuthCallbackURL(host.api.baseUrl, window.location.origin);
   const [disconnectOpen, setDisconnectOpen] = React.useState(false);
+  const mutation = useAbortableOperation(host);
   React.useEffect(() => {
+    mutation.cancel();
     setSaving(false);
     setMessage(null);
     setProduct("cloud");
@@ -1399,22 +1332,28 @@ function ConnectionHealth({
     }
     setSaving(true);
     setMessage(null);
+    const request = mutation.begin();
     try {
-      await host.api.invokeAction(action.connectionSave, {
-        workspaceId: scopedWorkspaceId,
-        body: {
-          ...connectionSaveBody(formInput()),
-          probe: true
-        }
-      });
+      await host.api.invokeAction(
+        action.connectionSave,
+        {
+          workspaceId: scopedWorkspaceId,
+          body: {
+            ...connectionSaveBody(formInput()),
+            probe: true
+          }
+        },
+        { signal: request.signal }
+      );
+      if (!request.isCurrent()) return;
       setToken("");
       setOAuthClientSecret("");
       setMessage("Connection saved and health check started.");
       connection.refresh();
     } catch (error) {
-      setMessage(errorMessage(error));
+      if (request.isCurrent() && !isAbortError(error)) setMessage(errorMessage(error));
     } finally {
-      setSaving(false);
+      if (request.finish()) setSaving(false);
     }
   };
   const startOauth = async () => {
@@ -1425,29 +1364,34 @@ function ConnectionHealth({
       return;
     }
     setSaving(true);
+    const request = mutation.begin();
     try {
-      await host.api.invokeAction(action.connectionSave, {
-        workspaceId: scopedWorkspaceId,
-        body: {
-          ...connectionSaveBody(formInput()),
-          probe: false
-        }
-      });
+      await host.api.invokeAction(
+        action.connectionSave,
+        {
+          workspaceId: scopedWorkspaceId,
+          body: {
+            ...connectionSaveBody(formInput()),
+            probe: false
+          }
+        },
+        { signal: request.signal }
+      );
+      if (!request.isCurrent()) return;
       setOAuthClientSecret("");
       const result = await host.api.invokeAction(
         action.oauthStart,
-        oauthStartInput(scopedWorkspaceId)
+        oauthStartInput(scopedWorkspaceId),
+        { signal: request.signal }
       );
+      if (!request.isCurrent()) return;
       const href = text(record2(result).url) || text(record2(result).authorization_url);
       if (href) window.location.assign(href);
-      else
-        setMessage(
-          "OAuth authorization is ready. Continue in the connection settings."
-        );
+      else setMessage("OAuth authorization is ready. Continue in the connection settings.");
     } catch (error) {
-      setMessage(errorMessage(error));
+      if (request.isCurrent() && !isAbortError(error)) setMessage(errorMessage(error));
     } finally {
-      setSaving(false);
+      if (request.finish()) setSaving(false);
     }
   };
   const completeDisconnect = () => {
@@ -1506,10 +1450,7 @@ function ConnectionHealth({
       h(
         ui.CardDescription,
         null,
-        text(
-          details.product,
-          "Connect Bitbucket Cloud or Data Center for this workspace."
-        )
+        text(details.product, "Connect Bitbucket Cloud or Data Center for this workspace.")
       )
     ),
     h(
@@ -1548,11 +1489,7 @@ function ConnectionHealth({
       product === "cloud" ? h(
         "div",
         { className: "bb-field" },
-        h(
-          ui.Label,
-          { htmlFor: "bitbucket-cloud-workspace" },
-          "Bitbucket workspace"
-        ),
+        h(ui.Label, { htmlFor: "bitbucket-cloud-workspace" }, "Bitbucket workspace"),
         h(ui.Input, {
           id: "bitbucket-cloud-workspace",
           "data-testid": "bitbucket-cloud-workspace",
@@ -1610,21 +1547,9 @@ function ConnectionHealth({
             h(ui.SelectItem, { value: "api_token" }, "API token"),
             h(ui.SelectItem, { value: "oauth" }, "OAuth 2.0")
           ] : [
-            h(
-              ui.SelectItem,
-              { value: "user_pat" },
-              "Personal access token"
-            ),
-            h(
-              ui.SelectItem,
-              { value: "project_token" },
-              "Project access token"
-            ),
-            h(
-              ui.SelectItem,
-              { value: "repository_token" },
-              "Repository access token"
-            ),
+            h(ui.SelectItem, { value: "user_pat" }, "Personal access token"),
+            h(ui.SelectItem, { value: "project_token" }, "Project access token"),
+            h(ui.SelectItem, { value: "repository_token" }, "Repository access token"),
             h(ui.SelectItem, { value: "oauth" }, "OAuth 2.0")
           ]
         )
@@ -1646,11 +1571,7 @@ function ConnectionHealth({
       identityField ? h(
         "div",
         { className: "bb-field" },
-        h(
-          ui.Label,
-          { htmlFor: "bitbucket-connection-identity" },
-          identityField.label
-        ),
+        h(ui.Label, { htmlFor: "bitbucket-connection-identity" }, identityField.label),
         h(ui.Input, {
           id: "bitbucket-connection-identity",
           "data-testid": "bitbucket-connection-identity",
@@ -1728,11 +1649,7 @@ function ConnectionHealth({
         h(
           "div",
           { className: "bb-field" },
-          h(
-            ui.Label,
-            { htmlFor: "bitbucket-oauth-callback-url" },
-            "OAuth callback URL"
-          ),
+          h(ui.Label, { htmlFor: "bitbucket-oauth-callback-url" }, "OAuth callback URL"),
           h(ui.Input, {
             id: "bitbucket-oauth-callback-url",
             "data-testid": "bitbucket-oauth-callback-url",
@@ -1802,11 +1719,7 @@ function ConnectionHealth({
             ui.DrawerHeader,
             null,
             h(ui.DrawerTitle, null, "Disconnect Bitbucket"),
-            h(
-              ui.DrawerDescription,
-              null,
-              "Remove this workspace Bitbucket connection."
-            )
+            h(ui.DrawerDescription, null, "Remove this workspace Bitbucket connection.")
           ),
           h(
             "div",
@@ -1825,35 +1738,6 @@ function ConnectionHealth({
 }
 
 // ui/src/dashboard-task-list.ts
-function taskCreateContext(state, workspaceId) {
-  if (!workspaceId) return null;
-  const workflowState = record2(state.workflows);
-  const workflows = Array.isArray(workflowState.items) ? workflowState.items.map(record2) : [];
-  const activeWorkflowId = text(workflowState.activeId);
-  const workflow = workflows.find(
-    (candidate) => text(candidate.id) === activeWorkflowId && text(candidate.workspaceId) === workspaceId
-  ) ?? workflows.find(
-    (candidate) => text(candidate.workspaceId) === workspaceId || text(candidate.workspace_id) === workspaceId
-  );
-  const workflowId = text(workflow?.id);
-  if (!workflowId) return null;
-  const kanban = record2(state.kanban);
-  const snapshots = record2(record2(state.kanbanMulti).snapshots);
-  const snapshot = record2(snapshots[workflowId]);
-  const rawSteps = text(kanban.workflowId) === workflowId && Array.isArray(kanban.steps) ? kanban.steps : Array.isArray(snapshot.steps) ? snapshot.steps : [];
-  const steps = rawSteps.map(record2).sort(
-    (left, right) => Number(left.position ?? 0) - Number(right.position ?? 0)
-  ).map((step) => ({
-    id: text(step.id),
-    title: text(step.title) || text(step.name),
-    ...record2(step.events) ? { events: record2(step.events) } : {}
-  })).filter((step) => step.id && step.title);
-  if (!steps[0]) return null;
-  const repositoryState = record2(state.repositories);
-  const byWorkspace = record2(repositoryState.itemsByWorkspaceId);
-  const repositories = Array.isArray(byWorkspace[workspaceId]) ? byWorkspace[workspaceId].map(record2) : [];
-  return { workflowId, defaultStepId: steps[0].id, steps, repositories };
-}
 function DashboardPullRequestList({
   host,
   pullRequests,
@@ -1877,24 +1761,16 @@ function DashboardPullRequestList({
       },
       ...pullRequests.map((pullRequest) => {
         const author = displayPullRequestAuthor(pullRequest.author);
-        const opened = relativeTimeLabel(pullRequest.createdAt);
+        const opened = pullRequest.createdAt ? host.utils.formatRelativeTime(pullRequest.createdAt) : void 0;
         const metadata = h(
           "span",
           { className: "bb-change-request-metadata" },
           h("span", null, pullRequest.key),
           author ? h("span", null, ` \xB7 by ${author}`) : null,
           opened ? h("span", null, ` \xB7 opened ${opened}`) : null,
-          pullRequest.sourceBranch && pullRequest.destinationBranch ? h(
-            "span",
-            null,
-            ` \xB7 ${pullRequest.sourceBranch} \u2192 ${pullRequest.destinationBranch}`
-          ) : null,
+          pullRequest.sourceBranch && pullRequest.destinationBranch ? h("span", null, ` \xB7 ${pullRequest.sourceBranch} \u2192 ${pullRequest.destinationBranch}`) : null,
           h("span", null, " \xB7 "),
-          Badge(
-            host,
-            pullRequest.statusLabel ?? pullRequest.state,
-            pullRequest.statusTone
-          )
+          Badge(host, pullRequest.statusLabel ?? pullRequest.state, pullRequest.statusTone)
         );
         const identity = pullRequestAssociationIdentity(
           pullRequest.repositoryId,
@@ -1914,9 +1790,7 @@ function DashboardPullRequestList({
           action: pullRequest.capabilities.includes("launch_task") ? h(ui.IntegrationStartTaskMenu, {
             presets,
             onSelect: (selected) => {
-              const preset = presets.find(
-                (candidate) => candidate.id === selected.id
-              );
+              const preset = presets.find((candidate) => candidate.id === selected.id);
               if (preset) onStartTask(pullRequest, preset);
             },
             triggerTestId: "bitbucket-start-task-trigger",
@@ -1952,13 +1826,7 @@ function ReviewDetailPanel({
       workspaceId: scopedWorkspaceId,
       body: {
         review_key: reviewKey,
-        include: [
-          "files",
-          "participants",
-          "threads",
-          "status",
-          "viewer"
-        ]
+        include: ["files", "participants", "threads", "status", "viewer"]
       }
     } : void 0,
     Boolean((taskId || scopedWorkspaceId) && reviewKey)
@@ -1966,25 +1834,27 @@ function ReviewDetailPanel({
   const detail = normalizeReviewDetail(review.data);
   const [busyActionId, setBusyActionId] = React.useState(null);
   const [actionError, setActionError] = React.useState(null);
-  const request = useAbortableAction(host);
+  const mutation = useAbortableOperation(host);
   const runAction = async (requestValue) => {
     if (!detail || !scopedWorkspaceId || busyActionId) return;
     const kind = requestValue.actionId === "comment" ? "add_comment" : requestValue.actionId;
     setBusyActionId(requestValue.actionId);
     setActionError(null);
+    const request = mutation.begin();
     try {
-      await request.invoke(
+      await host.api.invokeAction(
         action.reviewsAction,
         workspaceReviewAction(scopedWorkspaceId, detail.key, detail.id, kind, {
           ...requestValue.body ? { comment: requestValue.body } : {},
           ...requestValue.threadId ? { parentCommentId: requestValue.threadId } : {}
-        })
+        }),
+        { signal: request.signal }
       );
-      review.refresh();
+      if (request.isCurrent()) review.refresh();
     } catch (reason) {
-      if (!isAbortError(reason)) setActionError(errorMessage(reason));
+      if (request.isCurrent() && !isAbortError(reason)) setActionError(errorMessage(reason));
     } finally {
-      setBusyActionId(null);
+      if (request.finish()) setBusyActionId(null);
     }
   };
   return h(ui.ChangeRequestDetail, {
@@ -2023,11 +1893,7 @@ function WatchRow({
       "div",
       null,
       h("strong", null, watch.id),
-      Badge(
-        host,
-        watch.status,
-        watch.status === "running" ? "success" : "neutral"
-      ),
+      Badge(host, watch.status, watch.status === "running" ? "success" : "neutral"),
       watch.lastPolled ? h("span", null, `Last polled ${watch.lastPolled}`) : null
     ),
     h(
@@ -2140,22 +2006,32 @@ function Watches({
   const [working, setWorking] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [pending, setPending] = React.useState(null);
+  const mutation = useAbortableOperation(host);
+  React.useEffect(() => {
+    mutation.cancel();
+    setWorking(null);
+    setError(null);
+    setPending(null);
+  }, [scopedWorkspaceId]);
   const invoke = async (key, body) => {
     if (!scopedWorkspaceId) return null;
     setWorking(key);
     setError(null);
+    const request = mutation.begin();
     try {
-      const response = await host.api.invokeAction(key, {
-        workspaceId: scopedWorkspaceId,
-        body
-      });
+      const response = await host.api.invokeAction(
+        key,
+        { workspaceId: scopedWorkspaceId, body },
+        { signal: request.signal }
+      );
+      if (!request.isCurrent()) return null;
       watches.refresh();
       return response;
     } catch (reason) {
-      setError(errorMessage(reason));
+      if (request.isCurrent() && !isAbortError(reason)) setError(errorMessage(reason));
       return null;
     } finally {
-      setWorking(null);
+      if (request.finish()) setWorking(null);
     }
   };
   const run = (key, watchId) => {
@@ -2164,8 +2040,7 @@ function Watches({
   const preview = async (kind, watchId) => {
     const key = kind === "reset" ? action.watchesPreviewReset : action.watchesPreviewDelete;
     const response = await invoke(key, { watch_id: watchId });
-    if (response)
-      setPending({ watchId, kind, taskCount: watchPreviewTaskCount(response) });
+    if (response) setPending({ watchId, kind, taskCount: watchPreviewTaskCount(response) });
   };
   const confirm = async () => {
     if (!pending) return;
@@ -2331,11 +2206,7 @@ function MobileFilters({
         ui.SheetHeader,
         null,
         h(ui.SheetTitle, null, "Bitbucket filters"),
-        h(
-          ui.SheetDescription,
-          null,
-          "Narrow pull requests by repository and state."
-        )
+        h(ui.SheetDescription, null, "Narrow pull requests by repository and state.")
       ),
       h(
         "div",
@@ -2346,15 +2217,6 @@ function MobileFilters({
       )
     )
   );
-}
-function useHostStoreState(host) {
-  const { React } = host;
-  const [state, setState] = React.useState(() => host.store.getState());
-  React.useEffect(
-    () => host.store.subscribe(() => setState(host.store.getState())),
-    [host]
-  );
-  return state;
 }
 function ConnectionNotice({
   host,
@@ -2403,7 +2265,6 @@ function BitbucketPage({ host }) {
   const { jsx: h, ui, React } = host;
   const responsive = host.useResponsiveBreakpoint();
   const activeWorkspaceId = useActiveWorkspaceId(host);
-  const hostState = useHostStoreState(host);
   const initialQuery = pullRequestScopeQuery("open");
   const [searchDraft, setSearchDraft] = React.useState(initialQuery);
   const [search, setSearch] = React.useState(initialQuery);
@@ -2418,6 +2279,13 @@ function BitbucketPage({ host }) {
   const savedQueries = useSavedQueries(host, activeWorkspaceId);
   const [launch, setLaunch] = React.useState(null);
   const pluginCreatedTaskIDs = React.useRef(/* @__PURE__ */ new Set());
+  const taskLaunchMutation = useAbortableOperation(host);
+  const taskLinkMutation = useAbortableOperation(host);
+  React.useEffect(() => {
+    taskLaunchMutation.cancel();
+    taskLinkMutation.cancel();
+    setLaunch(null);
+  }, [activeWorkspaceId]);
   const connection = usePluginQuery(
     host,
     action.connectionGet,
@@ -2443,13 +2311,7 @@ function BitbucketPage({ host }) {
   const [queuePagination, setQueuePagination] = React.useState(() => ({ scopeKey: queueScopeKey, page: 1, cursors: [""] }));
   const activeQueuePagination = queuePagination.scopeKey === queueScopeKey ? queuePagination : { scopeKey: queueScopeKey, page: 1, cursors: [""] };
   const queueCursor = activeQueuePagination.cursors[activeQueuePagination.page - 1] ?? "";
-  const queueRequest = pullRequestListRequest(
-    selectedRepository,
-    search,
-    state,
-    queueCursor,
-    25
-  );
+  const queueRequest = pullRequestListRequest(selectedRepository, search, state, queueCursor, 25);
   const queue = usePluginQuery(
     host,
     queueRequest.actionKey,
@@ -2470,7 +2332,7 @@ function BitbucketPage({ host }) {
     Boolean(activeWorkspaceId && connected && pullRequests.length)
   );
   const tasksByReview = normalizePullRequestAssociations(associations.data);
-  const createContext = taskCreateContext(hostState, activeWorkspaceId);
+  const createContext = useTaskCreationContext(host, activeWorkspaceId);
   const noWorkspace = !activeWorkspaceId;
   const commitSearch = () => {
     const committed = searchDraft.trim();
@@ -2493,9 +2355,7 @@ function BitbucketPage({ host }) {
       selectScopeState(selection.id);
       return;
     }
-    const saved = savedQueries.queries.find(
-      (query) => query.id === selection.id
-    );
+    const saved = savedQueries.queries.find((query) => query.id === selection.id);
     if (!saved) return;
     setScopeSelection(selection);
     setSearchDraft(saved.query);
@@ -2505,8 +2365,7 @@ function BitbucketPage({ host }) {
   };
   const deleteSavedQuery = (id) => {
     savedQueries.remove(id);
-    if (scopeSelection.source === "saved" && scopeSelection.id === id)
-      selectScopeState("open");
+    if (scopeSelection.source === "saved" && scopeSelection.id === id) selectScopeState("open");
   };
   const saveCurrentQuery = async (label, defaultRepositoryId) => {
     const query = searchDraft.trim();
@@ -2541,48 +2400,69 @@ function BitbucketPage({ host }) {
     const taskId = text(record2(taskValue).id);
     if (!activeWorkspaceId || !launch || !taskId) return;
     const linkedByLaunch = pluginCreatedTaskIDs.current.delete(taskId);
+    const request = taskLinkMutation.begin();
     try {
       if (!linkedByLaunch) {
-        await host.api.invokeAction(action.pullRequestsLink, {
-          workspaceId: activeWorkspaceId,
-          taskId,
-          body: {
-            review_key: launch.pullRequest.key,
-            pull_request_id: launch.pullRequest.id
-          }
-        });
+        await host.api.invokeAction(
+          action.pullRequestsLink,
+          {
+            workspaceId: activeWorkspaceId,
+            taskId,
+            body: {
+              review_key: launch.pullRequest.key,
+              pull_request_id: launch.pullRequest.id
+            }
+          },
+          { signal: request.signal }
+        );
       }
-      associations.refresh();
-    } catch {
+      if (request.isCurrent()) associations.refresh();
+    } catch (reason) {
+      if (isAbortError(reason) || !request.isCurrent()) return;
     } finally {
-      setLaunch(null);
-      host.navigate(`/tasks/${encodeURIComponent(taskId)}`);
+      if (request.finish()) {
+        setLaunch(null);
+        host.navigate(`/tasks/${encodeURIComponent(taskId)}`);
+      }
     }
   };
-  const selectedHostRepositoryId = launch && createContext ? matchingHostRepositoryId(createContext.repositories, launch.pullRequest) : void 0;
-  const launchRemoteRepository = launch ? repositories.find(
-    (candidate) => candidate.repositoryId === launch.pullRequest.repositoryId
-  ) : void 0;
+  const selectedHostRepositoryId = launch && activeWorkspaceId && launch.pullRequest.providerScope ? host.context.resolveRepositoryId({
+    workspaceId: activeWorkspaceId,
+    providerId: "bitbucket",
+    providerScope: launch.pullRequest.providerScope,
+    providerRepositoryId: launch.pullRequest.repositoryId
+  }) : void 0;
+  const launchRemoteRepository = launch ? repositories.find((candidate) => candidate.repositoryId === launch.pullRequest.repositoryId) : void 0;
   const createBitbucketTask = async (payload) => {
-    if (!activeWorkspaceId || !launch)
-      throw new Error("Bitbucket task launch is unavailable.");
-    const result = await host.api.invokeAction(
-      action.tasksLaunch,
-      {
-        workspaceId: activeWorkspaceId,
-        body: taskLaunchBody(launch.pullRequest, payload, launch.launchId)
-      }
-    );
-    const task = taskFromLaunchResult(result);
-    const taskId = text(task.id);
-    if (task.bitbucketLinked === true) pluginCreatedTaskIDs.current.add(taskId);
-    associations.refresh();
-    return task;
+    if (!activeWorkspaceId || !launch) throw new Error("Bitbucket task launch is unavailable.");
+    const request = taskLaunchMutation.begin();
+    try {
+      const result = await host.api.invokeAction(
+        action.tasksLaunch,
+        {
+          workspaceId: activeWorkspaceId,
+          body: taskLaunchBody(launch.pullRequest, payload, launch.launchId)
+        },
+        { signal: request.signal }
+      );
+      if (!request.isCurrent()) throw new DOMException("Task launch aborted", "AbortError");
+      const task = taskFromLaunchResult(result);
+      const taskId = text(task.id);
+      if (task.bitbucketLinked === true) pluginCreatedTaskIDs.current.add(taskId);
+      associations.refresh();
+      return task;
+    } finally {
+      request.finish();
+    }
   };
   const taskDialog = launch && createContext ? h(ui.TaskCreateDialog, {
     open: true,
     onOpenChange: (open) => {
-      if (!open) setLaunch(null);
+      if (!open) {
+        taskLaunchMutation.cancel();
+        taskLinkMutation.cancel();
+        setLaunch(null);
+      }
     },
     mode: "create",
     workspaceId: activeWorkspaceId ?? null,
@@ -2658,10 +2538,7 @@ function BitbucketPage({ host }) {
       },
       onNext: () => {
         if (!nextQueueCursor) return;
-        const cursors = activeQueuePagination.cursors.slice(
-          0,
-          activeQueuePagination.page
-        );
+        const cursors = activeQueuePagination.cursors.slice(0, activeQueuePagination.page);
         cursors.push(nextQueueCursor);
         setQueuePagination({
           scopeKey: queueScopeKey,
@@ -2812,6 +2689,8 @@ function reviewSummaryForPullRequest(pullRequest, refreshedAt = Date.now()) {
 var reviewStore = /* @__PURE__ */ (() => {
   const snapshots = /* @__PURE__ */ new Map();
   const listeners = /* @__PURE__ */ new Map();
+  const refreshes = /* @__PURE__ */ new Map();
+  let epoch = 0;
   return {
     get(taskId) {
       return snapshots.get(taskId) ?? [];
@@ -2819,11 +2698,17 @@ var reviewStore = /* @__PURE__ */ (() => {
     set(taskId, pullRequests) {
       snapshots.set(
         taskId,
-        pullRequests.map(
-          (pullRequest) => reviewSummaryForPullRequest(pullRequest)
-        )
+        pullRequests.map((pullRequest) => reviewSummaryForPullRequest(pullRequest))
       );
       listeners.get(taskId)?.forEach((listener) => listener());
+    },
+    beginRefresh(taskId) {
+      const version = (refreshes.get(taskId) ?? 0) + 1;
+      refreshes.set(taskId, version);
+      return { epoch, version };
+    },
+    isCurrentRefresh(taskId, token) {
+      return token.epoch === epoch && refreshes.get(taskId) === token.version;
     },
     subscribe(taskId, listener) {
       const taskListeners = listeners.get(taskId) ?? /* @__PURE__ */ new Set();
@@ -2835,10 +2720,10 @@ var reviewStore = /* @__PURE__ */ (() => {
       };
     },
     clear() {
+      epoch += 1;
+      refreshes.clear();
       snapshots.clear();
-      listeners.forEach(
-        (taskListeners) => taskListeners.forEach((listener) => listener())
-      );
+      listeners.forEach((taskListeners) => taskListeners.forEach((listener) => listener()));
       listeners.clear();
     }
   };
@@ -2846,6 +2731,8 @@ var reviewStore = /* @__PURE__ */ (() => {
 var associationStore = /* @__PURE__ */ (() => {
   const snapshots = /* @__PURE__ */ new Map();
   const listeners = /* @__PURE__ */ new Map();
+  const refreshes = /* @__PURE__ */ new Map();
+  let epoch = 0;
   return {
     get(workspaceId) {
       return snapshots.get(workspaceId) ?? [];
@@ -2868,6 +2755,14 @@ var associationStore = /* @__PURE__ */ (() => {
       );
       listeners.get(workspaceId)?.forEach((listener) => listener());
     },
+    beginRefresh(workspaceId) {
+      const version = (refreshes.get(workspaceId) ?? 0) + 1;
+      refreshes.set(workspaceId, version);
+      return { epoch, version };
+    },
+    isCurrentRefresh(workspaceId, token) {
+      return token.epoch === epoch && refreshes.get(workspaceId) === token.version;
+    },
     subscribe(workspaceId, listener) {
       const workspaceListeners = listeners.get(workspaceId) ?? /* @__PURE__ */ new Set();
       workspaceListeners.add(listener);
@@ -2878,6 +2773,8 @@ var associationStore = /* @__PURE__ */ (() => {
       };
     },
     clear() {
+      epoch += 1;
+      refreshes.clear();
       snapshots.clear();
       listeners.forEach(
         (workspaceListeners) => workspaceListeners.forEach((listener) => listener())
@@ -2887,20 +2784,24 @@ var associationStore = /* @__PURE__ */ (() => {
   };
 })();
 async function refreshAssociationStore(host, workspaceId, signal) {
+  const refresh = associationStore.beginRefresh(workspaceId);
   const response = await host.api.invokeAction(
     action.pullRequestsAssociations,
     { workspaceId },
     { signal }
   );
-  if (!signal.aborted) associationStore.set(workspaceId, response);
+  if (!signal.aborted && associationStore.isCurrentRefresh(workspaceId, refresh))
+    associationStore.set(workspaceId, response);
 }
 async function refreshReviewStore(host, taskId, signal, workspaceId) {
+  const refresh = reviewStore.beginRefresh(taskId);
   const pullRequests = await loadTaskPullRequestDetails(
     (key, input, options) => host.api.invokeAction(key, input, options),
     { taskId, ...workspaceId ? { workspaceId } : {} },
     signal
   );
-  if (!signal.aborted) reviewStore.set(taskId, pullRequests);
+  if (!signal.aborted && reviewStore.isCurrentRefresh(taskId, refresh))
+    reviewStore.set(taskId, pullRequests);
 }
 
 // ui/src/native-integrations.ts
@@ -2909,13 +2810,7 @@ function registerNativeIntegrations(registry, host) {
     id: "bitbucket",
     label: "Bitbucket",
     icon: "bitbucket",
-    async listRepositories({
-      workspaceId: scopedWorkspaceId,
-      query,
-      cursor,
-      limit,
-      signal
-    }) {
+    async listRepositories({ workspaceId: scopedWorkspaceId, query, cursor, limit, signal }) {
       const response = await host.api.invokeAction(
         action.repositoriesList,
         {
@@ -2933,11 +2828,6 @@ function registerNativeIntegrations(registry, host) {
         repositories: normalizeRepositories(response),
         nextCursor: text(record2(response).next_cursor) || void 0
       };
-    },
-    matchesURL(url) {
-      return /(?:^git@bitbucket\.org:|^https?:\/\/[^/]*bitbucket[^/]*\/|\/scm\/)/i.test(
-        url
-      );
     },
     async listBranches({ workspaceId: scopedWorkspaceId, repository, signal }) {
       const response = await host.api.invokeAction(
@@ -3020,8 +2910,7 @@ function registerNativeIntegrations(registry, host) {
         submitTestId: "bitbucket-review-reference-submit",
         async onSubmit(reference, signal) {
           const body = linkPullRequestBody(reference);
-          if (!body)
-            throw new Error("Enter a Bitbucket pull request URL or key.");
+          if (!body) throw new Error("Enter a Bitbucket pull request URL or key.");
           await host.api.invokeAction(
             action.pullRequestsLink,
             {
@@ -3032,12 +2921,7 @@ function registerNativeIntegrations(registry, host) {
             { signal }
           );
           await Promise.all([
-            refreshReviewStore(
-              host,
-              context.taskId,
-              signal,
-              context.workspaceId
-            ),
+            refreshReviewStore(host, context.taskId, signal, context.workspaceId),
             refreshAssociationStore(host, context.workspaceId, signal)
           ]).catch(() => void 0);
         }
@@ -3067,7 +2951,7 @@ function registerNativeIntegrations(registry, host) {
         { signal }
       );
     },
-    ReviewPanel: (props = {}) => host.jsx(ReviewDetailPanel, {
+    ReviewPanel: (props) => host.jsx(ReviewDetailPanel, {
       host,
       workspaceId: text(props.workspaceId) || void 0,
       taskId: text(props.taskId) || void 0,
@@ -3127,18 +3011,14 @@ window.registerKandevPlugin(PLUGIN_ID, {
       icon: "bitbucket",
       section: "integrations"
     });
-    registry.registerRoute(
-      "/bitbucket",
-      () => host.jsx(BitbucketPage, { host }),
-      {
-        topbar: {
-          title: "Bitbucket",
-          subtitle: "Pull requests",
-          icon: "bitbucket",
-          actions: makeTopbarActions(host)
-        }
+    registry.registerRoute("/bitbucket", () => host.jsx(BitbucketPage, { host }), {
+      topbar: {
+        title: "Bitbucket",
+        subtitle: "Pull requests",
+        icon: "bitbucket",
+        actions: makeTopbarActions(host)
       }
-    );
+    });
     registry.registerIntegrationSettings({
       id: "bitbucket",
       label: "Bitbucket",

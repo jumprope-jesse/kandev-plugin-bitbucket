@@ -11,7 +11,7 @@ import (
 
 func (w *Workflows) handleConnectionAction(ctx context.Context, request *pluginsdk.PluginActionRequest) (*pluginsdk.PluginActionResponse, error) {
 	switch request.ActionKey {
-	case "connection.get", "health.get":
+	case "connection.get":
 		if connections, ok := w.resolver.(ConnectionSettingsStore); ok {
 			settings, found, loadErr := connections.Load(ctx, request.Context.WorkspaceID)
 			if loadErr != nil {

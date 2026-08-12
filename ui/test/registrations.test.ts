@@ -2,10 +2,28 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 
-type Registration = { id: string; lifecycle: { initialize: (registry: Registry, host: Host) => void; destroy?: () => void } };
+type Registration = {
+  id: string;
+  lifecycle: {
+    initialize: (registry: Registry, host: Host) => void;
+    destroy?: () => void;
+  };
+};
 
-type TaskContext = { workspaceId: string; taskId: string; repositories: unknown[]; pathname: string; presentation: "desktop" | "mobile" };
-type TaskAction = { id: string; label: string; placement: string; visible?: (context: TaskContext) => boolean; run: (context: TaskContext) => Promise<void> };
+type TaskContext = {
+  workspaceId: string;
+  taskId: string;
+  repositories: unknown[];
+  pathname: string;
+  presentation: "desktop" | "mobile";
+};
+type TaskAction = {
+  id: string;
+  label: string;
+  placement: string;
+  visible?: (context: TaskContext) => boolean;
+  run: (context: TaskContext) => Promise<void>;
+};
 type OpenedModal = {
   title: string;
   content: () => unknown;
@@ -21,7 +39,11 @@ type OpenedTaskLinkDialog = {
   successMessage: string;
   onSubmit: (reference: string) => Promise<void>;
 };
-type Invocation = { key: string; input?: unknown; options?: { signal?: AbortSignal } };
+type Invocation = {
+  key: string;
+  input?: unknown;
+  options?: { signal?: AbortSignal };
+};
 type IntegrationSettings = {
   id: string;
   label: string;
@@ -36,7 +58,12 @@ type ReviewProvider = {
   refresh(taskId: string, signal: AbortSignal): Promise<void>;
   getAssociationSnapshot?(workspaceId: string): readonly Record<string, unknown>[];
   refreshAssociations?(workspaceId: string, signal: AbortSignal): Promise<void>;
-  unlink?(context: { workspaceId: string; taskId: string; reviewKey: string; signal: AbortSignal }): Promise<void>;
+  unlink?(context: {
+    workspaceId: string;
+    taskId: string;
+    reviewKey: string;
+    signal: AbortSignal;
+  }): Promise<void>;
   ReviewPanel: (props: Record<string, unknown>) => unknown;
 };
 
@@ -48,7 +75,7 @@ type Registry = {
   registerRepositoryProvider: (provider: {
     id: string;
     icon: string;
-    matchesURL: (url: string) => boolean;
+    matchesURL?: (url: string) => boolean;
     listRepositories(context: { workspaceId: string; signal: AbortSignal }): Promise<unknown[]>;
     createChangeRequest?(context: Record<string, unknown>): Promise<Record<string, unknown>>;
     supportsDraft?: boolean;
@@ -59,7 +86,13 @@ type Registry = {
 };
 
 type Host = {
-  React: { useState: <T>(value: T | (() => T)) => [T, (value: T) => void]; useEffect: () => void; useMemo: <T>(factory: () => T) => T; useCallback: <T>(callback: T) => T; useRef: <T>(value: T) => { current: T } };
+  React: {
+    useState: <T>(value: T | (() => T)) => [T, (value: T) => void];
+    useEffect: () => void;
+    useMemo: <T>(factory: () => T) => T;
+    useCallback: <T>(callback: T) => T;
+    useRef: <T>(value: T) => { current: T };
+  };
   jsx: (type: unknown, props?: Record<string, unknown> | null, ...children: unknown[]) => unknown;
   ui: Record<string, unknown>;
   api: {
@@ -70,7 +103,17 @@ type Host = {
     ) => Promise<unknown>;
   };
   useResponsiveBreakpoint: () => { isMobile: boolean };
-  store: { getState: () => Record<string, unknown>; subscribe: () => () => void };
+  context: {
+    getActiveWorkspaceId: () => string | undefined;
+    subscribeActiveWorkspace: (listener: (workspaceId: string | undefined) => void) => () => void;
+    getTaskCreationContext: () => null;
+    subscribeTaskCreationContext: (workspaceId: string, listener: () => void) => () => void;
+    resolveRepositoryId: () => undefined;
+  };
+  store: {
+    getState: () => Record<string, unknown>;
+    subscribe: () => () => void;
+  };
   navigate: () => void;
   openModal: (options: OpenedModal) => { close: () => void };
   openTaskLinkDialog: (options: OpenedTaskLinkDialog) => { close: () => void };
@@ -92,7 +135,10 @@ function modalHost(
 ): Host {
   return {
     React: {
-      useState: <T>(value: T | (() => T)) => [typeof value === "function" ? (value as () => T)() : value, () => {}],
+      useState: <T>(value: T | (() => T)) => [
+        typeof value === "function" ? (value as () => T)() : value,
+        () => {},
+      ],
       useEffect: () => {},
       useMemo: <T>(factory: () => T) => factory(),
       useCallback: <T>(callback: T) => callback,
@@ -100,8 +146,20 @@ function modalHost(
     },
     jsx: (type, props, ...children) => ({ type, props, children }),
     ui,
-    api: { invokeAction: async (key, input, options) => { invocations.push({ key, input, options }); return results.shift() ?? {}; } },
+    api: {
+      invokeAction: async (key, input, options) => {
+        invocations.push({ key, input, options });
+        return results.shift() ?? {};
+      },
+    },
     useResponsiveBreakpoint: () => ({ isMobile }),
+    context: {
+      getActiveWorkspaceId: () => "workspace-1",
+      subscribeActiveWorkspace: () => () => {},
+      getTaskCreationContext: () => null,
+      subscribeTaskCreationContext: () => () => {},
+      resolveRepositoryId: () => undefined,
+    },
     store: { getState: () => ({}), subscribe: () => () => {} },
     navigate: () => {},
     openModal: (options) => {
@@ -139,7 +197,7 @@ describe("Bitbucket plugin registrations", () => {
     const repositoryProviders: Array<{
       id: string;
       icon: string;
-      matchesURL: (url: string) => boolean;
+      matchesURL?: (url: string) => boolean;
       listRepositories(context: { workspaceId: string; signal: AbortSignal }): Promise<unknown[]>;
       supportsDraft?: boolean;
       createChangeRequest?(context: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -216,7 +274,10 @@ describe("Bitbucket plugin registrations", () => {
     const settingsSeparator = source.indexOf("ui.Separator", authenticationField);
     const settingsActions = source.indexOf('className: "bb-settings-actions"', settingsSeparator);
     const checkConnection = source.indexOf('"Check connection"', settingsActions);
-    const destructiveDisconnect = source.indexOf('className: "bb-settings-disconnect min-h-11"', settingsActions);
+    const destructiveDisconnect = source.indexOf(
+      'className: "bb-settings-disconnect min-h-11"',
+      settingsActions,
+    );
     expect(authenticationField).toBeGreaterThan(-1);
     expect(settingsSeparator).toBeGreaterThan(authenticationField);
     expect(settingsActions).toBeGreaterThan(settingsSeparator);
@@ -226,12 +287,16 @@ describe("Bitbucket plugin registrations", () => {
       'variant: "destructive"',
     );
     expect(styles).toContain(".bb-settings-disconnect { margin-left: auto;");
-    expect(styles).toMatch(/@media \(max-width: 639px\)[\s\S]*\.bb-settings-actions > button[^}]*min-height: 2\.75rem/);
+    expect(styles).toMatch(
+      /@media \(max-width: 639px\)[\s\S]*\.bb-settings-actions > button[^}]*min-height: 2\.75rem/,
+    );
     expect(source).toContain("ui.DrawerContent");
-    expect(source).toMatch(/invokeAction\(\s*action\.connectionDisconnect,\s*disconnectConnectionInput\(/);
-    expect(source).toContain("setToken(\"\")");
-    expect(source).toContain("setOAuthClientSecret(\"\")");
-    expect(source).toContain("setMessage(\"Bitbucket disconnected. Stored credentials cleared.\")");
+    expect(source).toMatch(
+      /invokeAction\(\s*action\.connectionDisconnect,\s*disconnectConnectionInput\(/,
+    );
+    expect(source).toContain('setToken("")');
+    expect(source).toContain('setOAuthClientSecret("")');
+    expect(source).toContain('setMessage("Bitbucket disconnected. Stored credentials cleared.")');
     expect(source).toContain("setError(errorMessage(reason))");
     expect(source).toContain("connection.refresh()");
     expect(source).toContain("oauthStartInput(scopedWorkspaceId)");
@@ -258,9 +323,9 @@ describe("Bitbucket plugin registrations", () => {
     expect(source).toMatch(/host\.storage\.set\(\s*"workspace"/);
     expect(source).not.toContain("canSaveCurrent: false");
     expect(source).toContain("ui.IntegrationStartTaskMenu");
-    expect(source).toContain("iconName: \"eye\"");
-    expect(source).toContain("iconName: \"message\"");
-    expect(source).toContain("iconName: \"tool\"");
+    expect(source).toContain('iconName: "eye"');
+    expect(source).toContain('iconName: "message"');
+    expect(source).toContain('iconName: "tool"');
     expect(source).not.toContain("ui.IntegrationChangeRequestStatus");
     expect(source).toContain("ui.ChangeRequestDetail");
     expect(source).not.toContain("ui.Tabs");
@@ -280,7 +345,7 @@ describe("Bitbucket plugin registrations", () => {
     expect(source).toContain('tasksLaunch: "tasks.launch"');
     expect(source).toContain("createTask: usePluginTaskCreation(selectedHostRepositoryId)");
     expect(source).toContain("refreshReviewStore");
-    expect(source).toContain("function useAbortableAction");
+    expect(source).toContain("function useAbortableOperation");
     expect(source).toContain("controller.abort()");
     expect(source).toContain("signal: controller.signal");
     expect(source).not.toContain("Stop waiting");
@@ -301,7 +366,7 @@ describe("Bitbucket plugin registrations", () => {
     expect(source).not.toContain("repositoryId: pullRequest.repositoryId, body");
     expect(repositoryProviders).toHaveLength(1);
     expect(repositoryProviders[0]?.icon).toBe("bitbucket");
-    expect(repositoryProviders[0]?.matchesURL("https://git.example.test/scm/ENG/widgets.git")).toBe(true);
+    expect(repositoryProviders[0]?.matchesURL).toBeUndefined();
     expect(repositoryProviders[0]?.supportsDraft).toBe(false);
     const controller = new AbortController();
     actionResults.push({ repositories: [] });
@@ -332,23 +397,31 @@ describe("Bitbucket plugin registrations", () => {
       linked: false,
       associationError: "Task association could not be saved",
     });
-    expect(invocations).toContainEqual(expect.objectContaining({
-      key: "pullrequests.create",
-      input: {
-        workspaceId: "workspace-1",
-        taskId: "task-1",
-        sessionId: "session-1",
-        repositoryId: "repository-1",
-        body: { title: "Native title", description: "Native body", destination: "main" },
-      },
-    }));
+    expect(invocations).toContainEqual(
+      expect.objectContaining({
+        key: "pullrequests.create",
+        input: {
+          workspaceId: "workspace-1",
+          taskId: "task-1",
+          sessionId: "session-1",
+          repositoryId: "repository-1",
+          body: {
+            title: "Native title",
+            description: "Native body",
+            destination: "main",
+          },
+        },
+      }),
+    );
     expect(taskActions).toEqual(
       expect.arrayContaining([expect.objectContaining({ placement: "link" })]),
     );
     expect(taskActions).toEqual(
       expect.arrayContaining([expect.objectContaining({ icon: "bitbucket" })]),
     );
-    expect(taskActions.every((candidate) => (candidate as { icon?: string }).icon === "bitbucket")).toBe(true);
+    expect(
+      taskActions.every((candidate) => (candidate as { icon?: string }).icon === "bitbucket"),
+    ).toBe(true);
     expect(reviewProviders).toEqual([expect.objectContaining({ id: "bitbucket" })]);
     expect(reviewProviders[0]?.icon).toBe("bitbucket");
     expect(reviewProviders[0]?.getAssociationSnapshot).toBeTypeOf("function");
@@ -402,16 +475,18 @@ describe("Bitbucket plugin registrations", () => {
     const reviewProviders: ReviewProvider[] = [];
     const results = [
       {
-        pull_requests: [{
-          id: "42",
-          review_key: "acme/widgets#42",
-          number: 42,
-          title: "Fix CI",
-          url: "https://bitbucket.org/acme/widgets/pull-requests/42",
-          repository_id: "acme/widgets",
-          repository_name: "widgets",
-          state: "OPEN",
-        }],
+        pull_requests: [
+          {
+            id: "42",
+            review_key: "acme/widgets#42",
+            number: 42,
+            title: "Fix CI",
+            url: "https://bitbucket.org/acme/widgets/pull-requests/42",
+            repository_id: "acme/widgets",
+            repository_name: "widgets",
+            state: "OPEN",
+          },
+        ],
       },
       {
         id: "42",
@@ -465,7 +540,10 @@ describe("Bitbucket plugin registrations", () => {
       const invocations: Invocation[] = [];
       vm.runInNewContext(source, {
         AbortController,
-        window: { registerKandevPlugin: (id: string, lifecycle: Registration["lifecycle"]) => registrations.push({ id, lifecycle }) },
+        window: {
+          registerKandevPlugin: (id: string, lifecycle: Registration["lifecycle"]) =>
+            registrations.push({ id, lifecycle }),
+        },
       });
       registrations[0]?.lifecycle.initialize(
         {
@@ -480,7 +558,13 @@ describe("Bitbucket plugin registrations", () => {
         },
         modalHost(presentation === "mobile", opened, invocations, taskLinks),
       );
-      const context: TaskContext = { workspaceId: "workspace-1", taskId: "task-1", repositories: [{ provider_id: "bitbucket" }], pathname: "/tasks/task-1", presentation };
+      const context: TaskContext = {
+        workspaceId: "workspace-1",
+        taskId: "task-1",
+        repositories: [{ provider_id: "bitbucket" }],
+        pathname: "/tasks/task-1",
+        presentation,
+      };
       const link = taskActions.find((action) => action.id === "link-pull-request");
 
       expect(link?.label).toBe("Bitbucket Pull Request");
@@ -497,7 +581,9 @@ describe("Bitbucket plugin registrations", () => {
         }),
       ]);
       await taskLinks[0]?.onSubmit(" workspace/repository#42 ");
-      expect(invocations.find((invocation) => invocation.key === "pullrequests.link")).toMatchObject({
+      expect(
+        invocations.find((invocation) => invocation.key === "pullrequests.link"),
+      ).toMatchObject({
         key: "pullrequests.link",
         input: {
           workspaceId: "workspace-1",

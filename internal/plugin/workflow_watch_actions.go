@@ -10,7 +10,7 @@ import (
 
 func (w *Workflows) handleWatchAction(ctx context.Context, request *pluginsdk.PluginActionRequest) (*pluginsdk.PluginActionResponse, error) {
 	switch request.ActionKey {
-	case "watches.list", "watches.get":
+	case "watches.get":
 		result, err := w.watches.List(ctx, request.Context.WorkspaceID)
 		if err != nil {
 			return nil, err

@@ -62,7 +62,7 @@ func TestRuntime_MapsLocalWorkflowFailuresToTypedResponses(t *testing.T) {
 		},
 		{
 			name:       "unknown launch preset",
-			request:    &pluginsdk.PluginActionRequest{ActionKey: "pullrequests.launch", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"}, Body: []byte(`{"review_key":"workspace/repo#42","preset":"unknown"}`)},
+			request:    &pluginsdk.PluginActionRequest{ActionKey: "tasks.launch", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"}, Body: []byte(`{"review_key":"workspace/repo#42","preset":"unknown"}`)},
 			wantStatus: http.StatusBadRequest, wantCode: pluginsdk.ActionErrorInvalidArgument,
 		},
 	}

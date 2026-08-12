@@ -967,7 +967,7 @@ func TestWorkflows_RejectsUnsupportedReviewMutationBeforeProviderCall(t *testing
 	require.NoError(t, err)
 
 	_, err = workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
-		ActionKey: "pullrequests.update", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"}, Body: []byte(`{"review_key":"workspace/repo#42","operation":"merge"}`),
+		ActionKey: "reviews.action", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"}, Body: []byte(`{"review_key":"workspace/repo#42","operation":"merge"}`),
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "does not support merge")
@@ -1001,6 +1001,42 @@ func TestWorkflows_UsesProviderURLInspectors(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "https://bitbucket.org/workspace/repo/pull-requests/42", provider.inspectedPullRequestURL)
 	require.Contains(t, string(response.Body), "workspace/repo#42")
+}
+
+func TestWorkflows_RepositoryInspectionReturnsNoMatchForAnotherProvider(t *testing.T) {
+	provider := &workflowProvider{
+		pullRequest:           testPullRequest(),
+		repositoryInspectErr:  errors.New("not a Bitbucket repository URL"),
+		pullRequestInspectErr: errors.New("not a Bitbucket pull request URL"),
+	}
+	workflows, err := NewWorkflows(newConnectionHost(), staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "repositories.inspect",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body:      []byte(`{"url":"https://git.example.test/team/repository"}`),
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{"matched":false}`, string(response.Body))
+}
+
+func TestWorkflows_UnconfiguredRepositoryInspectionReturnsNoMatch(t *testing.T) {
+	host := newConnectionHost()
+	resolver, err := NewConnectionResolver(host)
+	require.NoError(t, err)
+	workflows, err := NewWorkflows(host, resolver)
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "repositories.inspect",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body:      []byte(`{"url":"https://github.com/kdlbs/kandev"}`),
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{"matched":false}`, string(response.Body))
 }
 
 func TestWorkflows_RepositoryInspectionFetchesPullRequestURLMetadata(t *testing.T) {
@@ -1245,7 +1281,7 @@ func TestWorkflows_LaunchAppliesNamedPreset(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
-		ActionKey: "pullrequests.launch", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		ActionKey: "tasks.launch", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
 		Body: []byte(`{"review_key":"workspace/repo#42","preset":"review"}`),
 	})
 	require.NoError(t, err)
@@ -1520,6 +1556,7 @@ type workflowProvider struct {
 	inspectedRepositoryURL   string
 	inspectedPullRequestURL  string
 	repositoryInspectErr     error
+	pullRequestInspectErr    error
 	getPullRequestCalls      int
 	searchQueries            []domain.PullRequestQuery
 	searchErr                error
@@ -1574,6 +1611,9 @@ func (p *workflowProvider) InspectRepositoryURL(raw string) (domain.Repository, 
 }
 func (p *workflowProvider) InspectPullRequestURL(raw string) (domain.PullRequestLocator, error) {
 	p.inspectedPullRequestURL = raw
+	if p.pullRequestInspectErr != nil {
+		return domain.PullRequestLocator{}, p.pullRequestInspectErr
+	}
 	return domain.PullRequestLocator{Repository: p.pullRequest.Repository, Number: p.pullRequest.Number}, nil
 }
 func (*workflowProvider) ListBranches(context.Context, domain.Repository) ([]domain.Branch, error) {

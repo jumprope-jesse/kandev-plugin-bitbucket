@@ -1,5 +1,4 @@
 import {
-  activeWorkspaceIdFromState,
   errorMessage,
   normalizeSavedQueries,
   newSavedQuery,
@@ -26,15 +25,25 @@ export function text(value: unknown, fallback = ""): string {
 export function useActiveWorkspaceId(host: PluginHost): string | undefined {
   const { React } = host;
   const [activeWorkspaceId, setActiveWorkspaceId] = React.useState(() =>
-    activeWorkspaceIdFromState(host.store.getState()),
+    host.context.getActiveWorkspaceId(),
   );
   React.useEffect(() => {
-    const sync = () =>
-      setActiveWorkspaceId(activeWorkspaceIdFromState(host.store.getState()));
-    sync();
-    return host.store.subscribe(sync);
+    setActiveWorkspaceId(host.context.getActiveWorkspaceId());
+    return host.context.subscribeActiveWorkspace(setActiveWorkspaceId);
   }, [host]);
   return activeWorkspaceId;
+}
+
+export function useTaskCreationContext(host: PluginHost, workspaceId?: string) {
+  const { React } = host;
+  const read = () => (workspaceId ? host.context.getTaskCreationContext(workspaceId) : null);
+  const [context, setContext] = React.useState(read);
+  React.useEffect(() => {
+    setContext(read());
+    if (!workspaceId) return;
+    return host.context.subscribeTaskCreationContext(workspaceId, setContext);
+  }, [host, workspaceId]);
+  return context;
 }
 
 const SAVED_QUERIES_KEY = "dashboard-saved-queries";
@@ -47,11 +56,7 @@ export function useSavedQueries(host: PluginHost, workspaceId?: string) {
       setQueries([]);
       return;
     }
-    const entry = await host.storage.get(
-      "workspace",
-      workspaceId,
-      SAVED_QUERIES_KEY,
-    );
+    const entry = await host.storage.get("workspace", workspaceId, SAVED_QUERIES_KEY);
     setQueries(normalizeSavedQueries(entry?.value));
   };
   React.useEffect(() => {
@@ -61,11 +66,7 @@ export function useSavedQueries(host: PluginHost, workspaceId?: string) {
     }
     let active = true;
     const sync = async () => {
-      const entry = await host.storage.get(
-        "workspace",
-        workspaceId,
-        SAVED_QUERIES_KEY,
-      );
+      const entry = await host.storage.get("workspace", workspaceId, SAVED_QUERIES_KEY);
       if (active) setQueries(normalizeSavedQueries(entry?.value));
     };
     void sync();
@@ -83,12 +84,7 @@ export function useSavedQueries(host: PluginHost, workspaceId?: string) {
     const normalized = normalizeSavedQueries(next);
     setQueries(normalized);
     try {
-      await host.storage.set(
-        "workspace",
-        workspaceId,
-        SAVED_QUERIES_KEY,
-        normalized,
-      );
+      await host.storage.set("workspace", workspaceId, SAVED_QUERIES_KEY, normalized);
     } catch (error) {
       await load();
       throw error;
@@ -96,9 +92,7 @@ export function useSavedQueries(host: PluginHost, workspaceId?: string) {
   };
   return {
     queries,
-    async save(
-      input: Pick<SavedQuery, "label" | "query" | "repositoryId" | "state">,
-    ) {
+    async save(input: Pick<SavedQuery, "label" | "query" | "repositoryId" | "state">) {
       const created = newSavedQuery(
         input,
         `saved-${host.utils.generateUUID()}`,
@@ -155,13 +149,9 @@ export function usePluginQuery<T>(
     }
     setState((previous) => ({ ...previous, loading: true, error: null }));
     void host.api
-      .invokeAction<T>(
-        key,
-        requestBody(JSON.parse(serializedInput) as ActionInput),
-        {
-          signal: controller.signal,
-        },
-      )
+      .invokeAction<T>(key, requestBody(JSON.parse(serializedInput) as ActionInput), {
+        signal: controller.signal,
+      })
       .then((data) => {
         if (active)
           setState({
@@ -201,19 +191,16 @@ export async function collectPluginActionPages(
   let lastPage: Record<string, unknown> = {};
   for (let page = 0; page < 1000; page += 1) {
     const body = { ...record(input?.body), cursor };
-    const response = await api.invokeAction<unknown>(
-      key,
-      requestBody({ ...input, body }),
-      { signal },
-    );
+    const response = await api.invokeAction<unknown>(key, requestBody({ ...input, body }), {
+      signal,
+    });
     if (signal.aborted) throw new DOMException("Request aborted", "AbortError");
     lastPage = record(response);
     const pageItems = lastPage[itemKey];
     if (Array.isArray(pageItems)) items.push(...pageItems);
     const nextCursor = text(lastPage.next_cursor);
     if (!nextCursor) return { ...lastPage, [itemKey]: items, next_cursor: "" };
-    if (seenCursors.has(nextCursor))
-      throw new Error(`${key} pagination did not advance`);
+    if (seenCursors.has(nextCursor)) throw new Error(`${key} pagination did not advance`);
     seenCursors.add(nextCursor);
     cursor = nextCursor;
   }
@@ -285,37 +272,52 @@ export function usePagedPluginQuery(
   return { ...state, refresh };
 }
 
-export function useAbortableAction(host: PluginHost) {
-  const { React } = host;
-  const activeController = React.useRef<AbortController | null>(null);
-  React.useEffect(
-    () => () => {
-      activeController.current?.abort();
-    },
-    [],
-  );
-  const invoke = async (key: string, input: ActionInput): Promise<unknown> => {
-    activeController.current?.abort();
-    const controller = new AbortController();
-    activeController.current = controller;
-    try {
-      const result = await host.api.invokeAction(key, input, {
-        signal: controller.signal,
-      });
-      if (controller.signal.aborted)
-        throw new DOMException("Request aborted", "AbortError");
-      return result;
-    } finally {
-      if (activeController.current === controller)
-        activeController.current = null;
-    }
+export function createAbortableOperation() {
+  let active: { controller: AbortController; generation: number } | null = null;
+  let generation = 0;
+  let disposed = false;
+  const cancel = () => {
+    generation += 1;
+    active?.controller.abort();
+    active = null;
   };
   return {
-    invoke,
-    cancel() {
-      activeController.current?.abort();
+    begin() {
+      if (disposed) throw new DOMException("Operation aborted", "AbortError");
+      cancel();
+      const controller = new AbortController();
+      const operationGeneration = generation;
+      active = { controller, generation: operationGeneration };
+      const isCurrent = () =>
+        !disposed &&
+        active?.controller === controller &&
+        active.generation === operationGeneration &&
+        !controller.signal.aborted;
+      return {
+        signal: controller.signal,
+        isCurrent,
+        finish() {
+          if (!isCurrent()) return false;
+          active = null;
+          return true;
+        },
+      };
+    },
+    cancel,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      cancel();
     },
   };
+}
+
+export function useAbortableOperation(host: PluginHost) {
+  const { React } = host;
+  const operation = React.useRef<ReturnType<typeof createAbortableOperation> | null>(null);
+  if (!operation.current) operation.current = createAbortableOperation();
+  React.useEffect(() => () => operation.current?.dispose(), []);
+  return operation.current;
 }
 
 export function isAbortError(reason: unknown): boolean {
@@ -324,8 +326,7 @@ export function isAbortError(reason: unknown): boolean {
 
 export function icon(h: ElementFactory, name: string) {
   const paths: Record<string, string> = {
-    watch:
-      "M3 12s3.2-5 9-5 9 5 9 5-3.2 5-9 5-9-5-9-5Zm9 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
+    watch: "M3 12s3.2-5 9-5 9 5 9 5-3.2 5-9 5-9-5-9-5Zm9 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
     back: "m15 18-6-6 6-6",
   };
   return h(
@@ -345,10 +346,7 @@ export function icon(h: ElementFactory, name: string) {
   );
 }
 
-export function pullRequestStateIcon(
-  host: PluginHost,
-  pullRequest: PullRequest,
-) {
+export function pullRequestStateIcon(host: PluginHost, pullRequest: PullRequest) {
   const normalized = pullRequest.state.toLowerCase();
   const merged = normalized === "merged";
   const closed = normalized === "declined" || normalized === "closed";
@@ -359,11 +357,7 @@ export function pullRequestStateIcon(
 }
 
 export function Badge(host: PluginHost, label: string, tone = "neutral") {
-  return host.jsx(
-    host.ui.Badge,
-    { className: `bb-badge bb-badge-${tone}` },
-    label,
-  );
+  return host.jsx(host.ui.Badge, { className: `bb-badge bb-badge-${tone}` }, label);
 }
 
 export function EmptyState(
@@ -380,11 +374,7 @@ export function EmptyState(
     h("h2", null, title),
     h("p", null, detail),
     actionLabel && onAction
-      ? h(
-          ui.Button,
-          { type: "button", className: "min-h-11", onClick: onAction },
-          actionLabel,
-        )
+      ? h(ui.Button, { type: "button", className: "min-h-11", onClick: onAction }, actionLabel)
       : null,
   );
 }

@@ -1,10 +1,13 @@
-import {
-  errorMessage,
-  normalizeWatches,
-  type WatchSummary,
-} from "./view-models";
+import { errorMessage, normalizeWatches, type WatchSummary } from "./view-models";
 import { type PluginHost } from "./host-contract";
-import { record, usePluginQuery, icon, Badge } from "./ui-runtime";
+import {
+  Badge,
+  icon,
+  isAbortError,
+  record,
+  useAbortableOperation,
+  usePluginQuery,
+} from "./ui-runtime";
 import { action } from "./actions";
 
 export type PendingWatchChange = {
@@ -33,8 +36,7 @@ export function WatchRow({
   preview(kind: "reset" | "delete", watchId: string): void;
 }) {
   const { jsx: h, ui } = host;
-  const toggleKey =
-    watch.status === "running" ? action.watchesPause : action.watchesResume;
+  const toggleKey = watch.status === "running" ? action.watchesPause : action.watchesResume;
   return h(
     "li",
     { className: "bb-watch-row", key: watch.id },
@@ -42,14 +44,8 @@ export function WatchRow({
       "div",
       null,
       h("strong", null, watch.id),
-      Badge(
-        host,
-        watch.status,
-        watch.status === "running" ? "success" : "neutral",
-      ),
-      watch.lastPolled
-        ? h("span", null, `Last polled ${watch.lastPolled}`)
-        : null,
+      Badge(host, watch.status, watch.status === "running" ? "success" : "neutral"),
+      watch.lastPolled ? h("span", null, `Last polled ${watch.lastPolled}`) : null,
     ),
     h(
       "div",
@@ -174,40 +170,45 @@ export function Watches({
   const [working, setWorking] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [pending, setPending] = React.useState<PendingWatchChange | null>(null);
+  const mutation = useAbortableOperation(host);
+  React.useEffect(() => {
+    mutation.cancel();
+    setWorking(null);
+    setError(null);
+    setPending(null);
+  }, [scopedWorkspaceId]);
   const invoke = async (key: string, body: Record<string, unknown>) => {
     if (!scopedWorkspaceId) return null;
     setWorking(key);
     setError(null);
+    const request = mutation.begin();
     try {
-      const response = await host.api.invokeAction<unknown>(key, {
-        workspaceId: scopedWorkspaceId,
-        body,
-      });
+      const response = await host.api.invokeAction<unknown>(
+        key,
+        { workspaceId: scopedWorkspaceId, body },
+        { signal: request.signal },
+      );
+      if (!request.isCurrent()) return null;
       watches.refresh();
       return response;
     } catch (reason) {
-      setError(errorMessage(reason));
+      if (request.isCurrent() && !isAbortError(reason)) setError(errorMessage(reason));
       return null;
     } finally {
-      setWorking(null);
+      if (request.finish()) setWorking(null);
     }
   };
   const run = (key: string, watchId: string) => {
     void invoke(key, { watch_id: watchId });
   };
   const preview = async (kind: "reset" | "delete", watchId: string) => {
-    const key =
-      kind === "reset"
-        ? action.watchesPreviewReset
-        : action.watchesPreviewDelete;
+    const key = kind === "reset" ? action.watchesPreviewReset : action.watchesPreviewDelete;
     const response = await invoke(key, { watch_id: watchId });
-    if (response)
-      setPending({ watchId, kind, taskCount: watchPreviewTaskCount(response) });
+    if (response) setPending({ watchId, kind, taskCount: watchPreviewTaskCount(response) });
   };
   const confirm = async () => {
     if (!pending) return;
-    const key =
-      pending.kind === "reset" ? action.watchesReset : action.watchesDelete;
+    const key = pending.kind === "reset" ? action.watchesReset : action.watchesDelete;
     const response = await invoke(key, { watch_id: pending.watchId });
     if (response) setPending(null);
   };
@@ -228,9 +229,7 @@ export function Watches({
     h(
       ui.CardContent,
       { className: "bb-card-actions" },
-      watches.error
-        ? h("p", { className: "bb-error", role: "alert" }, watches.error)
-        : null,
+      watches.error ? h("p", { className: "bb-error", role: "alert" }, watches.error) : null,
       error ? h("p", { className: "bb-error", role: "alert" }, error) : null,
       watchItems.length
         ? h(
@@ -242,8 +241,7 @@ export function Watches({
                 watch,
                 disabled: Boolean(working),
                 run,
-                preview: (kind: "reset" | "delete", watchId: string) =>
-                  void preview(kind, watchId),
+                preview: (kind: "reset" | "delete", watchId: string) => void preview(kind, watchId),
               }),
             ),
           )
@@ -265,8 +263,7 @@ export function Watches({
               variant: "outline",
               className: "min-h-11",
               disabled: Boolean(working),
-              onClick: () =>
-                void invoke(action.watchesUpdate, { enabled: true, filter }),
+              onClick: () => void invoke(action.watchesUpdate, { enabled: true, filter }),
             },
             icon(h, "watch"),
             "Add current filter watch",

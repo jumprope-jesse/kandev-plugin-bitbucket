@@ -9,7 +9,7 @@ import { text, useActiveWorkspaceId } from "./ui-runtime";
 
 const PLUGIN_ID = "kandev-plugin-bitbucket";
 
-function makeIntegrationSettings(host: PluginHost): Component {
+function makeIntegrationSettings(host: PluginHost): Component<{ workspaceId?: string }> {
   return function IntegrationSettings(props = {}) {
     const activeWorkspaceId = useActiveWorkspaceId(host);
     const scopedWorkspaceId = text(props.workspaceId) || activeWorkspaceId;
@@ -43,8 +43,7 @@ function makeTopbarActions(host: PluginHost): Component {
         size: "sm",
         className: "bb-topbar-settings",
         "aria-label": "Open Bitbucket settings",
-        onClick: () =>
-          host.navigate(integrationSettingsHref(activeWorkspaceId)),
+        onClick: () => host.navigate(integrationSettingsHref(activeWorkspaceId)),
       },
       "Settings",
     );
@@ -72,18 +71,14 @@ window.registerKandevPlugin(PLUGIN_ID, {
       icon: "bitbucket",
       section: "integrations",
     });
-    registry.registerRoute(
-      "/bitbucket",
-      () => host.jsx(BitbucketPage, { host }),
-      {
-        topbar: {
-          title: "Bitbucket",
-          subtitle: "Pull requests",
-          icon: "bitbucket",
-          actions: makeTopbarActions(host),
-        },
+    registry.registerRoute("/bitbucket", () => host.jsx(BitbucketPage, { host }), {
+      topbar: {
+        title: "Bitbucket",
+        subtitle: "Pull requests",
+        icon: "bitbucket",
+        actions: makeTopbarActions(host),
       },
-    );
+    });
     registry.registerIntegrationSettings({
       id: "bitbucket",
       label: "Bitbucket",

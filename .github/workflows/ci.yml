@@ -31,9 +31,11 @@ jobs:
           repository: kdlbs/kandev
           # Pre-release contract pin. Replace this with the released host tag
           # through manifest.min_kandev_version before publishing the plugin.
-          ref: b1fa1bcff13e61a38bea6e0d78d12c7811c565c5
+          ref: c0771501f3eec27cff646096a56bf1c1d72d5177
           path: kandev
-          sparse-checkout: apps/backend
+          sparse-checkout: |
+            apps/backend
+            apps/packages/plugin-sdk
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
@@ -75,14 +77,78 @@ jobs:
         working-directory: plugin
         run: make package-host verify-package-host
 
-      - name: Exercise the packaged plugin in Kandev
+      - name: Exercise optional external Kandev host
         if: ${{ env.KANDEV_PLUGIN_E2E_URL != '' }}
         working-directory: plugin
         run: make e2e
 
-      - name: Report unavailable packaged-host contract
+      - name: Report unavailable external-host smoke test
         if: ${{ env.KANDEV_PLUGIN_E2E_URL == '' }}
         run: >-
-          echo "::notice title=Packaged-host contract unavailable::Configure
-          KANDEV_PLUGIN_E2E_URL with a disposable compatible Kandev host to run
-          packaged desktop/mobile E2E on pull requests. Tag releases remain fail-fast."
+          echo "::notice title=External-host smoke test unavailable::Configure
+          KANDEV_PLUGIN_E2E_URL to add an external disposable-host smoke test.
+          The required exact-head packaged-host contract runs in the separate job."
+
+  packaged-host-contract:
+    name: Exact host packaged-plugin contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out plugin
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          path: plugin
+
+      - name: Check out exact Kandev host contract
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: kdlbs/kandev
+          # This must be the exact reviewed host head. Update it whenever the
+          # provider contract changes; the job intentionally has no latest/main fallback.
+          ref: c0771501f3eec27cff646096a56bf1c1d72d5177
+          path: kandev
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: plugin/go.mod
+          cache-dependency-path: plugin/go.sum
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
+        with:
+          version: 9.15.9
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: kandev/apps/pnpm-lock.yaml
+
+      - name: Install exact consumer and host dependencies
+        run: |
+          cd plugin && npm ci
+          cd ../kandev/apps && pnpm install --frozen-lockfile
+
+      - name: Build real plugin package
+        working-directory: plugin
+        run: make package-host verify-package-host
+
+      - name: Build disposable Kandev test host
+        working-directory: kandev
+        run: |
+          make build-backend build-web-e2e
+          make -C apps/backend e2e-plugin-package
+
+      - name: Install Playwright Chromium
+        working-directory: kandev/apps/web
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Exercise exact plugin package on desktop and mobile surfaces
+        working-directory: kandev/apps/web
+        env:
+          KANDEV_BITBUCKET_PLUGIN_PACKAGE: ${{ github.workspace }}/plugin/kandev-plugin-bitbucket-0.1.12.tar.gz
+        run: >-
+          pnpm e2e:raw --project=chromium
+          tests/plugins/bitbucket-packaged-plugin.spec.ts

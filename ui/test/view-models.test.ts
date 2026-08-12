@@ -1,5 +1,4 @@
 import {
-  activeWorkspaceIdFromState,
   changeRequestDetailActions,
   changeRequestDetailModel,
   connectionActionBody,
@@ -12,7 +11,6 @@ import {
   disconnectConnectionInput,
   integrationSettingsHref,
   linkPullRequestBody,
-  matchingHostRepositoryId,
   normalizeRepositoryInspection,
   normalizeRepositories,
   normalizePullRequests,
@@ -31,7 +29,6 @@ import {
   pullRequestCreateBody,
   pluginRepositoryInput,
   pullRequestListRequest,
-  relativeTimeLabel,
   statusTone,
   taskSupportsBitbucketRepository,
   taskRepositoryDescriptor,
@@ -44,82 +41,6 @@ import {
 import { describe, expect, it } from "vitest";
 
 describe("Bitbucket view models", () => {
-  it("resolves one host repository by exact provider identity only", () => {
-    const pullRequest = { repositoryId: "workspace/repo" } as never;
-    expect(
-      matchingHostRepositoryId(
-        [
-          {
-            id: "exact",
-            provider: "bitbucket",
-            provider_repo_id: "workspace/repo",
-            provider_owner: "workspace",
-            provider_name: "repo",
-          },
-          {
-            id: "substring",
-            provider: "bitbucket",
-            provider_owner: "work",
-            provider_name: "repo",
-            remote_url:
-              "https://bitbucket.org/work/repo.git?mentions=workspace/repo",
-          },
-        ],
-        pullRequest,
-      ),
-    ).toBe("exact");
-    expect(
-      matchingHostRepositoryId(
-        [
-          {
-            id: "one",
-            provider: "bitbucket",
-            provider_owner: "workspace",
-            provider_name: "repo",
-          },
-          {
-            id: "two",
-            provider: "bitbucket",
-            provider_repo_id: "workspace/repo",
-          },
-        ],
-        pullRequest,
-      ),
-    ).toBeUndefined();
-
-    expect(
-      matchingHostRepositoryId(
-        [
-          {
-            id: "scoped-exact",
-            provider: "bitbucket",
-            provider_repo_id: "repo-uuid",
-            provider_scope: "https://dc.example.test/context-a",
-          },
-          {
-            id: "wrong-scope",
-            provider: "bitbucket",
-            provider_repo_id: "repo-uuid",
-            provider_scope: "https://dc.example.test/context-b",
-          },
-        ],
-        {
-          repositoryId: "repo-uuid",
-          providerScope: "https://dc.example.test/context-a",
-        } as never,
-      ),
-    ).toBe("scoped-exact");
-  });
-
-  it("reads the active workspace from the host workspace slice", () => {
-    expect(
-      activeWorkspaceIdFromState({ workspaces: { activeId: "workspace-1" } }),
-    ).toBe("workspace-1");
-    expect(
-      activeWorkspaceIdFromState({ activeWorkspaceId: "legacy-wrong-shape" }),
-    ).toBeUndefined();
-  });
-
   it("builds workspace-scoped integration settings links with a global fallback", () => {
     expect(integrationSettingsHref("workspace one")).toBe(
       "/settings/workspaces/workspace%20one/integrations/bitbucket",
@@ -130,9 +51,7 @@ describe("Bitbucket view models", () => {
   it("shows readable authors but hides provider-opaque Cloud identities", () => {
     expect(displayPullRequestAuthor("Ari Almeida")).toBe("Ari Almeida");
     expect(displayPullRequestAuthor("dev-user")).toBe("dev-user");
-    expect(
-      displayPullRequestAuthor("712020:49e8a296-5268-4c02-a6b3-20a4b8e60149"),
-    ).toBeUndefined();
+    expect(displayPullRequestAuthor("712020:49e8a296-5268-4c02-a6b3-20a4b8e60149")).toBeUndefined();
     expect(displayPullRequestAuthor("  ")).toBeUndefined();
   });
 
@@ -151,9 +70,7 @@ describe("Bitbucket view models", () => {
             author_display_name: "Ari",
             created_at: "2026-08-06T08:00:00Z",
             capabilities: "merge, decline",
-            associations: [
-              { id: "link-1", task_id: "task-1", title: "Review mobile" },
-            ],
+            associations: [{ id: "link-1", task_id: "task-1", title: "Review mobile" }],
           },
         ],
       }),
@@ -166,9 +83,7 @@ describe("Bitbucket view models", () => {
         createdAt: "2026-08-06T08:00:00Z",
         sourceBranch: "feature/mobile-review",
         destinationBranch: "main",
-        tasks: [
-          { id: "link-1", taskId: "task-1", fallbackTitle: "Review mobile" },
-        ],
+        tasks: [{ id: "link-1", taskId: "task-1", fallbackTitle: "Review mobile" }],
         capabilities: ["merge", "decline"],
       }),
     ]);
@@ -229,55 +144,11 @@ describe("Bitbucket view models", () => {
       ],
     });
 
-    expect(cloud[0]?.url).toBe(
-      "https://bitbucket.org/acme/cloud/pull-requests/42",
-    );
+    expect(cloud[0]?.url).toBe("https://bitbucket.org/acme/cloud/pull-requests/42");
     expect(dataCenter[0]?.url).toBe(
       "https://bitbucket.example.test/projects/ENG/repos/widgets/pull-requests/7",
     );
     expect(cloud[0]?.url).not.toBe("[object Object]");
-  });
-
-  it("formats opened time without exposing invalid provider timestamps", () => {
-    expect(
-      relativeTimeLabel(
-        "2026-08-06T09:59:55Z",
-        new Date("2026-08-06T10:00:00Z"),
-      ),
-    ).toBe("just now");
-    expect(
-      relativeTimeLabel(
-        "2026-08-06T09:59:30Z",
-        new Date("2026-08-06T10:00:00Z"),
-      ),
-    ).toBe("30s ago");
-    expect(
-      relativeTimeLabel(
-        "2026-08-06T08:00:00Z",
-        new Date("2026-08-06T10:00:00Z"),
-      ),
-    ).toBe("2h ago");
-    expect(
-      relativeTimeLabel(
-        "2026-08-05T08:00:00Z",
-        new Date("2026-08-06T10:00:00Z"),
-      ),
-    ).toBe("yesterday");
-    expect(
-      relativeTimeLabel(
-        "2026-08-02T08:00:00Z",
-        new Date("2026-08-06T10:00:00Z"),
-      ),
-    ).toBe("4d ago");
-    expect(
-      relativeTimeLabel(
-        "2026-07-01T08:00:00Z",
-        new Date("2026-08-06T10:00:00Z"),
-      ),
-    ).toBe(new Date("2026-07-01T08:00:00Z").toLocaleDateString());
-    expect(
-      relativeTimeLabel("not-a-date", new Date("2026-08-06T10:00:00Z")),
-    ).toBeUndefined();
   });
 
   it("groups task associations by canonical review key", () => {
@@ -394,9 +265,9 @@ describe("Bitbucket view models", () => {
     const repository = normalizeRepositoryInspection(serverRepository);
 
     expect(repository).toEqual(expectedRepository);
-    expect(normalizeRepositories({ repositories: [serverRepository] })).toEqual(
-      [expectedRepository],
-    );
+    expect(normalizeRepositories({ repositories: [serverRepository] })).toEqual([
+      expectedRepository,
+    ]);
     expect(pluginRepositoryInput(repository)).toEqual({
       provider_id: "bitbucket",
       provider_host: "bitbucket.org",
@@ -418,9 +289,7 @@ describe("Bitbucket view models", () => {
       cloneUrl: "https://bitbucket.org/acme/selected.git",
     };
 
-    expect(
-      pullRequestListRequest(repository, "fix", "open", "repo-page-2", 25),
-    ).toEqual({
+    expect(pullRequestListRequest(repository, "fix", "open", "repo-page-2", 25)).toEqual({
       actionKey: "pullrequests.search",
       body: {
         repository: pluginRepositoryInput(repository),
@@ -430,9 +299,7 @@ describe("Bitbucket view models", () => {
         limit: 25,
       },
     });
-    expect(
-      pullRequestListRequest(null, "fix", "open", "queue-page-2", 25),
-    ).toEqual({
+    expect(pullRequestListRequest(null, "fix", "open", "queue-page-2", 25)).toEqual({
       actionKey: "pullrequests.queue",
       body: {
         view: "queue",
@@ -442,9 +309,7 @@ describe("Bitbucket view models", () => {
         limit: 25,
       },
     });
-    expect(
-      pullRequestListRequest(null, "fix login state:merged", "open"),
-    ).toEqual({
+    expect(pullRequestListRequest(null, "fix login state:merged", "open")).toEqual({
       actionKey: "pullrequests.queue",
       body: {
         view: "queue",
@@ -831,32 +696,18 @@ describe("Bitbucket view models", () => {
       repository_id: "acme/widgets",
       repository_name: "widgets",
       state: "OPEN",
-      capabilities: [
-        "approve",
-        "merge",
-        "decline",
-        "comments",
-        "thread_replies",
-      ],
+      capabilities: ["approve", "merge", "decline", "comments", "thread_replies"],
     })!;
 
     expect(
-      changeRequestDetailActions({ ...base, viewerApproved: false }).map(
-        ({ id }) => id,
-      ),
+      changeRequestDetailActions({ ...base, viewerApproved: false }).map(({ id }) => id),
     ).toEqual(["approve", "merge", "decline", "comment", "reply"]);
     expect(
-      changeRequestDetailActions({ ...base, viewerApproved: true }).map(
-        ({ id }) => id,
-      ),
+      changeRequestDetailActions({ ...base, viewerApproved: true }).map(({ id }) => id),
     ).toEqual(["unapprove", "merge", "decline", "comment", "reply"]);
-    expect(changeRequestDetailActions({ ...base, state: "MERGED" })).toEqual(
-      [],
-    );
+    expect(changeRequestDetailActions({ ...base, state: "MERGED" })).toEqual([]);
     expect(
-      changeRequestDetailActions({ ...base, capabilities: ["comments"] }).map(
-        ({ id }) => id,
-      ),
+      changeRequestDetailActions({ ...base, capabilities: ["comments"] }).map(({ id }) => id),
     ).toEqual(["comment"]);
   });
 
@@ -932,11 +783,9 @@ describe("Bitbucket view models", () => {
     expect(linkPullRequestBody("acme/widgets#42")).toEqual({
       review_key: "acme/widgets#42",
     });
-    expect(
-      linkPullRequestBody(
-        "https://bitbucket.org/acme/widgets/pull-requests/42",
-      ),
-    ).toEqual({ review_key: "acme/widgets#42" });
+    expect(linkPullRequestBody("https://bitbucket.org/acme/widgets/pull-requests/42")).toEqual({
+      review_key: "acme/widgets#42",
+    });
     expect(
       linkPullRequestBody(
         "https://bitbucket.example.test/projects/ENG/repos/widgets/pull-requests/42/overview",
@@ -947,31 +796,18 @@ describe("Bitbucket view models", () => {
         "https://bitbucket.example.test/bitbucket/projects/ENG/repos/widgets/pull-requests/42/overview",
       ),
     ).toEqual({ review_key: "ENG/widgets#42" });
-    expect(
-      linkPullRequestBody("https://bitbucket.org/acme/widgets/issues/42"),
-    ).toBeNull();
+    expect(linkPullRequestBody("https://bitbucket.org/acme/widgets/issues/42")).toBeNull();
   });
 
   it("shows create only when task repository context is Bitbucket or not yet known", () => {
     expect(taskSupportsBitbucketRepository([])).toBe(true);
-    expect(
-      taskSupportsBitbucketRepository([{ repository_id: "host-repository" }]),
-    ).toBe(true);
-    expect(taskSupportsBitbucketRepository([{ provider: "github" }])).toBe(
-      false,
-    );
-    expect(
-      taskSupportsBitbucketRepository([{ provider_id: "bitbucket" }]),
-    ).toBe(true);
+    expect(taskSupportsBitbucketRepository([{ repository_id: "host-repository" }])).toBe(true);
+    expect(taskSupportsBitbucketRepository([{ provider: "github" }])).toBe(false);
+    expect(taskSupportsBitbucketRepository([{ provider_id: "bitbucket" }])).toBe(true);
   });
 
   it("uses workspace scope for remote pull-request actions without a provider-local repository ID", () => {
-    const input = workspacePullRequestAction(
-      "workspace-1",
-      "acme/widgets#42",
-      "42",
-      "merge",
-    );
+    const input = workspacePullRequestAction("workspace-1", "acme/widgets#42", "42", "merge");
 
     expect(input).toEqual({
       workspaceId: "workspace-1",
@@ -986,9 +822,7 @@ describe("Bitbucket view models", () => {
   });
 
   it("builds bounded approve, comment, and reply review mutations", () => {
-    expect(
-      workspaceReviewAction("workspace-1", "acme/widgets#42", "42", "approve"),
-    ).toEqual({
+    expect(workspaceReviewAction("workspace-1", "acme/widgets#42", "42", "approve")).toEqual({
       workspaceId: "workspace-1",
       body: {
         review_key: "acme/widgets#42",
@@ -1068,9 +902,7 @@ describe("Bitbucket view models", () => {
 
     expect(taskDialogInitialValues(pullRequest, review)).toEqual({
       title: "Review: Improve mobile review",
-      description: expect.stringContaining(
-        "https://bitbucket.org/acme/widgets/pull-requests/42",
-      ),
+      description: expect.stringContaining("https://bitbucket.org/acme/widgets/pull-requests/42"),
       remoteUrl: "https://bitbucket.org/acme/widgets/pull-requests/42",
       branch: "feature/mobile-review",
       checkoutBranch: "feature/mobile-review",
@@ -1100,9 +932,7 @@ describe("Bitbucket view models", () => {
       defaultBranch: "main",
     };
 
-    expect(
-      taskDialogInitialValues(pullRequest, review, undefined, repository),
-    ).toMatchObject({
+    expect(taskDialogInitialValues(pullRequest, review, undefined, repository)).toMatchObject({
       remoteUrl: "https://bitbucket.org/acme/widgets/pull-requests/42",
       remoteRepository: repository,
     });
@@ -1141,9 +971,7 @@ describe("Bitbucket view models", () => {
           executor_id: "executor-runtime-1",
           executor_profile_id: "executor-profile-1",
           plan_mode: true,
-          attachments: [
-            { type: "image", data: "not-forwarded", mime_type: "image/png" },
-          ],
+          attachments: [{ type: "image", data: "not-forwarded", mime_type: "image/png" }],
         },
         "launch-123",
       ),
@@ -1250,12 +1078,8 @@ describe("Bitbucket view models", () => {
       auth_identity: "ari@example.test",
       cloud_workspace: "acme-platform",
     });
-    expect(
-      validateCloudWorkspace({ ...cloudToken, cloudWorkspace: "" }),
-    ).toContain("workspace");
-    expect(
-      validateConnectionIdentity({ ...cloudToken, identity: "" }),
-    ).toContain("email");
+    expect(validateCloudWorkspace({ ...cloudToken, cloudWorkspace: "" })).toContain("workspace");
+    expect(validateConnectionIdentity({ ...cloudToken, identity: "" })).toContain("email");
     const cloudOAuth = connectionActionBody({
       ...cloudToken,
       authMethod: "oauth",
@@ -1302,19 +1126,13 @@ describe("Bitbucket view models", () => {
       oauth_redirect_url:
         "https://kandev.example.test/api/plugins/kandev-plugin-bitbucket/webhooks/oauth-callback",
     });
-    expect(connectionSaveBody(oauth)).not.toHaveProperty(
-      "oauth_authorization_url",
-    );
+    expect(connectionSaveBody(oauth)).not.toHaveProperty("oauth_authorization_url");
     expect(connectionSaveBody(oauth)).not.toHaveProperty("oauth_token_url");
-    expect(connectionActionBody(oauth)).not.toHaveProperty(
-      "oauth_client_secret",
-    );
+    expect(connectionActionBody(oauth)).not.toHaveProperty("oauth_client_secret");
     expect(oauthStartInput("workspace-1")).toEqual({
       workspaceId: "workspace-1",
     });
-    expect(
-      validateOAuthRegistration({ ...oauth, oauthClientSecret: "" }),
-    ).toContain("secret");
+    expect(validateOAuthRegistration({ ...oauth, oauthClientSecret: "" })).toContain("secret");
     const savedRegistration = {
       ...oauth,
       oauthRegistrationConfigured: true,
@@ -1322,15 +1140,9 @@ describe("Bitbucket view models", () => {
       oauthClientSecret: "",
     };
     expect(validateOAuthRegistration(savedRegistration)).toBeNull();
-    expect(connectionSaveBody(savedRegistration)).not.toHaveProperty(
-      "oauth_client_id",
-    );
-    expect(connectionSaveBody(savedRegistration)).not.toHaveProperty(
-      "oauth_client_secret",
-    );
-    expect(connectionSaveBody(savedRegistration)).not.toHaveProperty(
-      "oauth_redirect_url",
-    );
+    expect(connectionSaveBody(savedRegistration)).not.toHaveProperty("oauth_client_id");
+    expect(connectionSaveBody(savedRegistration)).not.toHaveProperty("oauth_client_secret");
+    expect(connectionSaveBody(savedRegistration)).not.toHaveProperty("oauth_redirect_url");
     expect(
       connectionOAuthRegistration({
         oauth_client_secret: "must-not-reflect",
@@ -1347,9 +1159,7 @@ describe("Bitbucket view models", () => {
     ).toBe(
       "https://api.kandev.example.test/api/plugins/kandev-plugin-bitbucket/webhooks/oauth-callback",
     );
-    expect(
-      deriveOAuthCallbackURL("", "https://kandev.example.test/workspaces/acme"),
-    ).toBe(
+    expect(deriveOAuthCallbackURL("", "https://kandev.example.test/workspaces/acme")).toBe(
       "https://kandev.example.test/api/plugins/kandev-plugin-bitbucket/webhooks/oauth-callback",
     );
   });

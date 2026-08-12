@@ -38,8 +38,9 @@ installation and capabilities are API permission gates, not a sandbox.
   This plugin intentionally does **not** set `min_kandev_version` until that
   compatible Kandev release has merged and shipped.
 - Go version from `go.mod` and Node 24 for the UI toolchain.
-- A sibling Kandev checkout while developing, because the SDK is resolved with
-  the local `replace` directive:
+- A sibling Kandev checkout while developing, because the pre-release Go and
+  frontend SDKs are resolved from that exact host source until their first
+  compatible versions are published:
 
   ```text
   parent-directory/
@@ -146,10 +147,11 @@ and task Git limitations in [Integrations](https://kandev.dev/docs/integrations)
 ## Package and release policy
 
 Pull-request CI validates formatting, Go tests/vet, UI typecheck/build/tests,
-archive contents, and generated checksums. Pull requests also run the
-disposable-host packaged-plugin contract when `KANDEV_PLUGIN_E2E_URL` is
-configured; forks and repositories without that secret retain the non-secret
-gates plus an explicit notice. The tag release workflow always runs the
+archive contents, and generated checksums. A required, credential-free job
+checks out the exact reviewed Kandev host, builds both heads, installs the real
+package, and exercises its desktop/mobile lifecycle and shared review/status
+surfaces. `KANDEV_PLUGIN_E2E_URL` adds an optional external-host smoke test; it
+is not the compatibility gate. The tag release workflow always runs the
 packaged-plugin contract before it uploads
 `<id>-<version>.tar.gz` on a matching `v<version>` tag.
 

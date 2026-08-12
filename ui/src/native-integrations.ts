@@ -15,21 +15,12 @@ import {
   reviewStore,
 } from "./review-store";
 
-export function registerNativeIntegrations(
-  registry: PluginRegistry,
-  host: PluginHost,
-) {
+export function registerNativeIntegrations(registry: PluginRegistry, host: PluginHost) {
   registry.registerRepositoryProvider({
     id: "bitbucket",
     label: "Bitbucket",
     icon: "bitbucket",
-    async listRepositories({
-      workspaceId: scopedWorkspaceId,
-      query,
-      cursor,
-      limit,
-      signal,
-    }) {
+    async listRepositories({ workspaceId: scopedWorkspaceId, query, cursor, limit, signal }) {
       const response = await host.api.invokeAction<unknown>(
         action.repositoriesList,
         {
@@ -47,11 +38,6 @@ export function registerNativeIntegrations(
         repositories: normalizeRepositories(response),
         nextCursor: text(record(response).next_cursor) || undefined,
       };
-    },
-    matchesURL(url) {
-      return /(?:^git@bitbucket\.org:|^https?:\/\/[^/]*bitbucket[^/]*\/|\/scm\/)/i.test(
-        url,
-      );
     },
     async listBranches({ workspaceId: scopedWorkspaceId, repository, signal }) {
       const response = await host.api.invokeAction<Record<string, unknown>>(
@@ -112,9 +98,7 @@ export function registerNativeIntegrations(
       return {
         url: text(response.url),
         provider: "bitbucket",
-        ...(typeof response.linked === "boolean"
-          ? { linked: response.linked }
-          : {}),
+        ...(typeof response.linked === "boolean" ? { linked: response.linked } : {}),
         ...(text(response.association_error)
           ? { associationError: text(response.association_error) }
           : {}),
@@ -129,8 +113,7 @@ export function registerNativeIntegrations(
     async run(context) {
       host.openTaskLinkDialog({
         title: "Link Bitbucket pull request",
-        description:
-          "Use a Bitbucket pull request URL or canonical key for this task.",
+        description: "Use a Bitbucket pull request URL or canonical key for this task.",
         inputLabel: "Pull request",
         placeholder: "workspace/repository#42",
         emptyError: "Enter a Bitbucket pull request URL or key.",
@@ -141,8 +124,7 @@ export function registerNativeIntegrations(
         submitTestId: "bitbucket-review-reference-submit",
         async onSubmit(reference, signal) {
           const body = linkPullRequestBody(reference);
-          if (!body)
-            throw new Error("Enter a Bitbucket pull request URL or key.");
+          if (!body) throw new Error("Enter a Bitbucket pull request URL or key.");
           await host.api.invokeAction(
             action.pullRequestsLink,
             {
@@ -153,12 +135,7 @@ export function registerNativeIntegrations(
             { signal },
           );
           await Promise.all([
-            refreshReviewStore(
-              host,
-              context.taskId,
-              signal,
-              context.workspaceId,
-            ),
+            refreshReviewStore(host, context.taskId, signal, context.workspaceId),
             refreshAssociationStore(host, context.workspaceId, signal),
           ]).catch(() => undefined);
         },
@@ -189,14 +166,13 @@ export function registerNativeIntegrations(
         { signal },
       );
     },
-    ReviewPanel: (props = {}) =>
+    ReviewPanel: (props) =>
       host.jsx(ReviewDetailPanel, {
         host,
         workspaceId: text(props.workspaceId) || undefined,
         taskId: text(props.taskId) || undefined,
         reviewKey: text(props.reviewKey),
-        presentation:
-          text(props.presentation) === "mobile" ? "mobile" : "desktop",
+        presentation: text(props.presentation) === "mobile" ? "mobile" : "desktop",
       }),
   });
 }

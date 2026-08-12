@@ -47,9 +47,8 @@ function liveTarget(): LiveTarget {
     throw new Error("KANDEV_BITBUCKET_LIVE_PRODUCT must be cloud or data_center");
   }
   const authMethod = requiredEnvironment("KANDEV_BITBUCKET_LIVE_AUTH_METHOD");
-  const allowedAuthMethods = product === "cloud"
-    ? ["api_token"]
-    : ["user_pat", "project_token", "repository_token"];
+  const allowedAuthMethods =
+    product === "cloud" ? ["api_token"] : ["user_pat", "project_token", "repository_token"];
   if (!allowedAuthMethods.includes(authMethod)) {
     throw new Error(
       `KANDEV_BITBUCKET_LIVE_AUTH_METHOD must be one of ${allowedAuthMethods.join(", ")} for ${product}`,
@@ -112,20 +111,29 @@ async function invokeAction(
   return responseJSON(response);
 }
 
-async function resolveKandevWorkspace(request: APIRequestContext, configured?: string): Promise<string> {
+async function resolveKandevWorkspace(
+  request: APIRequestContext,
+  configured?: string,
+): Promise<string> {
   const response = await request.get("/api/v1/workspaces");
   const text = await response.text();
   if (!response.ok()) throw new Error(`Could not list disposable Kandev workspaces: ${text}`);
   const payload = JSON.parse(text) as { workspaces?: Array<{ id?: string }> };
-  const ids = (payload.workspaces ?? []).flatMap((workspace) => workspace.id ? [workspace.id] : []);
+  const ids = (payload.workspaces ?? []).flatMap((workspace) =>
+    workspace.id ? [workspace.id] : [],
+  );
   if (configured) {
     if (!ids.includes(configured)) {
-      throw new Error("KANDEV_BITBUCKET_LIVE_KANDEV_WORKSPACE_ID is not present on the disposable host");
+      throw new Error(
+        "KANDEV_BITBUCKET_LIVE_KANDEV_WORKSPACE_ID is not present on the disposable host",
+      );
     }
     return configured;
   }
   if (ids.length !== 1) {
-    throw new Error("Set KANDEV_BITBUCKET_LIVE_KANDEV_WORKSPACE_ID when the disposable host does not have exactly one workspace");
+    throw new Error(
+      "Set KANDEV_BITBUCKET_LIVE_KANDEV_WORKSPACE_ID when the disposable host does not have exactly one workspace",
+    );
   }
   return ids[0];
 }
@@ -144,41 +152,68 @@ function connectionBody(target: LiveTarget): JsonRecord {
 }
 
 function records(value: unknown): JsonRecord[] {
-  return Array.isArray(value) ? value.filter((item): item is JsonRecord => Boolean(item) && typeof item === "object") : [];
+  return Array.isArray(value)
+    ? value.filter((item): item is JsonRecord => Boolean(item) && typeof item === "object")
+    : [];
 }
 
 function reviewKey(target: LiveTarget, number: number): string {
   return `${target.repositoryNamespace}/${target.repositorySlug}#${number}`;
 }
 
-test("exercises a configured disposable Bitbucket target through the packaged plugin", async ({ request }) => {
+test("exercises a configured disposable Bitbucket target through the packaged plugin", async ({
+  request,
+}) => {
   const target = liveTarget();
   const workspaceId = await resolveKandevWorkspace(request, target.kandevWorkspaceId);
 
   try {
-    const connection = await invokeAction(request, workspaceId, "connection.save", connectionBody(target));
-    expect(connection).toMatchObject({ state: "connected", healthy: true, product: target.product });
+    const connection = await invokeAction(
+      request,
+      workspaceId,
+      "connection.save",
+      connectionBody(target),
+    );
+    expect(connection).toMatchObject({
+      state: "connected",
+      healthy: true,
+      product: target.product,
+    });
 
     const repositoryResult = await invokeAction(request, workspaceId, "repositories.list", {
       query: target.repositorySlug,
       limit: 100,
     });
     const repository = records(repositoryResult.repositories).find(
-      (candidate) => candidate.owner_or_project === target.repositoryNamespace && candidate.name === target.repositorySlug,
+      (candidate) =>
+        candidate.owner_or_project === target.repositoryNamespace &&
+        candidate.name === target.repositorySlug,
     );
     expect(repository, "configured repository must be discoverable").toBeDefined();
     expect(repository?.clone_url).toEqual(expect.stringMatching(/^https:\/\/[^@]+$/));
 
-    const branches = await invokeAction(request, workspaceId, "branches.list", { repository });
+    const branches = await invokeAction(request, workspaceId, "repositories.branches", {
+      repository,
+    });
     expect(records(branches.branches).length).toBeGreaterThan(0);
 
     const key = reviewKey(target, target.pullRequestNumber);
-    const pullRequest = await invokeAction(request, workspaceId, "pullrequests.inspect", { review_key: key });
-    expect(pullRequest).toMatchObject({ review_key: key, number: target.pullRequestNumber });
+    const pullRequest = await invokeAction(request, workspaceId, "pullrequests.inspect", {
+      review_key: key,
+    });
+    expect(pullRequest).toMatchObject({
+      review_key: key,
+      number: target.pullRequestNumber,
+    });
     expect(pullRequest.url).toEqual(expect.stringMatching(/^https:\/\/[^@]+$/));
 
-    const review = await invokeAction(request, workspaceId, "reviews.get", { review_key: key });
-    expect(review).toMatchObject({ review_key: key, number: target.pullRequestNumber });
+    const review = await invokeAction(request, workspaceId, "reviews.get", {
+      review_key: key,
+    });
+    expect(review).toMatchObject({
+      review_key: key,
+      number: target.pullRequestNumber,
+    });
     expect(Array.isArray(review.files)).toBe(true);
     expect(Array.isArray(review.commits)).toBe(true);
     expect(Array.isArray(review.threads)).toBe(true);
@@ -195,16 +230,25 @@ test("exercises a configured disposable Bitbucket target through the packaged pl
       const approvalKey = reviewKey(target, target.approvalPullRequestNumber!);
       let approved = false;
       try {
-        await invokeAction(request, workspaceId, "reviews.action", { review_key: approvalKey, kind: "approve" });
+        await invokeAction(request, workspaceId, "reviews.action", {
+          review_key: approvalKey,
+          kind: "approve",
+        });
         approved = true;
       } finally {
         if (approved) {
-          await invokeAction(request, workspaceId, "reviews.action", { review_key: approvalKey, kind: "unapprove" });
+          await invokeAction(request, workspaceId, "reviews.action", {
+            review_key: approvalKey,
+            kind: "unapprove",
+          });
         }
       }
 
       const declineKey = reviewKey(target, target.declinePullRequestNumber!);
-      await invokeAction(request, workspaceId, "reviews.action", { review_key: declineKey, kind: "decline" });
+      await invokeAction(request, workspaceId, "reviews.action", {
+        review_key: declineKey,
+        kind: "decline",
+      });
     }
   } finally {
     await invokeAction(request, workspaceId, "connection.disconnect").catch(() => undefined);

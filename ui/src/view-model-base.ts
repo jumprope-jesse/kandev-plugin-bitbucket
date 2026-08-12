@@ -1,7 +1,11 @@
 export type JsonRecord = Record<string, unknown>;
 
 export type ConnectionState =
-  "unconfigured" | "checking" | "connected" | "auth_required" | "unavailable";
+  | "unconfigured"
+  | "checking"
+  | "connected"
+  | "auth_required"
+  | "unavailable";
 
 /** Host RepositoryProviderRegistration contract. Never return plugin snake_case here. */
 export type RepositoryInspection = {
@@ -46,57 +50,6 @@ export type PullRequest = {
   tasks: TaskRowLink[];
   capabilities: string[];
 };
-
-/** Resolves exactly one persisted Kandev repository by canonical provider identity. */
-export function matchingHostRepositoryId(
-  repositories: JsonRecord[],
-  pullRequest: Pick<PullRequest, "repositoryId" | "providerScope">,
-): string | undefined {
-  const providerRepositoryID = string(pullRequest.repositoryId)?.trim();
-  const providerScope = string(pullRequest.providerScope)?.trim();
-  if (providerRepositoryID && providerScope) {
-    const scopedMatches = repositories.filter((repository) => {
-      if ((string(repository.provider) ?? "").toLowerCase() !== "bitbucket")
-        return false;
-      const repositoryScope = string(repository.provider_scope)?.trim();
-      const repositoryID =
-        string(repository.provider_repo_id)?.trim() ??
-        string(repository.provider_repository_id)?.trim();
-      return (
-        repositoryScope === providerScope &&
-        repositoryID === providerRepositoryID
-      );
-    });
-    return scopedMatches.length === 1 ? string(scopedMatches[0].id) : undefined;
-  }
-  const target = canonicalRepositoryIdentity(pullRequest.repositoryId);
-  if (!target) return undefined;
-  const matches = repositories.filter((repository) => {
-    if ((string(repository.provider) ?? "").toLowerCase() !== "bitbucket")
-      return false;
-    const owner = string(repository.provider_owner);
-    const name = string(repository.provider_name);
-    const identities = [
-      string(repository.provider_repo_id),
-      string(repository.provider_repository_id),
-      owner && name ? `${owner}/${name}` : undefined,
-    ];
-    return identities.some(
-      (identity) => canonicalRepositoryIdentity(identity) === target,
-    );
-  });
-  if (matches.length !== 1) return undefined;
-  return string(matches[0].id);
-}
-
-export function canonicalRepositoryIdentity(
-  value: unknown,
-): string | undefined {
-  const identity = string(value)
-    ?.replace(/^\/+|\/+$/g, "")
-    .replace(/\.git$/i, "");
-  return identity?.toLowerCase();
-}
 
 export type TaskRowLink = {
   id: string;
@@ -299,26 +252,6 @@ export function displayPullRequestAuthor(author?: string): string | undefined {
   return value;
 }
 
-export function relativeTimeLabel(
-  value?: string,
-  now = new Date(),
-): string | undefined {
-  if (!value) return undefined;
-  const instant = new Date(value);
-  if (!Number.isFinite(instant.getTime())) return undefined;
-  const seconds = Math.floor((now.getTime() - instant.getTime()) / 1000);
-  if (seconds < 10) return "just now";
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days === 1) return "yesterday";
-  if (days < 7) return `${days}d ago`;
-  return instant.toLocaleDateString();
-}
-
 export function oauthStartInput(workspaceId: string): { workspaceId: string } {
   return { workspaceId };
 }
@@ -330,10 +263,7 @@ export function disconnectConnectionInput(workspaceId: string): {
   return { workspaceId };
 }
 
-export function deriveOAuthCallbackURL(
-  apiBaseUrl: string,
-  browserOrigin: string,
-): string {
+export function deriveOAuthCallbackURL(apiBaseUrl: string, browserOrigin: string): string {
   const backendOrigin = apiBaseUrl.trim() || browserOrigin;
   return new URL(
     "/api/plugins/kandev-plugin-bitbucket/webhooks/oauth-callback",
@@ -351,18 +281,9 @@ export function string(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-/** Reads Kandev's active workspace from the public host store shape. */
-export function activeWorkspaceIdFromState(state: unknown): string | undefined {
-  return string(record(record(state).workspaces).activeId);
-}
-
 export function number(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (
-    typeof value === "string" &&
-    value.trim() &&
-    Number.isFinite(Number(value))
-  )
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value)))
     return Number(value);
   return undefined;
 }
@@ -387,9 +308,7 @@ export function timestamp(value: unknown): string | undefined {
       : undefined;
   }
   const date = new Date(text);
-  return Number.isFinite(date.getTime()) && date.getUTCFullYear() > 1
-    ? text
-    : undefined;
+  return Number.isFinite(date.getTime()) && date.getUTCFullYear() > 1 ? text : undefined;
 }
 
 export function boolean(value: unknown): boolean | undefined {
@@ -415,14 +334,10 @@ export function pullRequestURL(value: unknown): string | undefined {
   return linkHref(links.html) ?? linkHref(links.self) ?? linkHref(value);
 }
 
-export function personLink(
-  value: unknown,
-  kind: "html" | "avatar",
-): string | undefined {
+export function personLink(value: unknown, kind: "html" | "avatar"): string | undefined {
   const person = record(value);
   return (
-    linkHref(record(person.links)[kind]) ??
-    linkHref(person[kind === "html" ? "url" : "avatarUrl"])
+    linkHref(record(person.links)[kind]) ?? linkHref(person[kind === "html" ? "url" : "avatarUrl"])
   );
 }
 
@@ -442,60 +357,45 @@ export function toCapabilities(value: unknown): string[] {
       .map((capability) => capability.trim())
       .filter(Boolean);
   }
-  return array(value).flatMap((entry) =>
-    typeof entry === "string" ? [entry] : [],
-  );
+  return array(value).flatMap((entry) => (typeof entry === "string" ? [entry] : []));
 }
 
-export function normalizeTaskLinks(
-  value: unknown,
-  reviewKey = "",
-): TaskRowLink[] {
-  return itemList(value, ["associations", "tasks", "items", "values"]).flatMap(
-    (entry) => {
-      const source = record(entry);
-      const taskId = string(source.task_id) ?? string(source.taskId);
-      const entryReviewKey =
-        string(source.review_key) ?? string(source.reviewKey) ?? reviewKey;
-      if (!taskId || (reviewKey && entryReviewKey !== reviewKey)) return [];
-      return [
-        {
-          id: string(source.id) ?? `${entryReviewKey}:${taskId}`,
-          taskId,
-          fallbackTitle:
-            string(source.task_title) ??
-            string(source.taskTitle) ??
-            string(source.title) ??
-            "Bitbucket task",
-        },
-      ];
-    },
-  );
+export function normalizeTaskLinks(value: unknown, reviewKey = ""): TaskRowLink[] {
+  return itemList(value, ["associations", "tasks", "items", "values"]).flatMap((entry) => {
+    const source = record(entry);
+    const taskId = string(source.task_id) ?? string(source.taskId);
+    const entryReviewKey = string(source.review_key) ?? string(source.reviewKey) ?? reviewKey;
+    if (!taskId || (reviewKey && entryReviewKey !== reviewKey)) return [];
+    return [
+      {
+        id: string(source.id) ?? `${entryReviewKey}:${taskId}`,
+        taskId,
+        fallbackTitle:
+          string(source.task_title) ??
+          string(source.taskTitle) ??
+          string(source.title) ??
+          "Bitbucket task",
+      },
+    ];
+  });
 }
 
-export function normalizePullRequestAssociations(
-  value: unknown,
-): Record<string, TaskRowLink[]> {
+export function normalizePullRequestAssociations(value: unknown): Record<string, TaskRowLink[]> {
   const result: Record<string, TaskRowLink[]> = {};
   for (const entry of itemList(value, ["associations", "items", "values"])) {
     const source = record(entry);
     const reviewKey = string(source.review_key) ?? string(source.reviewKey);
     if (!reviewKey) continue;
     const links = normalizeTaskLinks([source], reviewKey);
-    const repositoryId =
-      string(source.repository_id) ?? string(source.repositoryId);
-    const changeRequestNumber =
-      number(source.number) ?? number(source.changeRequestNumber);
+    const repositoryId = string(source.repository_id) ?? string(source.repositoryId);
+    const changeRequestNumber = number(source.number) ?? number(source.changeRequestNumber);
     for (const link of links) {
       link.repositoryId = repositoryId;
       link.changeRequestNumber = changeRequestNumber;
     }
     if (links.length) {
       result[reviewKey] = [...(result[reviewKey] ?? []), ...links];
-      const identity = pullRequestAssociationIdentity(
-        repositoryId,
-        changeRequestNumber,
-      );
+      const identity = pullRequestAssociationIdentity(repositoryId, changeRequestNumber);
       if (identity) result[identity] = [...(result[identity] ?? []), ...links];
     }
   }
@@ -504,8 +404,7 @@ export function normalizePullRequestAssociations(
 
 export function normalizeReviewComment(value: unknown): ReviewComment | null {
   const comment = record(value);
-  const id =
-    string(comment.id) ?? string(comment.ID) ?? string(comment.comment_id);
+  const id = string(comment.id) ?? string(comment.ID) ?? string(comment.comment_id);
   if (!id) return null;
   const normalized: ReviewComment = {
     id,
@@ -524,13 +423,9 @@ export function normalizeReviewComment(value: unknown): ReviewComment | null {
       "",
   };
   const parentId =
-    string(comment.parent_id) ??
-    string(comment.parentId) ??
-    string(comment.ParentID);
+    string(comment.parent_id) ?? string(comment.parentId) ?? string(comment.ParentID);
   const createdAt =
-    timestamp(comment.created_at) ??
-    timestamp(comment.createdAt) ??
-    timestamp(comment.When);
+    timestamp(comment.created_at) ?? timestamp(comment.createdAt) ?? timestamp(comment.When);
   const line =
     number(comment.line) ??
     number(record(comment.inline).to) ??
@@ -543,8 +438,7 @@ export function normalizeReviewComment(value: unknown): ReviewComment | null {
 
 export function statusTone(state: string): PullRequest["statusTone"] {
   const normalized = state.toLowerCase();
-  if (/(success|passed|approved|merged|open)/.test(normalized))
-    return "success";
+  if (/(success|passed|approved|merged|open)/.test(normalized)) return "success";
   if (/(fail|declined|error|blocked)/.test(normalized)) return "danger";
   if (/(pending|build|review|draft)/.test(normalized)) return "warning";
   return "neutral";

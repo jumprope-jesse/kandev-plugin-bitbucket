@@ -37,7 +37,7 @@ func (w *Workflows) handleRepositoryAction(ctx context.Context, request *plugins
 		return actionResponse(map[string]any{
 			"repositories": repositoryViews(page.Repositories), "next_cursor": page.NextCursor,
 		})
-	case "branches.list", "repositories.branches":
+	case "repositories.branches":
 		var input repositoryInput
 		if err := decodeAction(request.Body, &input); err != nil {
 			return nil, err
@@ -63,6 +63,13 @@ func (w *Workflows) handleRepositoryAction(ctx context.Context, request *plugins
 		if err != nil || parsed.User != nil || parsed.Host == "" || parsed.Scheme != "https" {
 			return nil, invalidActionError("repository URL must be a credential-free HTTPS URL")
 		}
+		unconfigured, err := w.workspaceIsUnconfigured(ctx, request.Context.WorkspaceID)
+		if err != nil {
+			return nil, err
+		}
+		if unconfigured {
+			return actionResponse(map[string]any{"matched": false})
+		}
 		provider, err := w.provider(ctx, request.Context.WorkspaceID)
 		if err != nil {
 			return nil, err
@@ -77,7 +84,7 @@ func (w *Workflows) handleRepositoryAction(ctx context.Context, request *plugins
 		}
 		locator, inspectErr := provider.InspectPullRequestURL(input.URL)
 		if inspectErr != nil {
-			return nil, notFoundActionError("Bitbucket repository is unavailable")
+			return actionResponse(map[string]any{"matched": false})
 		}
 		locator.Repository, inspectErr = hydrateRepositoryIdentity(ctx, provider, locator.Repository)
 		if inspectErr != nil {

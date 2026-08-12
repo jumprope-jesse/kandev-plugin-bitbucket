@@ -6,7 +6,7 @@ import {
   workspaceReviewAction,
 } from "./view-models";
 import { type PluginHost } from "./host-contract";
-import { usePluginQuery, useAbortableAction, isAbortError } from "./ui-runtime";
+import { isAbortError, useAbortableOperation, usePluginQuery } from "./ui-runtime";
 import { action } from "./actions";
 
 export type HostDetailActionRequest = {
@@ -45,13 +45,7 @@ export function ReviewDetailPanel({
             workspaceId: scopedWorkspaceId,
             body: {
               review_key: reviewKey,
-              include: [
-                "files",
-                "participants",
-                "threads",
-                "status",
-                "viewer",
-              ],
+              include: ["files", "participants", "threads", "status", "viewer"],
             },
           }
         : undefined,
@@ -60,30 +54,27 @@ export function ReviewDetailPanel({
   const detail = normalizeReviewDetail(review.data);
   const [busyActionId, setBusyActionId] = React.useState<string | null>(null);
   const [actionError, setActionError] = React.useState<string | null>(null);
-  const request = useAbortableAction(host);
+  const mutation = useAbortableOperation(host);
   const runAction = async (requestValue: HostDetailActionRequest) => {
     if (!detail || !scopedWorkspaceId || busyActionId) return;
-    const kind =
-      requestValue.actionId === "comment"
-        ? "add_comment"
-        : requestValue.actionId;
+    const kind = requestValue.actionId === "comment" ? "add_comment" : requestValue.actionId;
     setBusyActionId(requestValue.actionId);
     setActionError(null);
+    const request = mutation.begin();
     try {
-      await request.invoke(
+      await host.api.invokeAction(
         action.reviewsAction,
         workspaceReviewAction(scopedWorkspaceId, detail.key, detail.id, kind, {
           ...(requestValue.body ? { comment: requestValue.body } : {}),
-          ...(requestValue.threadId
-            ? { parentCommentId: requestValue.threadId }
-            : {}),
+          ...(requestValue.threadId ? { parentCommentId: requestValue.threadId } : {}),
         }),
+        { signal: request.signal },
       );
-      review.refresh();
+      if (request.isCurrent()) review.refresh();
     } catch (reason) {
-      if (!isAbortError(reason)) setActionError(errorMessage(reason));
+      if (request.isCurrent() && !isAbortError(reason)) setActionError(errorMessage(reason));
     } finally {
-      setBusyActionId(null);
+      if (request.finish()) setBusyActionId(null);
     }
   };
   return h(ui.ChangeRequestDetail, {
@@ -96,8 +87,6 @@ export function ReviewDetailPanel({
     actions: detail ? changeRequestDetailActions(detail) : [],
     busyActionId,
     onAction: runAction,
-    notice: actionError
-      ? h("p", { className: "bb-error", role: "alert" }, actionError)
-      : null,
+    notice: actionError ? h("p", { className: "bb-error", role: "alert" }, actionError) : null,
   });
 }

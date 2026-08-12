@@ -68,17 +68,16 @@ func (w *Workflows) HandleAction(ctx context.Context, request *pluginsdk.PluginA
 		return nil, forbiddenActionError("verified workspace context is required")
 	}
 	switch request.ActionKey {
-	case "connection.get", "health.get", "connection.disconnect", "connection.save", "oauth.start":
+	case "connection.get", "connection.disconnect", "connection.save", "oauth.start":
 		return w.handleConnectionAction(ctx, request)
-	case "repositories.list", "branches.list", "repositories.branches", "repositories.inspect":
+	case "repositories.list", "repositories.branches", "repositories.inspect":
 		return w.handleRepositoryAction(ctx, request)
 	case "pullrequests.search", "pullrequests.queue", "pullrequests.associations",
 		"pullrequests.get", "pullrequests.inspect", "pullrequests.create",
-		"reviews.get", "reviews.action", "pullrequests.update",
-		"tasks.launch", "pullrequests.launch",
-		"links.link", "pullrequests.link", "links.unlink", "pullrequests.unlink":
+		"reviews.get", "reviews.action", "tasks.launch",
+		"pullrequests.link", "pullrequests.unlink":
 		return w.handlePullRequestAction(ctx, request)
-	case "watches.list", "watches.get", "watches.create", "watches.update",
+	case "watches.get", "watches.create", "watches.update",
 		"watches.filter", "watches.preset", "watches.run",
 		"watches.pause", "watches.resume",
 		"watches.preview_reset", "watches.preview_delete",

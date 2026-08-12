@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"kandev-plugin-bitbucket/internal/domain"
-	"kandev-plugin-bitbucket/internal/watches"
 
 	"github.com/kandev/kandev/pkg/pluginsdk"
 )
@@ -169,7 +168,7 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 			return nil, fmt.Errorf("get review: %w", err)
 		}
 		return actionResponse(reviewView(review))
-	case "reviews.action", "pullrequests.update":
+	case "reviews.action":
 		var input reviewActionInput
 		if err := decodeAction(request.Body, &input); err != nil {
 			return nil, err
@@ -194,7 +193,7 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 			return nil, fmt.Errorf("apply review action: %w", err)
 		}
 		return actionResponse(pullRequestView(updated))
-	case "tasks.launch", "pullrequests.launch":
+	case "tasks.launch":
 		var input launchTaskInput
 		if err := decodeAction(request.Body, &input); err != nil {
 			return nil, err
@@ -206,28 +205,8 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 		if err := requireCapability(provider, domain.CapabilityPullRequests); err != nil {
 			return nil, err
 		}
-		if request.ActionKey == "tasks.launch" {
-			return w.launchWorkspaceTask(ctx, request.Context.WorkspaceID, pullRequest, input)
-		}
-		if input.Task != nil {
-			return nil, invalidActionError("native task settings are only supported by tasks.launch")
-		}
-		if request.ActionKey == "pullrequests.launch" && !input.Launch.StartAgent {
-			input.Launch.StartAgent = true
-		}
-		if err := applyLaunchPreset(&input.Launch, input.Preset); err != nil {
-			return nil, err
-		}
-		reservationIdentity, err := pullRequestReservationIdentity(pullRequest)
-		if err != nil {
-			return nil, err
-		}
-		taskID, err := w.tasks.Create(ctx, watches.Creation{WorkspaceID: request.Context.WorkspaceID, Watch: watches.Watch{ID: "manual", Launch: input.Launch}, PullRequest: watchPullRequest(pullRequest), ReservationToken: "manual:" + reservationIdentity})
-		if err != nil {
-			return nil, err
-		}
-		return actionResponse(map[string]any{"task_id": taskID})
-	case "links.link", "pullrequests.link":
+		return w.launchWorkspaceTask(ctx, request.Context.WorkspaceID, pullRequest, input)
+	case "pullrequests.link":
 		if request.Context.TaskID == "" {
 			return nil, forbiddenActionError("verified task context is required")
 		}
@@ -244,7 +223,7 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 			return nil, err
 		}
 		return actionResponse(links)
-	case "links.unlink", "pullrequests.unlink":
+	case "pullrequests.unlink":
 		if request.Context.TaskID == "" {
 			return nil, forbiddenActionError("verified task context is required")
 		}

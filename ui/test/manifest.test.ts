@@ -12,8 +12,8 @@ describe("Bitbucket manifest", () => {
     expect(manifest).toContain('key: "pullrequests.link"');
     expect(manifest).toContain('api_write: ["tasks"]');
     expect(manifest.match(/^  api_write: \["tasks"\]$/gm)).toHaveLength(1);
-    expect(manifest).toMatch(/key: "pullrequests\.launch", scope: "workspace"/);
-    expect(manifest).toMatch(/key: "pullrequests\.update", scope: "workspace"/);
+    expect(manifest).not.toContain('key: "pullrequests.launch"');
+    expect(manifest).not.toContain('key: "pullrequests.update"');
     expect(manifest).toContain('repository_providers: ["bitbucket"]');
     expect(manifest).toContain('source: "bitbucket"');
   });
