@@ -533,7 +533,7 @@ func TestWorkflows_WatchOwnedLinksAppearInTaskAndWorkspaceAssociations(t *testin
 	_, err = workflows.HandleAction(ctx, &pluginsdk.PluginActionRequest{
 		ActionKey: "pullrequests.unlink",
 		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "watch-task"},
-		Body:      []byte(`{"review_key":"workspace/repo#42"}`),
+		Body:      []byte(`{"review_key":"workspace/repo#42","provider_scope":"https://bitbucket.org","repository_id":"repo-uuid","number":42}`),
 	})
 	require.NoError(t, err)
 
@@ -560,7 +560,7 @@ func TestWorkflows_TaskScopedExplicitGetRequiresManualOrWatchAssociation(t *test
 	request := func(taskID string) *pluginsdk.PluginActionRequest {
 		return &pluginsdk.PluginActionRequest{
 			ActionKey: "pullrequests.get", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: taskID},
-			Body: []byte(`{"review_key":"workspace/repo#42"}`),
+			Body: []byte(`{"review_key":"workspace/repo#42","provider_scope":"https://bitbucket.org","repository_id":"repo-uuid","number":42}`),
 		}
 	}
 
@@ -569,7 +569,8 @@ func TestWorkflows_TaskScopedExplicitGetRequiresManualOrWatchAssociation(t *test
 	require.Zero(t, provider.getPullRequestCalls, "authorization must precede the live pull request fetch")
 
 	_, err = workflows.links.Link(ctx, "manual-task", PullRequestLink{
-		Key: pullRequest.Key(), RepositoryID: "workspace/repo", URL: pullRequest.URL, Number: int64(pullRequest.Number),
+		Key: pullRequest.Key(), RepositoryID: pullRequest.Repository.ID, URL: pullRequest.URL, Number: int64(pullRequest.Number),
+		Product: domain.ProductCloud, Host: "bitbucket.org", ConnectionScope: pullRequest.Repository.ProviderScope,
 	})
 	require.NoError(t, err)
 	_, err = workflows.HandleAction(ctx, request("manual-task"))
@@ -607,7 +608,7 @@ func TestWorkflows_PullRequestGetDoesNotMasqueradeReviewFailureAsEmptyData(t *te
 	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
 		ActionKey: "pullrequests.inspect",
 		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
-		Body:      []byte(`{"review_key":"workspace/repo#42"}`),
+		Body:      []byte(`{"review_key":"workspace/repo#42","provider_scope":"https://bitbucket.org","repository_id":"repo-uuid","number":42}`),
 	})
 
 	require.ErrorContains(t, err, "get pull request review")
@@ -709,7 +710,7 @@ func TestWorkflows_TaskGetDoesNotAutoRelinkAfterExplicitUnlink(t *testing.T) {
 	_, err = workflows.HandleAction(ctx, &pluginsdk.PluginActionRequest{
 		ActionKey: "pullrequests.unlink",
 		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1"},
-		Body:      []byte(`{"review_key":"workspace/repo#42"}`),
+		Body:      []byte(`{"review_key":"workspace/repo#42","provider_scope":"https://bitbucket.org","repository_id":"repo-uuid","number":42}`),
 	})
 	require.NoError(t, err)
 
@@ -877,7 +878,7 @@ func TestWorkflows_LinkAndUnlinkDoNotDeleteTask(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(link.Body), "workspace/repo#42")
 	_, err = workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
-		ActionKey: "pullrequests.unlink", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "manual-task"}, Body: []byte(`{"review_key":"workspace/repo#42"}`),
+		ActionKey: "pullrequests.unlink", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "manual-task"}, Body: []byte(`{"review_key":"workspace/repo#42","provider_scope":"https://bitbucket.org","repository_id":"repo-uuid","number":42}`),
 	})
 	require.NoError(t, err)
 	require.Empty(t, host.secrets, "links must not perform task or secret cleanup")
@@ -962,15 +963,46 @@ func TestWorkflows_UsesConnectionBindingWithoutResolvingProviderCredential(t *te
 }
 
 func TestWorkflows_RejectsUnsupportedReviewMutationBeforeProviderCall(t *testing.T) {
-	provider := &workflowProvider{pullRequest: testPullRequest(), capabilities: domain.Capabilities{domain.CapabilityPullRequests: true}}
+	pullRequest := testPullRequest()
+	provider := &workflowProvider{pullRequest: pullRequest, capabilities: domain.Capabilities{domain.CapabilityPullRequests: true}}
 	workflows, err := NewWorkflows(newConnectionHost(), staticResolver{provider: provider})
+	require.NoError(t, err)
+	_, err = workflows.links.Link(context.Background(), "task-1", PullRequestLink{
+		Key: pullRequest.Key(), RepositoryID: pullRequest.Repository.ID,
+		URL: pullRequest.URL, Number: int64(pullRequest.Number), Product: domain.ProductCloud,
+		Host: "bitbucket.org", ConnectionScope: pullRequest.Repository.ProviderScope,
+	})
 	require.NoError(t, err)
 
 	_, err = workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
-		ActionKey: "reviews.action", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"}, Body: []byte(`{"review_key":"workspace/repo#42","operation":"merge"}`),
+		ActionKey: "reviews.action", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1"}, Body: []byte(`{"review_key":"workspace/repo#42","provider_scope":"https://bitbucket.org","repository_id":"repo-uuid","number":42,"operation":"merge"}`),
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "does not support merge")
+	require.Zero(t, provider.actions)
+}
+
+func TestWorkflows_ReviewMutationCannotRetargetRecreatedRepository(t *testing.T) {
+	pullRequest := testPullRequest()
+	pullRequest.Repository.ID = "repo-uuid-new"
+	provider := &workflowProvider{pullRequest: pullRequest}
+	workflows, err := NewWorkflows(newConnectionHost(), staticResolver{provider: provider})
+	require.NoError(t, err)
+	_, err = workflows.links.Link(context.Background(), "task-1", PullRequestLink{
+		Key: pullRequest.Key(), RepositoryID: "repo-uuid-old",
+		URL: pullRequest.URL, Number: int64(pullRequest.Number), Product: domain.ProductCloud,
+		Host: "bitbucket.org", ConnectionScope: pullRequest.Repository.ProviderScope,
+	})
+	require.NoError(t, err)
+
+	_, err = workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "reviews.action",
+		Context:   pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "task-1"},
+		Body:      []byte(`{"review_key":"workspace/repo#42","provider_scope":"https://bitbucket.org","repository_id":"repo-uuid-new","number":42,"operation":"merge"}`),
+	})
+
+	require.ErrorContains(t, err, "not associated with the verified task")
+	require.Zero(t, provider.getPullRequestCalls)
 	require.Zero(t, provider.actions)
 }
 

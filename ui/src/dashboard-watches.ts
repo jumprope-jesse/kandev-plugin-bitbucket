@@ -1,4 +1,8 @@
-import { errorMessage, normalizeWatches, type WatchSummary } from "./view-models";
+import {
+  errorMessage,
+  normalizeWatches,
+  type WatchSummary,
+} from "./view-models";
 import { type PluginHost } from "./host-contract";
 import {
   Badge,
@@ -9,6 +13,7 @@ import {
   usePluginQuery,
 } from "./ui-runtime";
 import { action } from "./actions";
+import { usePluginTranslation } from "./i18n";
 
 export type PendingWatchChange = {
   watchId: string;
@@ -36,7 +41,9 @@ export function WatchRow({
   preview(kind: "reset" | "delete", watchId: string): void;
 }) {
   const { jsx: h, ui } = host;
-  const toggleKey = watch.status === "running" ? action.watchesPause : action.watchesResume;
+  const { t } = usePluginTranslation(host);
+  const toggleKey =
+    watch.status === "running" ? action.watchesPause : action.watchesResume;
   return h(
     "li",
     { className: "bb-watch-row", key: watch.id },
@@ -44,8 +51,22 @@ export function WatchRow({
       "div",
       null,
       h("strong", null, watch.id),
-      Badge(host, watch.status, watch.status === "running" ? "success" : "neutral"),
-      watch.lastPolled ? h("span", null, `Last polled ${watch.lastPolled}`) : null,
+      Badge(
+        host,
+        t(watch.status === "running" ? "running" : "paused"),
+        watch.status === "running" ? "success" : "neutral",
+      ),
+      watch.lastPolled
+        ? h(
+            "span",
+            null,
+            t("lastPolled", {
+              values: {
+                value: host.utils.formatRelativeTime(watch.lastPolled),
+              },
+            }),
+          )
+        : null,
     ),
     h(
       "div",
@@ -59,7 +80,7 @@ export function WatchRow({
           disabled,
           onClick: () => run(action.watchesRun, watch.id),
         },
-        "Run now",
+        t("runNow"),
       ),
       h(
         ui.Button,
@@ -70,7 +91,7 @@ export function WatchRow({
           disabled,
           onClick: () => run(toggleKey, watch.id),
         },
-        watch.status === "running" ? "Pause" : "Resume",
+        watch.status === "running" ? t("pause") : t("resume"),
       ),
       h(
         ui.Button,
@@ -81,7 +102,7 @@ export function WatchRow({
           disabled,
           onClick: () => preview("reset", watch.id),
         },
-        "Reset",
+        t("reset"),
       ),
       h(
         ui.Button,
@@ -92,7 +113,7 @@ export function WatchRow({
           disabled,
           onClick: () => preview("delete", watch.id),
         },
-        "Delete",
+        t("delete"),
       ),
     ),
   );
@@ -112,14 +133,13 @@ export function WatchConfirmation({
   cancel(): void;
 }) {
   const { jsx: h, ui } = host;
+  const { t } = usePluginTranslation(host);
+  const warningKey =
+    pending.kind === "delete" ? "watchDeleteWarning" : "watchResetWarning";
   return h(
     "div",
     { className: "bb-watch-confirm", role: "alert" },
-    h(
-      "p",
-      null,
-      `${pending.kind === "delete" ? "Deleting" : "Resetting"} this watch will remove ${pending.taskCount} plugin-owned task${pending.taskCount === 1 ? "" : "s"}. Adopted and manual tasks stay untouched.`,
-    ),
+    h("p", null, t(warningKey, { count: pending.taskCount })),
     h(
       "div",
       { className: "bb-secondary-actions" },
@@ -132,7 +152,7 @@ export function WatchConfirmation({
           disabled,
           onClick: confirm,
         },
-        `Confirm ${pending.kind}`,
+        t(pending.kind === "delete" ? "confirmDelete" : "confirmReset"),
       ),
       h(
         ui.Button,
@@ -143,7 +163,7 @@ export function WatchConfirmation({
           disabled,
           onClick: cancel,
         },
-        "Cancel",
+        t("cancel"),
       ),
     ),
   );
@@ -161,6 +181,7 @@ export function Watches({
   showCreate?: boolean;
 }) {
   const { jsx: h, ui, React } = host;
+  const { t } = usePluginTranslation(host);
   const watches = usePluginQuery<Record<string, unknown>>(
     host,
     action.watchesGet,
@@ -192,7 +213,8 @@ export function Watches({
       watches.refresh();
       return response;
     } catch (reason) {
-      if (request.isCurrent() && !isAbortError(reason)) setError(errorMessage(reason));
+      if (request.isCurrent() && !isAbortError(reason))
+        setError(errorMessage(reason, t));
       return null;
     } finally {
       if (request.finish()) setWorking(null);
@@ -202,13 +224,18 @@ export function Watches({
     void invoke(key, { watch_id: watchId });
   };
   const preview = async (kind: "reset" | "delete", watchId: string) => {
-    const key = kind === "reset" ? action.watchesPreviewReset : action.watchesPreviewDelete;
+    const key =
+      kind === "reset"
+        ? action.watchesPreviewReset
+        : action.watchesPreviewDelete;
     const response = await invoke(key, { watch_id: watchId });
-    if (response) setPending({ watchId, kind, taskCount: watchPreviewTaskCount(response) });
+    if (response)
+      setPending({ watchId, kind, taskCount: watchPreviewTaskCount(response) });
   };
   const confirm = async () => {
     if (!pending) return;
-    const key = pending.kind === "reset" ? action.watchesReset : action.watchesDelete;
+    const key =
+      pending.kind === "reset" ? action.watchesReset : action.watchesDelete;
     const response = await invoke(key, { watch_id: pending.watchId });
     if (response) setPending(null);
   };
@@ -219,17 +246,15 @@ export function Watches({
     h(
       ui.CardHeader,
       null,
-      h(ui.CardTitle, null, "Watches"),
-      h(
-        ui.CardDescription,
-        null,
-        "Poll saved pull-request criteria and create only plugin-owned tasks.",
-      ),
+      h(ui.CardTitle, null, t("watches")),
+      h(ui.CardDescription, null, t("watchesDescription")),
     ),
     h(
       ui.CardContent,
       { className: "bb-card-actions" },
-      watches.error ? h("p", { className: "bb-error", role: "alert" }, watches.error) : null,
+      watches.error
+        ? h("p", { className: "bb-error", role: "alert" }, watches.error)
+        : null,
       error ? h("p", { className: "bb-error", role: "alert" }, error) : null,
       watchItems.length
         ? h(
@@ -241,11 +266,12 @@ export function Watches({
                 watch,
                 disabled: Boolean(working),
                 run,
-                preview: (kind: "reset" | "delete", watchId: string) => void preview(kind, watchId),
+                preview: (kind: "reset" | "delete", watchId: string) =>
+                  void preview(kind, watchId),
               }),
             ),
           )
-        : h("p", null, "No saved watches."),
+        : h("p", null, t("noSavedWatches")),
       pending
         ? h(WatchConfirmation, {
             host,
@@ -263,10 +289,11 @@ export function Watches({
               variant: "outline",
               className: "min-h-11",
               disabled: Boolean(working),
-              onClick: () => void invoke(action.watchesUpdate, { enabled: true, filter }),
+              onClick: () =>
+                void invoke(action.watchesUpdate, { enabled: true, filter }),
             },
             icon(h, "watch"),
-            "Add current filter watch",
+            t("addFilterWatch"),
           )
         : null,
     ),

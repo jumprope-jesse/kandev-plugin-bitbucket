@@ -1,3 +1,5 @@
+import { translateEnglish, type Translate } from "./i18n";
+
 export type JsonRecord = Record<string, unknown>;
 
 export type ConnectionState =
@@ -56,15 +58,17 @@ export type TaskRowLink = {
   taskId: string;
   fallbackTitle: string;
   repositoryId?: string;
+  connectionScope?: string;
   changeRequestNumber?: number;
 };
 
 export function pullRequestAssociationIdentity(
+  connectionScope: string | undefined,
   repositoryId: string | undefined,
   number: number | undefined,
 ): string | undefined {
-  return repositoryId && number && number > 0
-    ? `repository:${repositoryId}\u0000pull-request:${number}`
+  return connectionScope && repositoryId && number && number > 0
+    ? `connection:${connectionScope}\u0000repository:${repositoryId}\u0000pull-request:${number}`
     : undefined;
 }
 
@@ -263,7 +267,10 @@ export function disconnectConnectionInput(workspaceId: string): {
   return { workspaceId };
 }
 
-export function deriveOAuthCallbackURL(apiBaseUrl: string, browserOrigin: string): string {
+export function deriveOAuthCallbackURL(
+  apiBaseUrl: string,
+  browserOrigin: string,
+): string {
   const backendOrigin = apiBaseUrl.trim() || browserOrigin;
   return new URL(
     "/api/plugins/kandev-plugin-bitbucket/webhooks/oauth-callback",
@@ -283,7 +290,11 @@ export function string(value: unknown): string | undefined {
 
 export function number(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value)))
+  if (
+    typeof value === "string" &&
+    value.trim() &&
+    Number.isFinite(Number(value))
+  )
     return Number(value);
   return undefined;
 }
@@ -308,7 +319,9 @@ export function timestamp(value: unknown): string | undefined {
       : undefined;
   }
   const date = new Date(text);
-  return Number.isFinite(date.getTime()) && date.getUTCFullYear() > 1 ? text : undefined;
+  return Number.isFinite(date.getTime()) && date.getUTCFullYear() > 1
+    ? text
+    : undefined;
 }
 
 export function boolean(value: unknown): boolean | undefined {
@@ -334,10 +347,14 @@ export function pullRequestURL(value: unknown): string | undefined {
   return linkHref(links.html) ?? linkHref(links.self) ?? linkHref(value);
 }
 
-export function personLink(value: unknown, kind: "html" | "avatar"): string | undefined {
+export function personLink(
+  value: unknown,
+  kind: "html" | "avatar",
+): string | undefined {
   const person = record(value);
   return (
-    linkHref(record(person.links)[kind]) ?? linkHref(person[kind === "html" ? "url" : "avatarUrl"])
+    linkHref(record(person.links)[kind]) ??
+    linkHref(person[kind === "html" ? "url" : "avatarUrl"])
   );
 }
 
@@ -357,54 +374,79 @@ export function toCapabilities(value: unknown): string[] {
       .map((capability) => capability.trim())
       .filter(Boolean);
   }
-  return array(value).flatMap((entry) => (typeof entry === "string" ? [entry] : []));
+  return array(value).flatMap((entry) =>
+    typeof entry === "string" ? [entry] : [],
+  );
 }
 
-export function normalizeTaskLinks(value: unknown, reviewKey = ""): TaskRowLink[] {
-  return itemList(value, ["associations", "tasks", "items", "values"]).flatMap((entry) => {
-    const source = record(entry);
-    const taskId = string(source.task_id) ?? string(source.taskId);
-    const entryReviewKey = string(source.review_key) ?? string(source.reviewKey) ?? reviewKey;
-    if (!taskId || (reviewKey && entryReviewKey !== reviewKey)) return [];
-    return [
-      {
-        id: string(source.id) ?? `${entryReviewKey}:${taskId}`,
-        taskId,
-        fallbackTitle:
-          string(source.task_title) ??
-          string(source.taskTitle) ??
-          string(source.title) ??
-          "Bitbucket task",
-      },
-    ];
-  });
+export function normalizeTaskLinks(
+  value: unknown,
+  reviewKey = "",
+  t: Translate = translateEnglish,
+): TaskRowLink[] {
+  return itemList(value, ["associations", "tasks", "items", "values"]).flatMap(
+    (entry) => {
+      const source = record(entry);
+      const taskId = string(source.task_id) ?? string(source.taskId);
+      const entryReviewKey =
+        string(source.review_key) ?? string(source.reviewKey) ?? reviewKey;
+      if (!taskId || (reviewKey && entryReviewKey !== reviewKey)) return [];
+      return [
+        {
+          id: string(source.id) ?? `${entryReviewKey}:${taskId}`,
+          taskId,
+          fallbackTitle:
+            string(source.task_title) ??
+            string(source.taskTitle) ??
+            string(source.title) ??
+            t("bitbucketTask"),
+        },
+      ];
+    },
+  );
 }
 
-export function normalizePullRequestAssociations(value: unknown): Record<string, TaskRowLink[]> {
+export function normalizePullRequestAssociations(
+  value: unknown,
+  t: Translate = translateEnglish,
+): Record<string, TaskRowLink[]> {
   const result: Record<string, TaskRowLink[]> = {};
   for (const entry of itemList(value, ["associations", "items", "values"])) {
     const source = record(entry);
     const reviewKey = string(source.review_key) ?? string(source.reviewKey);
     if (!reviewKey) continue;
-    const links = normalizeTaskLinks([source], reviewKey);
-    const repositoryId = string(source.repository_id) ?? string(source.repositoryId);
-    const changeRequestNumber = number(source.number) ?? number(source.changeRequestNumber);
+    const links = normalizeTaskLinks([source], reviewKey, t);
+    const repositoryId =
+      string(source.repository_id) ?? string(source.repositoryId);
+    const connectionScope =
+      string(source.provider_scope) ?? string(source.connectionScope);
+    const changeRequestNumber =
+      number(source.number) ?? number(source.changeRequestNumber);
     for (const link of links) {
       link.repositoryId = repositoryId;
+      link.connectionScope = connectionScope;
       link.changeRequestNumber = changeRequestNumber;
     }
     if (links.length) {
       result[reviewKey] = [...(result[reviewKey] ?? []), ...links];
-      const identity = pullRequestAssociationIdentity(repositoryId, changeRequestNumber);
+      const identity = pullRequestAssociationIdentity(
+        connectionScope,
+        repositoryId,
+        changeRequestNumber,
+      );
       if (identity) result[identity] = [...(result[identity] ?? []), ...links];
     }
   }
   return result;
 }
 
-export function normalizeReviewComment(value: unknown): ReviewComment | null {
+export function normalizeReviewComment(
+  value: unknown,
+  t: Translate = translateEnglish,
+): ReviewComment | null {
   const comment = record(value);
-  const id = string(comment.id) ?? string(comment.ID) ?? string(comment.comment_id);
+  const id =
+    string(comment.id) ?? string(comment.ID) ?? string(comment.comment_id);
   if (!id) return null;
   const normalized: ReviewComment = {
     id,
@@ -413,7 +455,7 @@ export function normalizeReviewComment(value: unknown): ReviewComment | null {
       string(comment.Author) ??
       string(record(comment.author).display_name) ??
       string(record(comment.author).displayName) ??
-      "Unknown",
+      t("unknown"),
     body:
       string(comment.body) ??
       string(comment.Body) ??
@@ -423,9 +465,13 @@ export function normalizeReviewComment(value: unknown): ReviewComment | null {
       "",
   };
   const parentId =
-    string(comment.parent_id) ?? string(comment.parentId) ?? string(comment.ParentID);
+    string(comment.parent_id) ??
+    string(comment.parentId) ??
+    string(comment.ParentID);
   const createdAt =
-    timestamp(comment.created_at) ?? timestamp(comment.createdAt) ?? timestamp(comment.When);
+    timestamp(comment.created_at) ??
+    timestamp(comment.createdAt) ??
+    timestamp(comment.When);
   const line =
     number(comment.line) ??
     number(record(comment.inline).to) ??
@@ -438,7 +484,8 @@ export function normalizeReviewComment(value: unknown): ReviewComment | null {
 
 export function statusTone(state: string): PullRequest["statusTone"] {
   const normalized = state.toLowerCase();
-  if (/(success|passed|approved|merged|open)/.test(normalized)) return "success";
+  if (/(success|passed|approved|merged|open)/.test(normalized))
+    return "success";
   if (/(fail|declined|error|blocked)/.test(normalized)) return "danger";
   if (/(pending|build|review|draft)/.test(normalized)) return "warning";
   return "neutral";

@@ -1,11 +1,16 @@
 import { action } from "./actions";
-import type { PluginHost, ReviewSummary, ReviewTaskAssociation } from "./host-contract";
+import type {
+  PluginHost,
+  ReviewSummary,
+  ReviewTaskAssociation,
+} from "./host-contract";
 import {
   loadTaskPullRequestDetails,
   reviewSummaryForPullRequest,
   type PullRequestWithStatus,
 } from "./task-review-status";
 import { normalizePullRequestAssociations } from "./view-models";
+import { pluginTranslate, translateEnglish, type Translate } from "./i18n";
 
 export const reviewStore = (() => {
   const snapshots = new Map<string, ReviewSummary[]>();
@@ -19,7 +24,9 @@ export const reviewStore = (() => {
     set(taskId: string, pullRequests: PullRequestWithStatus[]) {
       snapshots.set(
         taskId,
-        pullRequests.map((pullRequest) => reviewSummaryForPullRequest(pullRequest)),
+        pullRequests.map((pullRequest) =>
+          reviewSummaryForPullRequest(pullRequest),
+        ),
       );
       listeners.get(taskId)?.forEach((listener) => listener());
     },
@@ -28,7 +35,10 @@ export const reviewStore = (() => {
       refreshes.set(taskId, version);
       return { epoch, version };
     },
-    isCurrentRefresh(taskId: string, token: { epoch: number; version: number }) {
+    isCurrentRefresh(
+      taskId: string,
+      token: { epoch: number; version: number },
+    ) {
       return token.epoch === epoch && refreshes.get(taskId) === token.version;
     },
     subscribe(taskId: string, listener: () => void): () => void {
@@ -44,7 +54,9 @@ export const reviewStore = (() => {
       epoch += 1;
       refreshes.clear();
       snapshots.clear();
-      listeners.forEach((taskListeners) => taskListeners.forEach((listener) => listener()));
+      listeners.forEach((taskListeners) =>
+        taskListeners.forEach((listener) => listener()),
+      );
       listeners.clear();
     },
   };
@@ -59,24 +71,30 @@ export const associationStore = (() => {
     get(workspaceId: string): readonly ReviewTaskAssociation[] {
       return snapshots.get(workspaceId) ?? [];
     },
-    set(workspaceId: string, value: unknown) {
-      const associations = normalizePullRequestAssociations(value);
+    set(workspaceId: string, value: unknown, t: Translate = translateEnglish) {
+      const associations = normalizePullRequestAssociations(value, t);
       snapshots.set(
         workspaceId,
         Object.entries(associations).flatMap(([reviewKey, tasks]) =>
-          reviewKey.startsWith("repository:")
+          reviewKey.startsWith("repository:") ||
+          reviewKey.startsWith("connection:")
             ? []
-            : tasks.map((task) => ({
-                providerId: "bitbucket",
-                taskId: task.taskId,
-                reviewKey,
-                ...(task.repositoryId && task.changeRequestNumber
-                  ? {
-                      repositoryId: task.repositoryId,
-                      changeRequestNumber: task.changeRequestNumber,
-                    }
-                  : {}),
-              })),
+            : tasks.flatMap((task) =>
+                task.connectionScope &&
+                task.repositoryId &&
+                task.changeRequestNumber
+                  ? [
+                      {
+                        providerId: "bitbucket",
+                        taskId: task.taskId,
+                        reviewKey,
+                        connectionScope: task.connectionScope,
+                        repositoryId: task.repositoryId,
+                        changeRequestNumber: task.changeRequestNumber,
+                      },
+                    ]
+                  : [],
+              ),
         ),
       );
       listeners.get(workspaceId)?.forEach((listener) => listener());
@@ -86,11 +104,17 @@ export const associationStore = (() => {
       refreshes.set(workspaceId, version);
       return { epoch, version };
     },
-    isCurrentRefresh(workspaceId: string, token: { epoch: number; version: number }) {
-      return token.epoch === epoch && refreshes.get(workspaceId) === token.version;
+    isCurrentRefresh(
+      workspaceId: string,
+      token: { epoch: number; version: number },
+    ) {
+      return (
+        token.epoch === epoch && refreshes.get(workspaceId) === token.version
+      );
     },
     subscribe(workspaceId: string, listener: () => void): () => void {
-      const workspaceListeners = listeners.get(workspaceId) ?? new Set<() => void>();
+      const workspaceListeners =
+        listeners.get(workspaceId) ?? new Set<() => void>();
       workspaceListeners.add(listener);
       listeners.set(workspaceId, workspaceListeners);
       return () => {
@@ -121,8 +145,11 @@ export async function refreshAssociationStore(
     { workspaceId },
     { signal },
   );
-  if (!signal.aborted && associationStore.isCurrentRefresh(workspaceId, refresh))
-    associationStore.set(workspaceId, response);
+  if (
+    !signal.aborted &&
+    associationStore.isCurrentRefresh(workspaceId, refresh)
+  )
+    associationStore.set(workspaceId, response, pluginTranslate(host));
 }
 
 export async function refreshReviewStore(
@@ -136,6 +163,7 @@ export async function refreshReviewStore(
     (key, input, options) => host.api.invokeAction(key, input, options),
     { taskId, ...(workspaceId ? { workspaceId } : {}) },
     signal,
+    pluginTranslate(host),
   );
   if (!signal.aborted && reviewStore.isCurrentRefresh(taskId, refresh))
     reviewStore.set(taskId, pullRequests);

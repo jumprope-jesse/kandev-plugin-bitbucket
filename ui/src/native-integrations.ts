@@ -4,7 +4,11 @@ import {
   normalizeRepositoryInspection,
   pluginRepositoryInput,
 } from "./view-models";
-import { type PluginHost, type PluginRegistry } from "./host-contract";
+import {
+  type PluginHost,
+  type PluginIcon,
+  type PluginRegistry,
+} from "./host-contract";
 import { record, text, icon } from "./ui-runtime";
 import { ReviewDetailPanel } from "./dashboard-components";
 import { action } from "./actions";
@@ -14,6 +18,7 @@ import {
   refreshReviewStore,
   reviewStore,
 } from "./review-store";
+import { pluginTranslate } from "./i18n";
 
 function isCredentialFreeHTTPSURL(rawURL: string): boolean {
   try {
@@ -24,12 +29,25 @@ function isCredentialFreeHTTPSURL(rawURL: string): boolean {
   }
 }
 
-export function registerNativeIntegrations(registry: PluginRegistry, host: PluginHost) {
+export function registerNativeIntegrations(
+  registry: PluginRegistry,
+  host: PluginHost,
+  bitbucketIcon: PluginIcon,
+) {
+  const t = pluginTranslate(host);
   registry.registerRepositoryProvider({
     id: "bitbucket",
-    label: "Bitbucket",
-    icon: "bitbucket",
-    async listRepositories({ workspaceId: scopedWorkspaceId, query, cursor, limit, signal }) {
+    get label() {
+      return t("bitbucket");
+    },
+    icon: bitbucketIcon,
+    async listRepositories({
+      workspaceId: scopedWorkspaceId,
+      query,
+      cursor,
+      limit,
+      signal,
+    }) {
       const response = await host.api.invokeAction<unknown>(
         action.repositoriesList,
         {
@@ -112,7 +130,9 @@ export function registerNativeIntegrations(registry: PluginRegistry, host: Plugi
       return {
         url: text(response.url),
         provider: "bitbucket",
-        ...(typeof response.linked === "boolean" ? { linked: response.linked } : {}),
+        ...(typeof response.linked === "boolean"
+          ? { linked: response.linked }
+          : {}),
         ...(text(response.association_error)
           ? { associationError: text(response.association_error) }
           : {}),
@@ -121,24 +141,26 @@ export function registerNativeIntegrations(registry: PluginRegistry, host: Plugi
   });
   registry.registerTaskAction({
     id: "link-pull-request",
-    label: "Bitbucket Pull Request",
-    icon: "bitbucket",
+    get label() {
+      return t("linkPullRequestMenu");
+    },
+    icon: bitbucketIcon,
     placement: "link",
     async run(context) {
       host.openTaskLinkDialog({
-        title: "Link Bitbucket pull request",
-        description: "Use a Bitbucket pull request URL or canonical key for this task.",
-        inputLabel: "Pull request",
+        title: t("linkPullRequestTitle"),
+        description: t("linkPullRequestDescription"),
+        inputLabel: t("pullRequest"),
         placeholder: "workspace/repository#42",
-        emptyError: "Enter a Bitbucket pull request URL or key.",
-        failureMessage: "Failed to link Bitbucket pull request.",
-        successMessage: "Bitbucket pull request linked",
+        emptyError: t("linkPullRequestEmpty"),
+        failureMessage: t("linkPullRequestFailure"),
+        successMessage: t("linkPullRequestSuccess"),
         inputTestId: "bitbucket-review-reference",
         errorTestId: "bitbucket-review-reference-error",
         submitTestId: "bitbucket-review-reference-submit",
         async onSubmit(reference, signal) {
           const body = linkPullRequestBody(reference);
-          if (!body) throw new Error("Enter a Bitbucket pull request URL or key.");
+          if (!body) throw new Error(t("linkPullRequestEmpty"));
           await host.api.invokeAction(
             action.pullRequestsLink,
             {
@@ -149,7 +171,12 @@ export function registerNativeIntegrations(registry: PluginRegistry, host: Plugi
             { signal },
           );
           await Promise.all([
-            refreshReviewStore(host, context.taskId, signal, context.workspaceId),
+            refreshReviewStore(
+              host,
+              context.taskId,
+              signal,
+              context.workspaceId,
+            ),
             refreshAssociationStore(host, context.workspaceId, signal),
           ]).catch(() => undefined);
         },
@@ -158,9 +185,13 @@ export function registerNativeIntegrations(registry: PluginRegistry, host: Plugi
   });
   registry.registerReviewProvider({
     id: "bitbucket",
-    label: "Bitbucket",
-    icon: "bitbucket",
-    changeRequestNoun: "pull request",
+    get label() {
+      return t("bitbucket");
+    },
+    icon: bitbucketIcon,
+    get changeRequestNoun() {
+      return t("pullRequestNoun");
+    },
     order: 30,
     getSnapshot: (taskId) => reviewStore.get(taskId),
     subscribe: (taskId, listener) => reviewStore.subscribe(taskId, listener),
@@ -173,20 +204,41 @@ export function registerNativeIntegrations(registry: PluginRegistry, host: Plugi
     async refreshAssociations(workspaceId, signal) {
       await refreshAssociationStore(host, workspaceId, signal);
     },
-    async unlink({ workspaceId, taskId, reviewKey, signal }) {
+    async unlink({
+      workspaceId,
+      taskId,
+      reviewKey,
+      connectionScope,
+      repositoryId,
+      changeRequestNumber,
+      signal,
+    }) {
       await host.api.invokeAction(
         action.pullRequestsUnlink,
-        { workspaceId, taskId, body: { review_key: reviewKey } },
+        {
+          workspaceId,
+          taskId,
+          body: {
+            review_key: reviewKey,
+            provider_scope: connectionScope,
+            repository_id: repositoryId,
+            number: changeRequestNumber,
+          },
+        },
         { signal },
       );
     },
     ReviewPanel: (props) =>
       host.jsx(ReviewDetailPanel, {
         host,
-        workspaceId: text(props.workspaceId) || undefined,
-        taskId: text(props.taskId) || undefined,
+        workspaceId: text(props.workspaceId),
+        taskId: text(props.taskId),
         reviewKey: text(props.reviewKey),
-        presentation: text(props.presentation) === "mobile" ? "mobile" : "desktop",
+        connectionScope: text(props.connectionScope),
+        repositoryId: text(props.repositoryId),
+        changeRequestNumber: Number(props.changeRequestNumber),
+        presentation:
+          text(props.presentation) === "mobile" ? "mobile" : "desktop",
       }),
   });
 }

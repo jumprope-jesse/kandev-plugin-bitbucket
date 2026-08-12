@@ -10,16 +10,18 @@ import type {
   WatchSummary,
 } from "./view-model-base";
 import { itemList, record, string } from "./view-model-base";
+import { translateEnglish, type Translate } from "./i18n";
 
 export function connectionIdentity(
   product: string,
   authMethod: string,
+  t: Translate = translateEnglish,
 ): ConnectionIdentity | null {
   if (product === "cloud" && authMethod === "api_token") {
     return {
       field: "auth_identity",
-      label: "Atlassian account email",
-      help: "Used with this API token for Bitbucket Cloud REST. Git uses x-bitbucket-api-token-auth.",
+      label: t("atlassianEmail"),
+      help: t("atlassianEmailHelp"),
       inputType: "email",
     };
   }
@@ -29,8 +31,8 @@ export function connectionIdentity(
   ) {
     return {
       field: "auth_identity",
-      label: "Bitbucket username",
-      help: "Used for HTTPS Git with this Data Center PAT or OAuth credential.",
+      label: t("bitbucketUsername"),
+      help: t("bitbucketUsernameHelp"),
       inputType: "text",
     };
   }
@@ -39,56 +41,69 @@ export function connectionIdentity(
 
 export function validateConnectionIdentity(
   input: ConnectionFormInput,
+  t: Translate = translateEnglish,
 ): string | null {
-  const identity = connectionIdentity(input.product, input.authMethod);
+  const identity = connectionIdentity(input.product, input.authMethod, t);
   const value = input.identity.trim();
   if (!identity) return null;
-  if (!value) return `Enter ${identity.label.toLowerCase()}.`;
+  if (!value)
+    return t("enterIdentity", {
+      values: { identity: identity.label.toLowerCase() },
+    });
   if (
     identity.inputType === "email" &&
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
   ) {
-    return "Enter a valid Atlassian account email.";
+    return t("invalidAtlassianEmail");
   }
   return null;
 }
 
 export function validateCloudWorkspace(
   input: ConnectionFormInput,
+  t: Translate = translateEnglish,
 ): string | null {
   if (input.product !== "cloud" || input.cloudWorkspace.trim()) return null;
-  return "Enter Bitbucket Cloud workspace slug or ID.";
+  return t("enterCloudWorkspace");
 }
 
 export function currentWatchFilter(query: string, state: string): JsonRecord {
   return { query: query.trim(), states: state === "all" ? [] : [state] };
 }
 
-export function taskLaunchPresets(): TaskLaunchPreset[] {
+export function taskLaunchPresets(
+  t: Translate = translateEnglish,
+): TaskLaunchPreset[] {
   return [
     {
       id: "review",
-      label: "Review",
-      hint: "Read the diff, flag issues",
+      label: t("reviewPreset"),
+      hint: t("reviewPresetHint"),
       iconName: "eye",
       prompt: (pullRequest) =>
-        `Review Bitbucket pull request ${pullRequest.url || pullRequest.key}. Inspect the changes, run relevant tests, and report concrete findings.`,
+        t("reviewPresetPrompt", {
+          values: { reference: pullRequest.url || pullRequest.key },
+        }),
     },
     {
       id: "address-feedback",
-      label: "Address feedback",
-      hint: "Apply review comments",
+      label: t("addressFeedbackPreset"),
+      hint: t("addressFeedbackPresetHint"),
       iconName: "message",
       prompt: (pullRequest) =>
-        `Address the review feedback on Bitbucket pull request ${pullRequest.url || pullRequest.key}. Make the requested changes, verify them, and summarize what changed.`,
+        t("addressFeedbackPresetPrompt", {
+          values: { reference: pullRequest.url || pullRequest.key },
+        }),
     },
     {
       id: "fix-ci",
-      label: "Fix CI",
-      hint: "Diagnose failing checks",
+      label: t("fixCiPreset"),
+      hint: t("fixCiPresetHint"),
       iconName: "tool",
       prompt: (pullRequest) =>
-        `Fix the failing CI checks on Bitbucket pull request ${pullRequest.url || pullRequest.key}. Reproduce the failures, implement the smallest correct fix, and run the relevant checks.`,
+        t("fixCiPresetPrompt", {
+          values: { reference: pullRequest.url || pullRequest.key },
+        }),
     },
   ];
 }
@@ -140,10 +155,13 @@ export function taskLaunchBody(
   return { review_key: pullRequest.key, launch_id: launchId, task };
 }
 
-export function taskFromLaunchResult(value: unknown): JsonRecord {
+export function taskFromLaunchResult(
+  value: unknown,
+  t: Translate = translateEnglish,
+): JsonRecord {
   const result = record(value);
   const taskID = string(result.task_id);
-  if (!taskID) throw new Error("Bitbucket task launch returned no task id.");
+  if (!taskID) throw new Error(t("taskLaunchMissingId"));
   return { id: taskID, bitbucketLinked: result.linked === true };
 }
 
@@ -164,16 +182,16 @@ export function normalizeWatches(value: unknown): WatchSummary[] {
 
 export function validateOAuthRegistration(
   input: ConnectionFormInput,
+  t: Translate = translateEnglish,
 ): string | null {
   if (input.authMethod !== "oauth") return null;
   const clientID = input.oauthClientId.trim();
   const clientSecret = input.oauthClientSecret.trim();
   if (input.oauthRegistrationConfigured && !clientID && !clientSecret)
     return null;
-  if (!clientID) return "Enter OAuth client ID.";
-  if (!clientSecret) return "Enter OAuth client secret.";
-  if (!input.oauthCallbackUrl.trim())
-    return "OAuth callback URL is unavailable.";
+  if (!clientID) return t("enterOauthClientId");
+  if (!clientSecret) return t("enterOauthClientSecret");
+  if (!input.oauthCallbackUrl.trim()) return t("oauthCallbackUnavailable");
   return null;
 }
 
@@ -231,12 +249,11 @@ export function connectionState(value: unknown): ConnectionState {
     : "unavailable";
 }
 
-export function errorMessage(error: unknown): string {
+export function errorMessage(
+  error: unknown,
+  t: Translate = translateEnglish,
+): string {
   if (error instanceof Error && error.message) return error.message;
   const source = record(error);
-  return (
-    string(source.message) ??
-    string(source.error) ??
-    "Bitbucket request failed. Try again."
-  );
+  return string(source.message) ?? string(source.error) ?? t("requestFailed");
 }

@@ -90,11 +90,9 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 			return w.taskPullRequests(ctx, request.Context.WorkspaceID, request.Context.TaskID)
 		}
 		if request.ActionKey == "pullrequests.get" && request.Context.TaskID != "" {
-			key, associationErr := w.pullRequestLookupKey(ctx, request.Context.WorkspaceID, lookup)
-			if associationErr != nil {
-				return nil, associationErr
-			}
-			allowed, associationErr := w.taskHasPullRequestAssociation(ctx, request.Context.WorkspaceID, request.Context.TaskID, key)
+			allowed, associationErr := w.taskHasPullRequestAssociation(
+				ctx, request.Context.WorkspaceID, request.Context.TaskID, lookup,
+			)
 			if associationErr != nil {
 				return nil, associationErr
 			}
@@ -169,12 +167,24 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 		}
 		return actionResponse(reviewView(review))
 	case "reviews.action":
+		if request.Context.TaskID == "" {
+			return nil, forbiddenActionError("verified task context is required")
+		}
 		var input reviewActionInput
 		if err := decodeAction(request.Body, &input); err != nil {
 			return nil, err
 		}
 		if input.Kind == "" {
 			input.Kind = input.Operation
+		}
+		allowed, err := w.taskHasPullRequestAssociation(
+			ctx, request.Context.WorkspaceID, request.Context.TaskID, input.pullRequestLookup,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			return nil, forbiddenActionError("Bitbucket pull request is not associated with the verified task")
 		}
 		provider, pullRequest, err := w.pullRequestLookup(ctx, request.Context.WorkspaceID, input.pullRequestLookup)
 		if err != nil {
@@ -231,11 +241,10 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 		if err := decodeAction(request.Body, &input); err != nil {
 			return nil, err
 		}
-		key := input.Key
-		if key == "" {
-			key = input.ReviewKey
-		}
-		links, err := w.links.Unlink(ctx, request.Context.TaskID, key)
+		links, err := w.links.Unlink(
+			ctx, request.Context.TaskID, input.ProviderScope,
+			input.RepositoryID, input.Number,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -243,7 +252,9 @@ func (w *Workflows) handlePullRequestAction(ctx context.Context, request *plugin
 			ctx,
 			request.Context.WorkspaceID,
 			request.Context.TaskID,
-			key,
+			input.ProviderScope,
+			input.RepositoryID,
+			input.Number,
 		); err != nil {
 			return nil, err
 		}

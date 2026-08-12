@@ -330,10 +330,12 @@ func TestDetachTaskLinkKeepsReservationButPreventsReattachment(t *testing.T) {
 			"watch-1": {
 				ID: "watch-1", WorkspaceID: "workspace-1", Status: StatusRunning,
 				Links: map[string]TaskLink{
-					"repo-1#42": {PullRequestKey: "repo-1#42", TaskID: "task-1", Owned: true},
+					"old#42": {PullRequestKey: "same/path#42", ProviderID: "bitbucket", ProviderScope: "https://bitbucket.org", RepositoryID: "repo-old", PullRequestNumber: 42, TaskID: "task-1", Owned: true},
+					"new#42": {PullRequestKey: "same/path#42", ProviderID: "bitbucket", ProviderScope: "https://bitbucket.org", RepositoryID: "repo-new", PullRequestNumber: 42, TaskID: "task-1", Owned: true},
 				},
 				Reservations: map[string]Reservation{
-					"repo-1#42": {Token: "reservation", State: ReservationCreated, TaskID: "task-1"},
+					"old#42": {Token: "old", State: ReservationCreated, TaskID: "task-1", Link: TaskLink{ProviderID: "bitbucket", ProviderScope: "https://bitbucket.org", RepositoryID: "repo-old", PullRequestNumber: 42}},
+					"new#42": {Token: "new", State: ReservationCreated, TaskID: "task-1", Link: TaskLink{ProviderID: "bitbucket", ProviderScope: "https://bitbucket.org", RepositoryID: "repo-new", PullRequestNumber: 42}},
 				},
 			},
 		}},
@@ -342,24 +344,30 @@ func TestDetachTaskLinkKeepsReservationButPreventsReattachment(t *testing.T) {
 	service, err := NewService(Options{
 		Repository: repository,
 		Provider: staticProvider{items: []PullRequest{{
-			Key: "repo-1#42", RepositoryID: "repo-1", Number: 42,
+			Key: "same/path#42", RepositoryID: "repo-old", Number: 42,
+			ConnectionScope: "https://bitbucket.org",
+			Repository:      RemoteRepository{ProviderID: "bitbucket", ProviderScope: "https://bitbucket.org"},
 		}}},
 		Tasks: tasks,
 	})
 	require.NoError(t, err)
 
 	require.NoError(t, service.DetachTaskLink(
-		context.Background(), "workspace-1", "task-1", "repo-1#42",
+		context.Background(), "workspace-1", "task-1", "https://bitbucket.org", "repo-old", 42,
 	))
 	watch := repository.snapshots["workspace-1"].Watches["watch-1"]
-	require.False(t, watch.Links["repo-1#42"].Owned)
-	require.Contains(t, watch.Reservations, "repo-1#42")
+	oldKey := (TaskLink{ProviderID: "bitbucket", ProviderScope: "https://bitbucket.org", RepositoryID: "repo-old", PullRequestNumber: 42}).storageKey()
+	newKey := (TaskLink{ProviderID: "bitbucket", ProviderScope: "https://bitbucket.org", RepositoryID: "repo-new", PullRequestNumber: 42}).storageKey()
+	require.False(t, watch.Links[oldKey].Owned)
+	require.True(t, watch.Links[newKey].Owned,
+		"a recreated repository sharing the display key must remain attached")
+	require.Contains(t, watch.Reservations, oldKey)
 
 	result, err := service.Run(context.Background(), "workspace-1", "watch-1")
 	require.NoError(t, err)
 	require.Equal(t, 1, result.Skipped)
 	require.Zero(t, tasks.createCalls)
-	require.False(t, repository.snapshots["workspace-1"].Watches["watch-1"].Links["repo-1#42"].Owned)
+	require.False(t, repository.snapshots["workspace-1"].Watches["watch-1"].Links[oldKey].Owned)
 }
 
 func TestWatchControls_PersistFiltersPresetsStatusAndSafeDelete(t *testing.T) {

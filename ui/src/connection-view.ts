@@ -23,6 +23,7 @@ import {
 } from "./ui-runtime";
 import { action } from "./actions";
 import { DisconnectConfirmation } from "./disconnect-confirmation";
+import { usePluginTranslation } from "./i18n";
 
 export function ConnectionHealth({
   host,
@@ -32,6 +33,7 @@ export function ConnectionHealth({
   workspaceId?: string;
 }) {
   const { jsx: h, ui, React } = host;
+  const { t } = usePluginTranslation(host);
   const responsive = host.useResponsiveBreakpoint();
   const connection = usePluginQuery<Record<string, unknown>>(
     host,
@@ -51,7 +53,10 @@ export function ConnectionHealth({
   const oauthRegistration = connectionOAuthRegistration(details);
   const [oauthClientId, setOAuthClientId] = React.useState("");
   const [oauthClientSecret, setOAuthClientSecret] = React.useState("");
-  const oauthCallbackUrl = deriveOAuthCallbackURL(host.api.baseUrl, window.location.origin);
+  const oauthCallbackUrl = deriveOAuthCallbackURL(
+    host.api.baseUrl,
+    window.location.origin,
+  );
   const [disconnectOpen, setDisconnectOpen] = React.useState(false);
   const mutation = useAbortableOperation(host);
   React.useEffect(() => {
@@ -77,7 +82,7 @@ export function ConnectionHealth({
     setIdentity(text(details.auth_identity));
   }, [connection.data]);
   const state = connectionState(details);
-  const identityField = connectionIdentity(product, authMethod);
+  const identityField = connectionIdentity(product, authMethod, t);
   const formInput = () => ({
     product,
     baseUrl,
@@ -91,17 +96,23 @@ export function ConnectionHealth({
     oauthCallbackUrl,
   });
   const connectionValidationError = () =>
-    validateCloudWorkspace(formInput()) ??
-    validateConnectionIdentity(formInput()) ??
-    validateOAuthRegistration(formInput());
+    validateCloudWorkspace(formInput(), t) ??
+    validateConnectionIdentity(formInput(), t) ??
+    validateOAuthRegistration(formInput(), t);
   const oauthReady = authMethod === "oauth" && !connectionValidationError();
   const label: Record<ConnectionState, string> = {
-    unconfigured: "Not configured",
-    checking: "Checking connection",
-    connected: "Connected",
-    auth_required: "Authentication required",
-    unavailable: "Unavailable",
+    unconfigured: t("notConfigured"),
+    checking: t("checkingConnection"),
+    connected: t("connected"),
+    auth_required: t("authenticationRequired"),
+    unavailable: t("unavailable"),
   };
+  const productDescription =
+    details.product === "cloud"
+      ? t("bitbucketCloud")
+      : details.product === "data_center"
+        ? t("bitbucketDataCenter")
+        : t("connectDescription");
   const saveConnection = async () => {
     if (!scopedWorkspaceId) return;
     const validationError = connectionValidationError();
@@ -127,10 +138,11 @@ export function ConnectionHealth({
       if (!request.isCurrent()) return;
       setToken("");
       setOAuthClientSecret("");
-      setMessage("Connection saved and health check started.");
+      setMessage(t("connectionSaved"));
       connection.refresh();
     } catch (error) {
-      if (request.isCurrent() && !isAbortError(error)) setMessage(errorMessage(error));
+      if (request.isCurrent() && !isAbortError(error))
+        setMessage(errorMessage(error, t));
     } finally {
       if (request.finish()) setSaving(false);
     }
@@ -164,11 +176,13 @@ export function ConnectionHealth({
         { signal: request.signal },
       );
       if (!request.isCurrent()) return;
-      const href = text(record(result).url) || text(record(result).authorization_url);
+      const href =
+        text(record(result).url) || text(record(result).authorization_url);
       if (href) window.location.assign(href);
-      else setMessage("OAuth authorization is ready. Continue in the connection settings.");
+      else setMessage(t("oauthReady"));
     } catch (error) {
-      if (request.isCurrent() && !isAbortError(error)) setMessage(errorMessage(error));
+      if (request.isCurrent() && !isAbortError(error))
+        setMessage(errorMessage(error, t));
     } finally {
       if (request.finish()) setSaving(false);
     }
@@ -183,7 +197,7 @@ export function ConnectionHealth({
     setIdentity("");
     setOAuthClientId("");
     setDisconnectOpen(false);
-    setMessage("Bitbucket disconnected. Stored credentials cleared.");
+    setMessage(t("disconnected"));
     connection.refresh();
   };
   const openDisconnectConfirmation = () => {
@@ -194,7 +208,7 @@ export function ConnectionHealth({
     }
     let modal: { close(): void } | undefined;
     modal = host.openModal({
-      title: "Disconnect Bitbucket",
+      title: t("disconnectBitbucket"),
       size: "sm",
       content: () =>
         h(DisconnectConfirmation, {
@@ -220,26 +234,32 @@ export function ConnectionHealth({
       h(
         "div",
         { className: "bb-title-row" },
-        h(ui.CardTitle, null, "Connection"),
+        h(ui.CardTitle, null, t("connection")),
         Badge(
           host,
           label[state],
-          state === "connected" ? "success" : state === "auth_required" ? "warning" : "neutral",
+          state === "connected"
+            ? "success"
+            : state === "auth_required"
+              ? "warning"
+              : "neutral",
         ),
       ),
-      h(
-        ui.CardDescription,
-        null,
-        text(details.product, "Connect Bitbucket Cloud or Data Center for this workspace."),
-      ),
+      h(ui.CardDescription, null, productDescription),
     ),
     h(
       ui.CardContent,
       { className: "bb-settings-form" },
-      connection.loading ? h(ui.Spinner, { "aria-label": "Checking Bitbucket connection" }) : null,
-      connection.error ? h("p", { className: "bb-error", role: "alert" }, connection.error) : null,
-      message ? h("p", { className: "bb-message", role: "status" }, message) : null,
-      h(ui.Label, { htmlFor: "bitbucket-product" }, "Bitbucket product"),
+      connection.loading
+        ? h(ui.Spinner, { "aria-label": t("checkingBitbucketConnection") })
+        : null,
+      connection.error
+        ? h("p", { className: "bb-error", role: "alert" }, connection.error)
+        : null,
+      message
+        ? h("p", { className: "bb-message", role: "status" }, message)
+        : null,
+      h(ui.Label, { htmlFor: "bitbucket-product" }, t("bitbucketProduct")),
       h(
         ui.Select,
         {
@@ -262,15 +282,19 @@ export function ConnectionHealth({
         h(
           ui.SelectContent,
           null,
-          h(ui.SelectItem, { value: "cloud" }, "Bitbucket Cloud"),
-          h(ui.SelectItem, { value: "data_center" }, "Bitbucket Data Center"),
+          h(ui.SelectItem, { value: "cloud" }, t("bitbucketCloud")),
+          h(ui.SelectItem, { value: "data_center" }, t("bitbucketDataCenter")),
         ),
       ),
       product === "cloud"
         ? h(
             "div",
             { className: "bb-field" },
-            h(ui.Label, { htmlFor: "bitbucket-cloud-workspace" }, "Bitbucket workspace"),
+            h(
+              ui.Label,
+              { htmlFor: "bitbucket-cloud-workspace" },
+              t("bitbucketWorkspace"),
+            ),
             h(ui.Input, {
               id: "bitbucket-cloud-workspace",
               "data-testid": "bitbucket-cloud-workspace",
@@ -288,7 +312,7 @@ export function ConnectionHealth({
                 id: "bitbucket-cloud-workspace-help",
                 className: "bb-capability-note",
               },
-              "Workspace slug or ID from bitbucket.org/workspace; required to list repositories.",
+              t("workspaceHelp"),
             ),
           )
         : null,
@@ -296,17 +320,18 @@ export function ConnectionHealth({
         ? h(
             "div",
             { className: "bb-field" },
-            h(ui.Label, { htmlFor: "bitbucket-base-url" }, "Data Center URL"),
+            h(ui.Label, { htmlFor: "bitbucket-base-url" }, t("dataCenterUrl")),
             h(ui.Input, {
               id: "bitbucket-base-url",
               className: "min-h-11",
               value: baseUrl,
-              onChange: (event: { target: { value: string } }) => setBaseUrl(event.target.value),
+              onChange: (event: { target: { value: string } }) =>
+                setBaseUrl(event.target.value),
               placeholder: "https://bitbucket.example.com/bitbucket",
             }),
           )
         : null,
-      h(ui.Label, { htmlFor: "bitbucket-auth-method" }, "Authentication"),
+      h(ui.Label, { htmlFor: "bitbucket-auth-method" }, t("authentication")),
       h(
         ui.Select,
         {
@@ -330,14 +355,26 @@ export function ConnectionHealth({
           null,
           product === "cloud"
             ? [
-                h(ui.SelectItem, { value: "api_token" }, "API token"),
-                h(ui.SelectItem, { value: "oauth" }, "OAuth 2.0"),
+                h(ui.SelectItem, { value: "api_token" }, t("apiToken")),
+                h(ui.SelectItem, { value: "oauth" }, t("oauth")),
               ]
             : [
-                h(ui.SelectItem, { value: "user_pat" }, "Personal access token"),
-                h(ui.SelectItem, { value: "project_token" }, "Project access token"),
-                h(ui.SelectItem, { value: "repository_token" }, "Repository access token"),
-                h(ui.SelectItem, { value: "oauth" }, "OAuth 2.0"),
+                h(
+                  ui.SelectItem,
+                  { value: "user_pat" },
+                  t("personalAccessToken"),
+                ),
+                h(
+                  ui.SelectItem,
+                  { value: "project_token" },
+                  t("projectAccessToken"),
+                ),
+                h(
+                  ui.SelectItem,
+                  { value: "repository_token" },
+                  t("repositoryAccessToken"),
+                ),
+                h(ui.SelectItem, { value: "oauth" }, t("oauth")),
               ],
         ),
       ),
@@ -345,15 +382,16 @@ export function ConnectionHealth({
         ? h(
             "div",
             { className: "bb-field" },
-            h(ui.Label, { htmlFor: "bitbucket-token" }, "Access token"),
+            h(ui.Label, { htmlFor: "bitbucket-token" }, t("accessToken")),
             h(ui.Input, {
               id: "bitbucket-token",
               type: "password",
               className: "min-h-11",
               autoComplete: "off",
               value: token,
-              onChange: (event: { target: { value: string } }) => setToken(event.target.value),
-              placeholder: "Stored only by Bitbucket secret handling",
+              onChange: (event: { target: { value: string } }) =>
+                setToken(event.target.value),
+              placeholder: t("tokenPlaceholder"),
             }),
           )
         : null,
@@ -361,15 +399,21 @@ export function ConnectionHealth({
         ? h(
             "div",
             { className: "bb-field" },
-            h(ui.Label, { htmlFor: "bitbucket-connection-identity" }, identityField.label),
+            h(
+              ui.Label,
+              { htmlFor: "bitbucket-connection-identity" },
+              identityField.label,
+            ),
             h(ui.Input, {
               id: "bitbucket-connection-identity",
               "data-testid": "bitbucket-connection-identity",
               type: identityField.inputType,
               className: "min-h-11",
-              autoComplete: identityField.inputType === "email" ? "email" : "username",
+              autoComplete:
+                identityField.inputType === "email" ? "email" : "username",
               value: identity,
-              onChange: (event: { target: { value: string } }) => setIdentity(event.target.value),
+              onChange: (event: { target: { value: string } }) =>
+                setIdentity(event.target.value),
               "aria-describedby": "bitbucket-connection-identity-help",
             }),
             h(
@@ -387,13 +431,13 @@ export function ConnectionHealth({
             "section",
             {
               className: "bb-oauth-registration",
-              "aria-label": "OAuth client registration",
+              "aria-label": t("oauthClientRegistration"),
             },
             oauthRegistration.configured
               ? h(
                   "p",
                   { className: "bb-capability-note", role: "status" },
-                  "OAuth app registration is configured. Enter both values only to replace it.",
+                  t("oauthRegistrationConfigured"),
                 )
               : null,
             h(
@@ -403,8 +447,8 @@ export function ConnectionHealth({
                 ui.Label,
                 { htmlFor: "bitbucket-oauth-client-id" },
                 oauthRegistration.configured
-                  ? "OAuth client ID (optional to replace)"
-                  : "OAuth client ID",
+                  ? t("oauthClientIdReplace")
+                  : t("oauthClientId"),
               ),
               h(ui.Input, {
                 id: "bitbucket-oauth-client-id",
@@ -423,8 +467,8 @@ export function ConnectionHealth({
                 ui.Label,
                 { htmlFor: "bitbucket-oauth-client-secret" },
                 oauthRegistration.configured
-                  ? "OAuth client secret (optional to replace)"
-                  : "OAuth client secret",
+                  ? t("oauthClientSecretReplace")
+                  : t("oauthClientSecret"),
               ),
               h(ui.Input, {
                 id: "bitbucket-oauth-client-secret",
@@ -443,13 +487,17 @@ export function ConnectionHealth({
                   id: "bitbucket-oauth-client-secret-help",
                   className: "bb-capability-note",
                 },
-                "Stored only by Bitbucket secret handling. Existing secrets are never displayed.",
+                t("oauthSecretHelp"),
               ),
             ),
             h(
               "div",
               { className: "bb-field" },
-              h(ui.Label, { htmlFor: "bitbucket-oauth-callback-url" }, "OAuth callback URL"),
+              h(
+                ui.Label,
+                { htmlFor: "bitbucket-oauth-callback-url" },
+                t("oauthCallbackUrl"),
+              ),
               h(ui.Input, {
                 id: "bitbucket-oauth-callback-url",
                 "data-testid": "bitbucket-oauth-callback-url",
@@ -465,7 +513,7 @@ export function ConnectionHealth({
                   id: "bitbucket-oauth-callback-url-help",
                   className: "bb-capability-note",
                 },
-                "Copy this Kandev callback URL into your OAuth app. It is derived from this Kandev origin.",
+                t("oauthCallbackHelp"),
               ),
             ),
           )
@@ -479,7 +527,7 @@ export function ConnectionHealth({
               disabled: saving || !oauthReady,
               onClick: startOauth,
             },
-            "Connect with OAuth",
+            t("connectWithOauth"),
           )
         : null,
       h(ui.Separator, null),
@@ -495,7 +543,7 @@ export function ConnectionHealth({
             disabled: saving,
             onClick: saveConnection,
           },
-          "Check connection",
+          t("checkConnection"),
         ),
         h(
           ui.Button,
@@ -506,7 +554,7 @@ export function ConnectionHealth({
             disabled: saving || !scopedWorkspaceId,
             onClick: openDisconnectConfirmation,
           },
-          "Disconnect Bitbucket",
+          t("disconnectBitbucket"),
         ),
       ),
       responsive.isMobile && scopedWorkspaceId
@@ -522,8 +570,12 @@ export function ConnectionHealth({
               h(
                 ui.DrawerHeader,
                 null,
-                h(ui.DrawerTitle, null, "Disconnect Bitbucket"),
-                h(ui.DrawerDescription, null, "Remove this workspace Bitbucket connection."),
+                h(ui.DrawerTitle, null, t("disconnectBitbucket")),
+                h(
+                  ui.DrawerDescription,
+                  null,
+                  t("disconnectWorkspaceDescription"),
+                ),
               ),
               h(
                 "div",

@@ -39,7 +39,9 @@ func TestLinkStore_UnlinkNeverDeletesLinkedTask(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, linked, 1)
 
-	remaining, err := links.Unlink(context.Background(), "manual-task", "ws/repo#42")
+	remaining, err := links.Unlink(
+		context.Background(), "manual-task", "https://bitbucket.org", "ws/repo", 42,
+	)
 	require.NoError(t, err)
 	require.Empty(t, remaining)
 	require.Empty(t, host.deletedScopes, "unlink must not invoke task deletion")
@@ -55,7 +57,9 @@ func TestLinkStore_ExplicitUnlinkSuppressesAutoLinkUntilManualRelink(t *testing.
 	}
 	_, err = links.AutoLink(context.Background(), "task-1", link)
 	require.NoError(t, err)
-	_, err = links.Unlink(context.Background(), "task-1", link.Key)
+	_, err = links.Unlink(
+		context.Background(), "task-1", "https://bitbucket.org", link.RepositoryID, link.Number,
+	)
 	require.NoError(t, err)
 	automatic, err := links.AutoLink(context.Background(), "task-1", link)
 	require.NoError(t, err)
@@ -84,14 +88,23 @@ func TestLinkStore_DoesNotConflateRecreatedRepositoryAtSamePath(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, linked, 2, "a mutable repository path must not be the persisted identity")
 
-	_, err = links.Unlink(context.Background(), "task-1", oldRepository.Key)
+	remaining, err := links.Unlink(
+		context.Background(), "task-1", oldRepository.ConnectionScope,
+		oldRepository.RepositoryID, oldRepository.Number,
+	)
 	require.NoError(t, err)
+	require.Len(t, remaining, 1,
+		"unlink must remove only the selected immutable repository identity")
+	require.Equal(t, newRepository.RepositoryID, remaining[0].RepositoryID)
 	freshRepository := newRepository
 	freshRepository.RepositoryID = "repo-uuid-fresh"
 	automatic, err := links.AutoLink(context.Background(), "task-1", freshRepository)
 	require.NoError(t, err)
-	require.Len(t, automatic, 1, "unlink suppression must be scoped to immutable identities")
-	require.Equal(t, freshRepository.RepositoryID, automatic[0].RepositoryID)
+	require.Len(t, automatic, 2, "unlink suppression must be scoped to immutable identities")
+	require.ElementsMatch(t,
+		[]string{newRepository.RepositoryID, freshRepository.RepositoryID},
+		[]string{automatic[0].RepositoryID, automatic[1].RepositoryID},
+	)
 }
 
 func TestLinkStore_LegacyPathSuppressionDoesNotSuppressImmutableRepository(t *testing.T) {

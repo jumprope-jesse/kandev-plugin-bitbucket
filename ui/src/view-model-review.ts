@@ -6,6 +6,7 @@ import type {
   ReviewComment,
   ReviewDetail,
 } from "./view-model-base";
+import { translateEnglish, type Translate } from "./i18n";
 import {
   boolean,
   itemList,
@@ -20,7 +21,10 @@ import {
   timestamp,
   toCapabilities,
 } from "./view-model-base";
-export function normalizePullRequests(value: unknown): PullRequest[] {
+export function normalizePullRequests(
+  value: unknown,
+  t: Translate = translateEnglish,
+): PullRequest[] {
   return itemList(value, ["pull_requests", "pullRequests", "items", "values"])
     .map((item) => {
       const source = record(item);
@@ -46,7 +50,9 @@ export function normalizePullRequests(value: unknown): PullRequest[] {
         string(repository.id) ??
         "";
       const numberValue = number(source.number) ?? number(source.id) ?? 0;
-      const title = string(source.title) ?? `Pull request ${numberValue || id}`;
+      const title =
+        string(source.title) ??
+        t("pullRequestNumber", { values: { number: numberValue || id } });
       if (!id || !repositoryId || !numberValue) return null;
       const status = record(source.status);
       const state = string(source.state) ?? string(source.status) ?? "UNKNOWN";
@@ -129,6 +135,7 @@ export function normalizePullRequests(value: unknown): PullRequest[] {
         tasks: normalizeTaskLinks(
           source.associations ?? source.tasks,
           reviewKey,
+          t,
         ),
         capabilities: toCapabilities(source.capabilities),
       };
@@ -181,9 +188,12 @@ function normalizeViewerApproval(
   );
 }
 
-export function normalizeReviewDetail(value: unknown): ReviewDetail | null {
+export function normalizeReviewDetail(
+  value: unknown,
+  t: Translate = translateEnglish,
+): ReviewDetail | null {
   const source = record(value);
-  const pr = normalizePullRequests({ pull_requests: [source] })[0];
+  const pr = normalizePullRequests({ pull_requests: [source] }, t)[0];
   if (!pr) return null;
   const participantItems = itemList(source.participants ?? source.reviewers, [
     "items",
@@ -268,7 +278,7 @@ export function normalizeReviewDetail(value: unknown): ReviewDetail | null {
       if (!id) return [];
       const comments = itemList(thread.comments, ["items", "values"]).flatMap(
         (comment): ReviewComment[] => {
-          const normalized = normalizeReviewComment(comment);
+          const normalized = normalizeReviewComment(comment, t);
           return normalized ? [normalized] : [];
         },
       );
@@ -280,7 +290,7 @@ export function normalizeReviewDetail(value: unknown): ReviewDetail | null {
             rootComment?.author ??
             string(thread.author) ??
             string(record(thread.author).display_name) ??
-            "Unknown",
+            t("unknown"),
           body:
             rootComment?.body ??
             string(thread.body) ??
@@ -301,7 +311,7 @@ export function normalizeReviewDetail(value: unknown): ReviewDetail | null {
                     author:
                       string(thread.author) ??
                       string(record(thread.author).display_name) ??
-                      "Unknown",
+                      t("unknown"),
                     body: string(thread.body) ?? string(thread.content) ?? "",
                   },
                 ],
@@ -359,6 +369,7 @@ function hostChangeRequestState(value: string): string {
 
 export function changeRequestDetailModel(
   detail: ReviewDetail,
+  t: Translate = translateEnglish,
 ): HostChangeRequestDetail {
   const reviewers = detail.participants.filter((participant) =>
     ["REVIEWER", "APPROVER"].includes(
@@ -400,7 +411,7 @@ export function changeRequestDetailModel(
     state: hostChangeRequestState(detail.state),
     ...(detail.state.trim().toUpperCase() === "DRAFT" ? { draft: true } : {}),
     author: {
-      name: detail.author ?? "Unknown",
+      name: detail.author ?? t("unknown"),
       ...(detail.authorUrl ? { url: detail.authorUrl } : {}),
       ...(detail.authorAvatarUrl ? { avatarUrl: detail.authorAvatarUrl } : {}),
     },
@@ -455,6 +466,7 @@ export function changeRequestDetailModel(
 
 export function changeRequestDetailActions(
   detail: ReviewDetail,
+  t: Translate = translateEnglish,
 ): HostChangeRequestDetailAction[] {
   if (hostChangeRequestState(detail.state) !== "open") return [];
   const can = (capability: string) => detail.capabilities.includes(capability);
@@ -464,15 +476,15 @@ export function changeRequestDetailActions(
       detail.viewerApproved
         ? {
             id: "unapprove",
-            label: "Remove approval",
-            pendingLabel: "Removing approval…",
+            label: t("removeApproval"),
+            pendingLabel: t("removingApproval"),
             placement: "header",
             tone: "secondary",
           }
         : {
             id: "approve",
-            label: "Approve",
-            pendingLabel: "Approving…",
+            label: t("approve"),
+            pendingLabel: t("approving"),
             placement: "header",
             tone: "success",
           },
@@ -481,16 +493,16 @@ export function changeRequestDetailActions(
   if (can("merge")) {
     actions.push({
       id: "merge",
-      label: "Merge",
-      pendingLabel: "Merging…",
+      label: t("merge"),
+      pendingLabel: t("merging"),
       placement: "header",
     });
   }
   if (can("decline")) {
     actions.push({
       id: "decline",
-      label: "Decline",
-      pendingLabel: "Declining…",
+      label: t("decline"),
+      pendingLabel: t("declining"),
       placement: "header",
       tone: "danger",
     });
@@ -498,7 +510,7 @@ export function changeRequestDetailActions(
   if (can("comments")) {
     actions.push({
       id: "comment",
-      label: "Comment",
+      label: t("comment"),
       placement: "comment",
       input: "text",
     });
@@ -506,7 +518,7 @@ export function changeRequestDetailActions(
   if (can("thread_replies")) {
     actions.push({
       id: "reply",
-      label: "Reply",
+      label: t("reply"),
       placement: "thread",
       input: "text",
     });

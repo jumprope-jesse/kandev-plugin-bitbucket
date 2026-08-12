@@ -49,7 +49,7 @@ actions:
   - { key: "pullrequests.unlink", scope: "task", max_body_bytes: 32768 }
   - { key: "pullrequests.create", scope: "task", max_body_bytes: 65536 }
   - { key: "reviews.get", scope: "workspace", max_body_bytes: 65536 }
-  - { key: "reviews.action", scope: "workspace", max_body_bytes: 32768 }
+  - { key: "reviews.action", scope: "task", max_body_bytes: 32768 }
   - { key: "tasks.launch", scope: "workspace", max_body_bytes: 65536 }
   - { key: "watches.get", scope: "workspace", max_body_bytes: 8192 }
   - { key: "watches.update", scope: "workspace", max_body_bytes: 32768 }

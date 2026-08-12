@@ -6,6 +6,7 @@ import {
 } from "./view-models";
 import { type PluginHost, type QueryState } from "./host-contract";
 import { record } from "./ui-runtime";
+import { pluginTranslate, usePluginTranslation } from "./i18n";
 
 export function repositoryFilter(
   host: PluginHost,
@@ -14,6 +15,7 @@ export function repositoryFilter(
   setRepository: (value: string) => void,
 ) {
   const { jsx: h, ui } = host;
+  const t = pluginTranslate(host);
   return h(ui.IntegrationRepositoryFilter, {
     value: repository,
     onValueChange: setRepository,
@@ -21,10 +23,10 @@ export function repositoryFilter(
       const label = `${candidate.ownerOrProject}/${candidate.repositoryName}`;
       return { value: candidate.repositoryId, label, keywords: [label] };
     }),
-    ariaLabel: "Filter Bitbucket pull requests by repository",
-    allLabel: "All repositories",
-    searchPlaceholder: "Filter repositories...",
-    emptyMessage: "No repositories found.",
+    ariaLabel: t("filterRepositoryAria"),
+    allLabel: t("allRepositories"),
+    searchPlaceholder: t("filterRepositories"),
+    emptyMessage: t("noRepositories"),
     triggerClassName:
       "min-h-11 w-full border border-input bg-background px-2 py-1.5 text-xs/relaxed hover:bg-secondary/50 md:h-8 md:min-h-0 md:w-[220px]",
     className: "md:min-w-[360px]",
@@ -59,13 +61,24 @@ export function StateScopeBar({
   onSaveCurrent,
 }: DashboardScopeProps) {
   const { jsx: h, ui } = host;
+  const { t } = usePluginTranslation(host);
   const presets = [
-    { value: "open", label: "Open", iconName: "pull-request", group: "inbox" },
-    { value: "all", label: "All", iconName: "filter", group: "inbox" },
-    { value: "merged", label: "Merged", iconName: "merged", group: "created" },
+    {
+      value: "open",
+      label: t("open"),
+      iconName: "pull-request",
+      group: "inbox",
+    },
+    { value: "all", label: t("all"), iconName: "filter", group: "inbox" },
+    {
+      value: "merged",
+      label: t("merged"),
+      iconName: "merged",
+      group: "created",
+    },
     {
       value: "declined",
-      label: "Declined",
+      label: t("declined"),
       iconName: "pull-request-closed",
       group: "created",
     },
@@ -73,7 +86,7 @@ export function StateScopeBar({
   return h(ui.IntegrationScopeBar, {
     testId: "bitbucket-scope-bar",
     savedMenuTestId: "bitbucket-saved-filters",
-    kinds: [{ value: "pull_requests", label: "Pull requests" }],
+    kinds: [{ value: "pull_requests", label: t("pullRequests") }],
     selected: selection,
     onSelect,
     presetsByKind: () => presets,
@@ -101,6 +114,7 @@ export function MobileFilters({
   setRepository(value: string): void;
 } & Omit<DashboardScopeProps, "host">) {
   const { jsx: h, ui, React } = host;
+  const { t } = usePluginTranslation(host);
   const [open, setOpen] = React.useState(false);
   const mobileScope = {
     ...scope,
@@ -125,10 +139,10 @@ export function MobileFilters({
           type: "button",
           variant: "outline",
           className: "min-h-11",
-          "aria-label": "Open Bitbucket filters",
+          "aria-label": t("openFilters"),
         },
         h(ui.IntegrationIcon, { name: "filter", className: "h-4 w-4" }),
-        "Filters",
+        t("filters"),
       ),
     ),
     h(
@@ -137,14 +151,18 @@ export function MobileFilters({
       h(
         ui.SheetHeader,
         null,
-        h(ui.SheetTitle, null, "Bitbucket filters"),
-        h(ui.SheetDescription, null, "Narrow pull requests by repository and state."),
+        h(ui.SheetTitle, null, t("bitbucketFilters")),
+        h(ui.SheetDescription, null, t("filtersDescription")),
       ),
       h(
         "div",
         { className: "bb-mobile-filter-fields" },
         h(StateScopeBar, { host, ...mobileScope }),
-        h(ui.Label, { htmlFor: "bitbucket-repository-filter" }, "Repository"),
+        h(
+          ui.Label,
+          { htmlFor: "bitbucket-repository-filter" },
+          t("repository"),
+        ),
         repositoryFilter(host, repositories, repository, setRepository),
       ),
     ),
@@ -161,27 +179,28 @@ export function ConnectionNotice({
   workspaceId?: string;
 }) {
   const { jsx: h, ui } = host;
+  const { t } = usePluginTranslation(host);
   if (connection.loading)
     return h(
       "div",
       { className: "bb-connection-loading" },
-      h(ui.Spinner, { "aria-label": "Checking Bitbucket connection" }),
+      h(ui.Spinner, { "aria-label": t("checkingBitbucketConnection") }),
     );
   const state = connectionState(record(connection.data));
   if (state === "connected") return null;
   const checking = state === "checking";
   const message =
     connection.error ??
-    (checking
-      ? "Kandev is verifying the saved connection."
-      : "Connect Bitbucket for this workspace to load pull requests.");
+    (checking ? t("verifyingConnection") : t("connectToLoad"));
   return h(
     ui.Alert,
     { className: "bb-connection-notice" },
     h(
       ui.AlertTitle,
       null,
-      checking ? "Checking Bitbucket connection" : "Bitbucket needs attention",
+      checking
+        ? t("checkingBitbucketConnection")
+        : t("bitbucketNeedsAttention"),
     ),
     h(
       ui.AlertDescription,
@@ -195,9 +214,10 @@ export function ConnectionNotice({
               type: "button",
               variant: "outline",
               className: "min-h-11",
-              onClick: () => host.navigate(integrationSettingsHref(workspaceId)),
+              onClick: () =>
+                host.navigate(integrationSettingsHref(workspaceId)),
             },
-            "Configure Bitbucket",
+            t("configureBitbucket"),
           ),
     ),
   );

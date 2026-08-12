@@ -161,12 +161,17 @@ func (s *LinkStore) AutoLink(ctx context.Context, taskID string, link PullReques
 	return state.Links, nil
 }
 
-func (s *LinkStore) Unlink(ctx context.Context, taskID, key string) ([]PullRequestLink, error) {
-	if taskID == "" || key == "" {
-		return nil, fmt.Errorf("task id and pull request key are required")
-	}
-	if _, _, ok := parsePullRequestKey(key); !ok {
-		return nil, fmt.Errorf("invalid pull request key")
+func (s *LinkStore) Unlink(
+	ctx context.Context,
+	taskID, providerScope, repositoryID string,
+	number int64,
+) ([]PullRequestLink, error) {
+	target, complete := (domain.PullRequestIdentity{
+		ProviderID: "bitbucket", ProviderScope: providerScope,
+		RepositoryID: repositoryID, Number: number,
+	}).StorageKey()
+	if taskID == "" || !complete {
+		return nil, fmt.Errorf("task id and complete pull request identity are required")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -177,7 +182,7 @@ func (s *LinkStore) Unlink(ctx context.Context, taskID, key string) ([]PullReque
 	kept := state.Links[:0]
 	suppressed := make([]string, 0)
 	for _, link := range state.Links {
-		if link.Key != key {
+		if pullRequestLinkStorageKey(link) != target {
 			kept = append(kept, link)
 			continue
 		}

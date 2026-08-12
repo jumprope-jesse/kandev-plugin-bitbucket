@@ -11,6 +11,7 @@ import {
   type PluginHost,
   type QueryState,
 } from "./host-contract";
+import { usePluginTranslation } from "./i18n";
 
 export function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -36,7 +37,8 @@ export function useActiveWorkspaceId(host: PluginHost): string | undefined {
 
 export function useTaskCreationContext(host: PluginHost, workspaceId?: string) {
   const { React } = host;
-  const read = () => (workspaceId ? host.context.getTaskCreationContext(workspaceId) : null);
+  const read = () =>
+    workspaceId ? host.context.getTaskCreationContext(workspaceId) : null;
   const [context, setContext] = React.useState(read);
   React.useEffect(() => {
     setContext(read());
@@ -56,7 +58,11 @@ export function useSavedQueries(host: PluginHost, workspaceId?: string) {
       setQueries([]);
       return;
     }
-    const entry = await host.storage.get("workspace", workspaceId, SAVED_QUERIES_KEY);
+    const entry = await host.storage.get(
+      "workspace",
+      workspaceId,
+      SAVED_QUERIES_KEY,
+    );
     setQueries(normalizeSavedQueries(entry?.value));
   };
   React.useEffect(() => {
@@ -66,7 +72,11 @@ export function useSavedQueries(host: PluginHost, workspaceId?: string) {
     }
     let active = true;
     const sync = async () => {
-      const entry = await host.storage.get("workspace", workspaceId, SAVED_QUERIES_KEY);
+      const entry = await host.storage.get(
+        "workspace",
+        workspaceId,
+        SAVED_QUERIES_KEY,
+      );
       if (active) setQueries(normalizeSavedQueries(entry?.value));
     };
     void sync();
@@ -84,7 +94,12 @@ export function useSavedQueries(host: PluginHost, workspaceId?: string) {
     const normalized = normalizeSavedQueries(next);
     setQueries(normalized);
     try {
-      await host.storage.set("workspace", workspaceId, SAVED_QUERIES_KEY, normalized);
+      await host.storage.set(
+        "workspace",
+        workspaceId,
+        SAVED_QUERIES_KEY,
+        normalized,
+      );
     } catch (error) {
       await load();
       throw error;
@@ -92,7 +107,9 @@ export function useSavedQueries(host: PluginHost, workspaceId?: string) {
   };
   return {
     queries,
-    async save(input: Pick<SavedQuery, "label" | "query" | "repositoryId" | "state">) {
+    async save(
+      input: Pick<SavedQuery, "label" | "query" | "repositoryId" | "state">,
+    ) {
       const created = newSavedQuery(
         input,
         `saved-${host.utils.generateUUID()}`,
@@ -119,6 +136,7 @@ export function usePluginQuery<T>(
   enabled = true,
 ): QueryState<T> {
   const { React } = host;
+  const { t } = usePluginTranslation(host);
   const serializedInput = JSON.stringify(input ?? {});
   const [reload, setReload] = React.useState(0);
   const [state, setState] = React.useState<{
@@ -149,9 +167,13 @@ export function usePluginQuery<T>(
     }
     setState((previous) => ({ ...previous, loading: true, error: null }));
     void host.api
-      .invokeAction<T>(key, requestBody(JSON.parse(serializedInput) as ActionInput), {
-        signal: controller.signal,
-      })
+      .invokeAction<T>(
+        key,
+        requestBody(JSON.parse(serializedInput) as ActionInput),
+        {
+          signal: controller.signal,
+        },
+      )
       .then((data) => {
         if (active)
           setState({
@@ -166,14 +188,14 @@ export function usePluginQuery<T>(
           setState((previous) => ({
             ...previous,
             loading: false,
-            error: errorMessage(error),
+            error: errorMessage(error, t),
           }));
       });
     return () => {
       active = false;
       controller.abort();
     };
-  }, [enabled, host.api, key, reload, serializedInput]);
+  }, [enabled, host.api, key, reload, serializedInput, t]);
   const refresh = React.useCallback(() => setReload((value) => value + 1), []);
   return { ...state, refresh };
 }
@@ -191,16 +213,21 @@ export async function collectPluginActionPages(
   let lastPage: Record<string, unknown> = {};
   for (let page = 0; page < 1000; page += 1) {
     const body = { ...record(input?.body), cursor };
-    const response = await api.invokeAction<unknown>(key, requestBody({ ...input, body }), {
-      signal,
-    });
+    const response = await api.invokeAction<unknown>(
+      key,
+      requestBody({ ...input, body }),
+      {
+        signal,
+      },
+    );
     if (signal.aborted) throw new DOMException("Request aborted", "AbortError");
     lastPage = record(response);
     const pageItems = lastPage[itemKey];
     if (Array.isArray(pageItems)) items.push(...pageItems);
     const nextCursor = text(lastPage.next_cursor);
     if (!nextCursor) return { ...lastPage, [itemKey]: items, next_cursor: "" };
-    if (seenCursors.has(nextCursor)) throw new Error(`${key} pagination did not advance`);
+    if (seenCursors.has(nextCursor))
+      throw new Error(`${key} pagination did not advance`);
     seenCursors.add(nextCursor);
     cursor = nextCursor;
   }
@@ -215,6 +242,7 @@ export function usePagedPluginQuery(
   enabled = true,
 ): QueryState<Record<string, unknown>> {
   const { React } = host;
+  const { t } = usePluginTranslation(host);
   const serializedInput = JSON.stringify(input ?? {});
   const [reload, setReload] = React.useState(0);
   const [state, setState] = React.useState<{
@@ -260,14 +288,14 @@ export function usePagedPluginQuery(
           setState((previous) => ({
             ...previous,
             loading: false,
-            error: errorMessage(error),
+            error: errorMessage(error, t),
           }));
       });
     return () => {
       active = false;
       controller.abort();
     };
-  }, [enabled, host.api, itemKey, key, reload, serializedInput]);
+  }, [enabled, host.api, itemKey, key, reload, serializedInput, t]);
   const refresh = React.useCallback(() => setReload((value) => value + 1), []);
   return { ...state, refresh };
 }
@@ -314,7 +342,9 @@ export function createAbortableOperation() {
 
 export function useAbortableOperation(host: PluginHost) {
   const { React } = host;
-  const operation = React.useRef<ReturnType<typeof createAbortableOperation> | null>(null);
+  const operation = React.useRef<ReturnType<
+    typeof createAbortableOperation
+  > | null>(null);
   if (!operation.current) operation.current = createAbortableOperation();
   React.useEffect(() => () => operation.current?.dispose(), []);
   return operation.current;
@@ -326,7 +356,8 @@ export function isAbortError(reason: unknown): boolean {
 
 export function icon(h: ElementFactory, name: string) {
   const paths: Record<string, string> = {
-    watch: "M3 12s3.2-5 9-5 9 5 9 5-3.2 5-9 5-9-5-9-5Zm9 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
+    watch:
+      "M3 12s3.2-5 9-5 9 5 9 5-3.2 5-9 5-9-5-9-5Zm9 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
     back: "m15 18-6-6 6-6",
   };
   return h(
@@ -346,7 +377,10 @@ export function icon(h: ElementFactory, name: string) {
   );
 }
 
-export function pullRequestStateIcon(host: PluginHost, pullRequest: PullRequest) {
+export function pullRequestStateIcon(
+  host: PluginHost,
+  pullRequest: PullRequest,
+) {
   const normalized = pullRequest.state.toLowerCase();
   const merged = normalized === "merged";
   const closed = normalized === "declined" || normalized === "closed";
@@ -357,7 +391,11 @@ export function pullRequestStateIcon(host: PluginHost, pullRequest: PullRequest)
 }
 
 export function Badge(host: PluginHost, label: string, tone = "neutral") {
-  return host.jsx(host.ui.Badge, { className: `bb-badge bb-badge-${tone}` }, label);
+  return host.jsx(
+    host.ui.Badge,
+    { className: `bb-badge bb-badge-${tone}` },
+    label,
+  );
 }
 
 export function EmptyState(
@@ -374,7 +412,11 @@ export function EmptyState(
     h("h2", null, title),
     h("p", null, detail),
     actionLabel && onAction
-      ? h(ui.Button, { type: "button", className: "min-h-11", onClick: onAction }, actionLabel)
+      ? h(
+          ui.Button,
+          { type: "button", className: "min-h-11", onClick: onAction },
+          actionLabel,
+        )
       : null,
   );
 }

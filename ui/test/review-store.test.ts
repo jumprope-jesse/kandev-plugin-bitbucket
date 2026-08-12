@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginHost } from "../src/host-contract";
-import { associationStore, refreshAssociationStore, reviewStore } from "../src/review-store";
+import {
+  associationStore,
+  refreshAssociationStore,
+  reviewStore,
+} from "../src/review-store";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -29,13 +33,24 @@ describe("review provider stores", () => {
     const older = deferred<unknown>();
     const newer = deferred<unknown>();
     const host = hostWithInvocations([older.promise, newer.promise]);
-    const first = refreshAssociationStore(host, "workspace-1", new AbortController().signal);
-    const second = refreshAssociationStore(host, "workspace-1", new AbortController().signal);
+    const first = refreshAssociationStore(
+      host,
+      "workspace-1",
+      new AbortController().signal,
+    );
+    const second = refreshAssociationStore(
+      host,
+      "workspace-1",
+      new AbortController().signal,
+    );
 
     newer.resolve({
       associations: [
         {
           review_key: "team/new#2",
+          provider_scope: "https://bitbucket.org",
+          repository_id: "repo-new",
+          number: 2,
           task_id: "task-new",
           task_title: "New",
         },
@@ -46,6 +61,9 @@ describe("review provider stores", () => {
       associations: [
         {
           review_key: "team/old#1",
+          provider_scope: "https://bitbucket.org",
+          repository_id: "repo-old",
+          number: 1,
           task_id: "task-old",
           task_title: "Old",
         },
@@ -61,7 +79,11 @@ describe("review provider stores", () => {
   it("does not resurrect association state after plugin teardown clears the store", async () => {
     const response = deferred<unknown>();
     const host = hostWithInvocations([response.promise]);
-    const refresh = refreshAssociationStore(host, "workspace-1", new AbortController().signal);
+    const refresh = refreshAssociationStore(
+      host,
+      "workspace-1",
+      new AbortController().signal,
+    );
 
     associationStore.clear();
     response.resolve({

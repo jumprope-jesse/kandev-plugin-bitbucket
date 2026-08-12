@@ -117,6 +117,8 @@ type pullRequestAssociationsInput struct {
 }
 type pullRequestLookup struct {
 	ReviewKey     string                   `json:"review_key"`
+	ProviderScope string                   `json:"provider_scope"`
+	RepositoryID  string                   `json:"repository_id"`
 	Repository    watches.RemoteRepository `json:"repository"`
 	Number        int                      `json:"number"`
 	PullRequestID string                   `json:"pull_request_id"`
@@ -155,8 +157,10 @@ type nativeTaskInput struct {
 	PlanMode          bool   `json:"plan_mode"`
 }
 type unlinkInput struct {
-	Key       string `json:"key"`
-	ReviewKey string `json:"review_key"`
+	ReviewKey     string `json:"review_key"`
+	ProviderScope string `json:"provider_scope"`
+	RepositoryID  string `json:"repository_id"`
+	Number        int64  `json:"number"`
 }
 type watchIDInput struct {
 	WatchID string `json:"watch_id"`

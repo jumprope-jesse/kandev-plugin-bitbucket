@@ -6,10 +6,18 @@ import { BitbucketPage } from "./bitbucket-page";
 import { registerNativeIntegrations } from "./native-integrations";
 import { associationStore, reviewStore } from "./review-store";
 import { text, useActiveWorkspaceId } from "./ui-runtime";
+import {
+  pluginTranslate,
+  registerTranslations,
+  usePluginTranslation,
+} from "./i18n";
+import { createBitbucketIcon } from "./bitbucket-icon";
 
 const PLUGIN_ID = "kandev-plugin-bitbucket";
 
-function makeIntegrationSettings(host: PluginHost): Component<{ workspaceId?: string }> {
+function makeIntegrationSettings(
+  host: PluginHost,
+): Component<{ workspaceId?: string }> {
   return function IntegrationSettings(props = {}) {
     const activeWorkspaceId = useActiveWorkspaceId(host);
     const scopedWorkspaceId = text(props.workspaceId) || activeWorkspaceId;
@@ -35,6 +43,7 @@ function makeIntegrationSettings(host: PluginHost): Component<{ workspaceId?: st
 function makeTopbarActions(host: PluginHost): Component {
   return function TopbarActions() {
     const activeWorkspaceId = useActiveWorkspaceId(host);
+    const { t } = usePluginTranslation(host);
     return host.jsx(
       host.ui.Button,
       {
@@ -42,10 +51,11 @@ function makeTopbarActions(host: PluginHost): Component {
         variant: "ghost",
         size: "sm",
         className: "bb-topbar-settings",
-        "aria-label": "Open Bitbucket settings",
-        onClick: () => host.navigate(integrationSettingsHref(activeWorkspaceId)),
+        "aria-label": t("openSettings"),
+        onClick: () =>
+          host.navigate(integrationSettingsHref(activeWorkspaceId)),
       },
-      "Settings",
+      t("settings"),
     );
   };
 }
@@ -64,29 +74,46 @@ declare global {
 
 window.registerKandevPlugin(PLUGIN_ID, {
   initialize(registry, host) {
+    registerTranslations(registry);
+    const t = pluginTranslate(host);
+    const bitbucketIcon = createBitbucketIcon(host);
     registry.registerNavItem({
       id: "bitbucket",
-      label: "Bitbucket",
+      get label() {
+        return t("bitbucket");
+      },
       path: "/bitbucket",
-      icon: "bitbucket",
+      icon: bitbucketIcon,
       section: "integrations",
     });
-    registry.registerRoute("/bitbucket", () => host.jsx(BitbucketPage, { host }), {
-      topbar: {
-        title: "Bitbucket",
-        subtitle: "Pull requests",
-        icon: "bitbucket",
-        actions: makeTopbarActions(host),
+    registry.registerRoute(
+      "/bitbucket",
+      () => host.jsx(BitbucketPage, { host }),
+      {
+        topbar: {
+          get title() {
+            return t("bitbucket");
+          },
+          get subtitle() {
+            return t("pullRequests");
+          },
+          icon: bitbucketIcon,
+          actions: makeTopbarActions(host),
+        },
       },
-    });
+    );
     registry.registerIntegrationSettings({
       id: "bitbucket",
-      label: "Bitbucket",
-      description: "Connect Bitbucket Cloud or Data Center for this workspace.",
-      icon: "bitbucket",
+      get label() {
+        return t("bitbucket");
+      },
+      get description() {
+        return t("connectDescription");
+      },
+      icon: bitbucketIcon,
       Component: makeIntegrationSettings(host),
     });
-    registerNativeIntegrations(registry, host);
+    registerNativeIntegrations(registry, host, bitbucketIcon);
   },
   destroy() {
     reviewStore.clear();

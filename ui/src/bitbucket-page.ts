@@ -37,9 +37,11 @@ import {
   type DashboardScopeProps,
 } from "./dashboard-components";
 import { action } from "./actions";
+import { usePluginTranslation } from "./i18n";
 
 export function BitbucketPage({ host }: { host: PluginHost }) {
   const { jsx: h, ui, React } = host;
+  const { t } = usePluginTranslation(host);
   const responsive = host.useResponsiveBreakpoint();
   const activeWorkspaceId = useActiveWorkspaceId(host);
   const initialQuery = pullRequestScopeQuery("open");
@@ -47,11 +49,12 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
   const [search, setSearch] = React.useState(initialQuery);
   const [state, setState] = React.useState("open");
   const [repository, setRepository] = React.useState("");
-  const [scopeSelection, setScopeSelection] = React.useState<DashboardScopeSelection>({
-    kind: "pull_requests",
-    source: "preset",
-    id: "open",
-  });
+  const [scopeSelection, setScopeSelection] =
+    React.useState<DashboardScopeSelection>({
+      kind: "pull_requests",
+      source: "preset",
+      id: "open",
+    });
   const [saveDialogOpen, setSaveDialogOpen] = React.useState(false);
   const savedQueries = useSavedQueries(host, activeWorkspaceId);
   const [launch, setLaunch] = React.useState<{
@@ -77,13 +80,16 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
   const repositoriesQuery = usePagedPluginQuery(
     host,
     action.repositoriesList,
-    activeWorkspaceId ? { workspaceId: activeWorkspaceId, body: { limit: 100 } } : undefined,
+    activeWorkspaceId
+      ? { workspaceId: activeWorkspaceId, body: { limit: 100 } }
+      : undefined,
     "repositories",
     Boolean(activeWorkspaceId && connected),
   );
   const repositories = normalizeRepositories(repositoriesQuery.data);
   const selectedRepository =
-    repositories.find((candidate) => candidate.repositoryId === repository) ?? null;
+    repositories.find((candidate) => candidate.repositoryId === repository) ??
+    null;
   const queueScopeKey = JSON.stringify([
     activeWorkspaceId ?? "",
     selectedRepository?.repositoryId ?? "",
@@ -99,15 +105,24 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
     queuePagination.scopeKey === queueScopeKey
       ? queuePagination
       : { scopeKey: queueScopeKey, page: 1, cursors: [""] };
-  const queueCursor = activeQueuePagination.cursors[activeQueuePagination.page - 1] ?? "";
-  const queueRequest = pullRequestListRequest(selectedRepository, search, state, queueCursor, 25);
+  const queueCursor =
+    activeQueuePagination.cursors[activeQueuePagination.page - 1] ?? "";
+  const queueRequest = pullRequestListRequest(
+    selectedRepository,
+    search,
+    state,
+    queueCursor,
+    25,
+  );
   const queue = usePluginQuery<Record<string, unknown>>(
     host,
     queueRequest.actionKey,
-    activeWorkspaceId ? { workspaceId: activeWorkspaceId, body: queueRequest.body } : undefined,
+    activeWorkspaceId
+      ? { workspaceId: activeWorkspaceId, body: queueRequest.body }
+      : undefined,
     Boolean(activeWorkspaceId && connected),
   );
-  const pullRequests = normalizePullRequests(queue.data);
+  const pullRequests = normalizePullRequests(queue.data, t);
   const nextQueueCursor = text(record(queue.data).next_cursor);
   const associations = usePluginQuery<unknown>(
     host,
@@ -122,7 +137,7 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
       : undefined,
     Boolean(activeWorkspaceId && connected && pullRequests.length),
   );
-  const tasksByReview = normalizePullRequestAssociations(associations.data);
+  const tasksByReview = normalizePullRequestAssociations(associations.data, t);
   const createContext = useTaskCreationContext(host, activeWorkspaceId);
   const noWorkspace = !activeWorkspaceId;
   const commitSearch = () => {
@@ -146,7 +161,9 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
       selectScopeState(selection.id);
       return;
     }
-    const saved = savedQueries.queries.find((query) => query.id === selection.id);
+    const saved = savedQueries.queries.find(
+      (query) => query.id === selection.id,
+    );
     if (!saved) return;
     setScopeSelection(selection);
     setSearchDraft(saved.query);
@@ -156,9 +173,13 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
   };
   const deleteSavedQuery = (id: string) => {
     savedQueries.remove(id);
-    if (scopeSelection.source === "saved" && scopeSelection.id === id) selectScopeState("open");
+    if (scopeSelection.source === "saved" && scopeSelection.id === id)
+      selectScopeState("open");
   };
-  const saveCurrentQuery = async (label: string, defaultRepositoryId: string) => {
+  const saveCurrentQuery = async (
+    label: string,
+    defaultRepositoryId: string,
+  ) => {
     const query = searchDraft.trim();
     const parsed = parsePullRequestListQuery(query, state);
     const created = await savedQueries.save({
@@ -228,10 +249,14 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
         })
       : undefined;
   const launchRemoteRepository = launch
-    ? repositories.find((candidate) => candidate.repositoryId === launch.pullRequest.repositoryId)
+    ? repositories.find(
+        (candidate) =>
+          candidate.repositoryId === launch.pullRequest.repositoryId,
+      )
     : undefined;
   const createBitbucketTask = async (payload: Record<string, unknown>) => {
-    if (!activeWorkspaceId || !launch) throw new Error("Bitbucket task launch is unavailable.");
+    if (!activeWorkspaceId || !launch)
+      throw new Error(t("taskLaunchUnavailable"));
     const request = taskLaunchMutation.begin();
     try {
       const result = await host.api.invokeAction<Record<string, unknown>>(
@@ -242,10 +267,12 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
         },
         { signal: request.signal },
       );
-      if (!request.isCurrent()) throw new DOMException("Task launch aborted", "AbortError");
-      const task = taskFromLaunchResult(result);
+      if (!request.isCurrent())
+        throw new DOMException("Task launch aborted", "AbortError");
+      const task = taskFromLaunchResult(result, t);
       const taskId = text(task.id);
-      if (task.bitbucketLinked === true) pluginCreatedTaskIDs.current.add(taskId);
+      if (task.bitbucketLinked === true)
+        pluginCreatedTaskIDs.current.add(taskId);
       associations.refresh();
       return task;
     } finally {
@@ -294,7 +321,7 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
     : [
         responsive.isMobile ? null : h(StateScopeBar, { host, ...scopeProps }),
         h(ui.IntegrationListToolbar, {
-          title: "Pull requests",
+          title: t("pullRequests"),
           count: pullRequests.length,
           loading: queue.loading,
           lastFetchedAt: queue.lastFetchedAt,
@@ -304,7 +331,7 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
           onCommitCustomQuery: commitSearch,
           onRefresh: queue.refresh,
           filter,
-          queryPlaceholder: 'Custom query — press Enter. e.g. "state:open fix login"',
+          queryPlaceholder: t("customQueryPlaceholder"),
           titleTestId: "bitbucket-list-toolbar",
           queryTestId: "bitbucket-list-query",
           refreshTestId: "bitbucket-list-refresh",
@@ -314,7 +341,7 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
           {
             className: "bb-results",
             "data-testid": "bitbucket-results",
-            "aria-label": "Pull request results",
+            "aria-label": t("pullRequestResults"),
           },
           h(DashboardPullRequestList, {
             host,
@@ -345,7 +372,10 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
           },
           onNext: () => {
             if (!nextQueueCursor) return;
-            const cursors = activeQueuePagination.cursors.slice(0, activeQueuePagination.page);
+            const cursors = activeQueuePagination.cursors.slice(
+              0,
+              activeQueuePagination.page,
+            );
             cursors.push(nextQueueCursor);
             setQueuePagination({
               scopeKey: queueScopeKey,
@@ -359,9 +389,10 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
         h(ui.IntegrationSaveQueryDialog, {
           open: saveDialogOpen,
           onOpenChange: setSaveDialogOpen,
-          description: "Save this Bitbucket pull-request search for the current workspace.",
+          description: t("saveQueryDescription"),
           suggestedLabel:
-            searchDraft.trim() || (repository ? "Repository pull requests" : "Saved query"),
+            searchDraft.trim() ||
+            (repository ? t("repositoryPullRequests") : t("savedQuery")),
           query: searchDraft,
           repositoryId: repository,
           repositoryOptions: repositories.map((candidate) => ({
@@ -378,11 +409,7 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
       "data-testid": "bitbucket-workbench",
     },
     noWorkspace
-      ? EmptyState(
-          host,
-          "Choose a workspace",
-          "Open Bitbucket from a workspace to connect and browse pull requests.",
-        )
+      ? EmptyState(host, t("chooseWorkspace"), t("chooseWorkspaceDescription"))
       : [
           h(ConnectionNotice, {
             host,

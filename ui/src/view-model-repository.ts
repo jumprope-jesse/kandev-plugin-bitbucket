@@ -177,7 +177,13 @@ export function workspacePullRequestAction(
 
 export function workspaceReviewAction(
   workspaceId: string,
-  reviewKey: string,
+  taskId: string,
+  identity: {
+    reviewKey: string;
+    connectionScope: string;
+    repositoryId: string;
+    changeRequestNumber: number;
+  },
   pullRequestID: string,
   kind: string,
   options: {
@@ -185,9 +191,12 @@ export function workspaceReviewAction(
     parentCommentId?: string;
     buildKey?: string;
   } = {},
-): { workspaceId: string; body: JsonRecord } {
+): { workspaceId: string; taskId: string; body: JsonRecord } {
   const body: JsonRecord = {
-    review_key: reviewKey,
+    review_key: identity.reviewKey,
+    provider_scope: identity.connectionScope,
+    repository_id: identity.repositoryId,
+    number: identity.changeRequestNumber,
     pull_request_id: pullRequestID,
     kind,
   };
@@ -195,7 +204,7 @@ export function workspaceReviewAction(
   if (comment) body.comment = comment;
   if (options.parentCommentId) body.parent_comment_id = options.parentCommentId;
   if (options.buildKey) body.build_key = options.buildKey;
-  return { workspaceId, body };
+  return { workspaceId, taskId, body };
 }
 
 export function linkPullRequestBody(reference: string): JsonRecord | null {

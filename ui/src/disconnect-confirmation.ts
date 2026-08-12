@@ -2,6 +2,7 @@ import { disconnectConnectionInput, errorMessage } from "./view-models";
 import type { PluginHost } from "./host-contract";
 import { action } from "./actions";
 import { isAbortError, useAbortableOperation } from "./ui-runtime";
+import { usePluginTranslation } from "./i18n";
 
 export function DisconnectConfirmation({
   host,
@@ -15,6 +16,7 @@ export function DisconnectConfirmation({
   onCancel(): void;
 }) {
   const { jsx: h, ui, React } = host;
+  const { t } = usePluginTranslation(host);
   const [disconnecting, setDisconnecting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const mutation = useAbortableOperation(host);
@@ -32,7 +34,8 @@ export function DisconnectConfirmation({
       );
       if (request.isCurrent()) onSuccess();
     } catch (reason) {
-      if (request.isCurrent() && !isAbortError(reason)) setError(errorMessage(reason));
+      if (request.isCurrent() && !isAbortError(reason))
+        setError(errorMessage(reason, t));
     } finally {
       if (request.finish()) setDisconnecting(false);
     }
@@ -40,12 +43,8 @@ export function DisconnectConfirmation({
   return h(
     "section",
     { className: "bb-disconnect-confirm" },
-    h("p", null, "Disconnect Bitbucket connection?"),
-    h(
-      "p",
-      { className: "bb-capability-note" },
-      "Stored Bitbucket credentials and connection settings for this workspace will be removed.",
-    ),
+    h("p", null, t("disconnectTitle")),
+    h("p", { className: "bb-capability-note" }, t("disconnectDescription")),
     error ? h("p", { className: "bb-error", role: "alert" }, error) : null,
     h(
       "div",
@@ -59,7 +58,7 @@ export function DisconnectConfirmation({
           disabled: disconnecting,
           onClick: onCancel,
         },
-        "Cancel",
+        t("cancel"),
       ),
       h(
         ui.Button,
@@ -70,7 +69,7 @@ export function DisconnectConfirmation({
           disabled: disconnecting,
           onClick: () => void disconnect(),
         },
-        disconnecting ? "Disconnecting…" : "Disconnect Bitbucket",
+        disconnecting ? t("disconnecting") : t("disconnectBitbucket"),
       ),
     ),
   );

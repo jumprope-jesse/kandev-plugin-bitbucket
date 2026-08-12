@@ -1,6 +1,218 @@
+// ui/src/i18n.ts
+var english = {
+  bitbucket: "Bitbucket",
+  settings: "Settings",
+  openSettings: "Open Bitbucket settings",
+  pullRequests: "Pull requests",
+  pullRequest: "Pull request",
+  pullRequestNumber: "Pull request {{number}}",
+  connectDescription: "Connect Bitbucket Cloud or Data Center for this workspace.",
+  connection: "Connection",
+  notConfigured: "Not configured",
+  checkingConnection: "Checking connection",
+  connected: "Connected",
+  authenticationRequired: "Authentication required",
+  unavailable: "Unavailable",
+  connectionSaved: "Connection saved and health check started.",
+  oauthReady: "OAuth authorization is ready. Continue in the connection settings.",
+  disconnected: "Bitbucket disconnected. Stored credentials cleared.",
+  disconnectBitbucket: "Disconnect Bitbucket",
+  disconnectTitle: "Disconnect Bitbucket connection?",
+  disconnectDescription: "Stored Bitbucket credentials and connection settings for this workspace will be removed.",
+  disconnectWorkspaceDescription: "Remove this workspace Bitbucket connection.",
+  disconnecting: "Disconnecting\u2026",
+  cancel: "Cancel",
+  bitbucketProduct: "Bitbucket product",
+  bitbucketCloud: "Bitbucket Cloud",
+  bitbucketDataCenter: "Bitbucket Data Center",
+  bitbucketWorkspace: "Bitbucket workspace",
+  workspaceHelp: "Workspace slug or ID from bitbucket.org/workspace; required to list repositories.",
+  dataCenterUrl: "Data Center URL",
+  authentication: "Authentication",
+  apiToken: "API token",
+  oauth: "OAuth 2.0",
+  personalAccessToken: "Personal access token",
+  projectAccessToken: "Project access token",
+  repositoryAccessToken: "Repository access token",
+  accessToken: "Access token",
+  tokenPlaceholder: "Stored only by Bitbucket secret handling",
+  atlassianEmail: "Atlassian account email",
+  atlassianEmailHelp: "Used with this API token for Bitbucket Cloud REST. Git uses x-bitbucket-api-token-auth.",
+  bitbucketUsername: "Bitbucket username",
+  bitbucketUsernameHelp: "Used for HTTPS Git with this Data Center PAT or OAuth credential.",
+  enterIdentity: "Enter {{identity}}.",
+  invalidAtlassianEmail: "Enter a valid Atlassian account email.",
+  enterCloudWorkspace: "Enter Bitbucket Cloud workspace slug or ID.",
+  oauthClientRegistration: "OAuth client registration",
+  oauthRegistrationConfigured: "OAuth app registration is configured. Enter both values only to replace it.",
+  oauthClientId: "OAuth client ID",
+  oauthClientIdReplace: "OAuth client ID (optional to replace)",
+  oauthClientSecret: "OAuth client secret",
+  oauthClientSecretReplace: "OAuth client secret (optional to replace)",
+  oauthSecretHelp: "Stored only by Bitbucket secret handling. Existing secrets are never displayed.",
+  oauthCallbackUrl: "OAuth callback URL",
+  oauthCallbackHelp: "Copy this Kandev callback URL into your OAuth app. It is derived from this Kandev origin.",
+  connectWithOauth: "Connect with OAuth",
+  checkConnection: "Check connection",
+  linkPullRequestMenu: "Bitbucket Pull Request",
+  linkPullRequestTitle: "Link Bitbucket pull request",
+  linkPullRequestDescription: "Use a Bitbucket pull request URL or canonical key for this task.",
+  linkPullRequestEmpty: "Enter a Bitbucket pull request URL or key.",
+  linkPullRequestFailure: "Failed to link Bitbucket pull request.",
+  linkPullRequestSuccess: "Bitbucket pull request linked",
+  pullRequestNoun: "pull request",
+  filterRepositoryAria: "Filter Bitbucket pull requests by repository",
+  allRepositories: "All repositories",
+  filterRepositories: "Filter repositories...",
+  noRepositories: "No repositories found.",
+  open: "Open",
+  all: "All",
+  merged: "Merged",
+  declined: "Declined",
+  openFilters: "Open Bitbucket filters",
+  filters: "Filters",
+  bitbucketFilters: "Bitbucket filters",
+  filtersDescription: "Narrow pull requests by repository and state.",
+  repository: "Repository",
+  checkingBitbucketConnection: "Checking Bitbucket connection",
+  verifyingConnection: "Kandev is verifying the saved connection.",
+  connectToLoad: "Connect Bitbucket for this workspace to load pull requests.",
+  bitbucketNeedsAttention: "Bitbucket needs attention",
+  configureBitbucket: "Configure Bitbucket",
+  customQueryPlaceholder: 'Custom query: press Enter, for example "state:open fix login"',
+  pullRequestResults: "Pull request results",
+  saveQueryDescription: "Save this Bitbucket pull-request search for the current workspace.",
+  repositoryPullRequests: "Repository pull requests",
+  savedQuery: "Saved query",
+  chooseWorkspace: "Choose a workspace",
+  chooseWorkspaceDescription: "Open Bitbucket from a workspace to connect and browse pull requests.",
+  noMatchingPullRequests: "No pull requests match this filter.",
+  byAuthor: "by {{author}}",
+  openedAgo: "opened {{value}}",
+  watches: "Watches",
+  watchesDescription: "Poll saved pull-request criteria and create only plugin-owned tasks.",
+  noSavedWatches: "No saved watches.",
+  addFilterWatch: "Add current filter watch",
+  lastPolled: "Last polled {{value}}",
+  runNow: "Run now",
+  running: "Running",
+  paused: "Paused",
+  pause: "Pause",
+  resume: "Resume",
+  reset: "Reset",
+  delete: "Delete",
+  confirmReset: "Confirm reset",
+  confirmDelete: "Confirm delete",
+  watchResetWarning: "Resetting this watch will remove {{count}} plugin-owned tasks. Adopted and manual tasks stay untouched.",
+  watchResetWarning_one: "Resetting this watch will remove {{count}} plugin-owned task. Adopted and manual tasks stay untouched.",
+  watchResetWarning_other: "Resetting this watch will remove {{count}} plugin-owned tasks. Adopted and manual tasks stay untouched.",
+  watchDeleteWarning: "Deleting this watch will remove {{count}} plugin-owned tasks. Adopted and manual tasks stay untouched.",
+  watchDeleteWarning_one: "Deleting this watch will remove {{count}} plugin-owned task. Adopted and manual tasks stay untouched.",
+  watchDeleteWarning_other: "Deleting this watch will remove {{count}} plugin-owned tasks. Adopted and manual tasks stay untouched.",
+  reviewPreset: "Review",
+  reviewPresetHint: "Read the diff, flag issues",
+  reviewPresetPrompt: "Review Bitbucket pull request {{reference}}. Inspect the changes, run relevant tests, and report concrete findings.",
+  addressFeedbackPreset: "Address feedback",
+  addressFeedbackPresetHint: "Apply review comments",
+  addressFeedbackPresetPrompt: "Address the review feedback on Bitbucket pull request {{reference}}. Make the requested changes, verify them, and summarize what changed.",
+  fixCiPreset: "Fix CI",
+  fixCiPresetHint: "Diagnose failing checks",
+  fixCiPresetPrompt: "Fix the failing CI checks on Bitbucket pull request {{reference}}. Reproduce the failures, implement the smallest correct fix, and run the relevant checks.",
+  removeApproval: "Remove approval",
+  removingApproval: "Removing approval\u2026",
+  approve: "Approve",
+  approving: "Approving\u2026",
+  merge: "Merge",
+  merging: "Merging\u2026",
+  decline: "Decline",
+  declining: "Declining\u2026",
+  comment: "Comment",
+  reply: "Reply",
+  unknown: "Unknown",
+  bitbucketTask: "Bitbucket task",
+  taskLaunchUnavailable: "Bitbucket task launch is unavailable.",
+  taskLaunchMissingId: "Bitbucket task launch returned no task id.",
+  enterOauthClientId: "Enter OAuth client ID.",
+  enterOauthClientSecret: "Enter OAuth client secret.",
+  oauthCallbackUnavailable: "OAuth callback URL is unavailable.",
+  requestFailed: "Bitbucket request failed. Try again."
+};
+var pseudoGlyphs = {
+  a: "\xE0",
+  b: "\u0180",
+  c: "\xE7",
+  d: "\u010F",
+  e: "\xE9",
+  f: "\u0192",
+  g: "\u011F",
+  h: "\u0125",
+  i: "\xED",
+  j: "\u0135",
+  k: "\u0137",
+  l: "\u013C",
+  m: "\u1E3F",
+  n: "\xF1",
+  o: "\xF6",
+  p: "\xFE",
+  q: "q",
+  r: "\u0159",
+  s: "\u0161",
+  t: "\u0163",
+  u: "\xFC",
+  v: "\u1E7D",
+  w: "\u0175",
+  x: "\u1E8B",
+  y: "\xFD",
+  z: "\u017E"
+};
+function pseudoMessage(message) {
+  const transformed = message.split(/(\{\{[^}]+\}\})/g).map(
+    (part) => part.startsWith("{{") ? part : part.replace(/[A-Za-z]/g, (letter) => {
+      const glyph = pseudoGlyphs[letter.toLowerCase()] ?? letter;
+      return letter === letter.toUpperCase() ? glyph.toUpperCase() : glyph;
+    })
+  ).join("");
+  return `[${transformed}${"~".repeat(Math.ceil(message.length * 0.3))}]`;
+}
+var pseudo = Object.fromEntries(
+  Object.entries(english).map(([key, message]) => [
+    key,
+    pseudoMessage(message)
+  ])
+);
+var translationCatalogs = { en: english, pseudo };
+function interpolate(message, options) {
+  const values = {
+    count: options?.count,
+    ...options?.values
+  };
+  return message.replace(
+    /\{\{([^}]+)\}\}/g,
+    (_match, key) => values[key] === void 0 ? `{{${key}}}` : String(values[key])
+  );
+}
+var translateEnglish = (key, options) => {
+  const pluralKey = `${key}_${options?.count === 1 ? "one" : "other"}`;
+  const message = options?.count !== void 0 && pluralKey in english ? english[pluralKey] : english[key];
+  return interpolate(message, options);
+};
+function usePluginTranslation(host) {
+  const translation = host.i18n.useTranslation();
+  return {
+    locale: translation.locale,
+    t: translation.t
+  };
+}
+function pluginTranslate(host) {
+  return (key, options) => host.i18n.t(key, options);
+}
+function registerTranslations(registry) {
+  registry.registerTranslations(translationCatalogs);
+}
+
 // ui/src/view-model-base.ts
-function pullRequestAssociationIdentity(repositoryId, number2) {
-  return repositoryId && number2 && number2 > 0 ? `repository:${repositoryId}\0pull-request:${number2}` : void 0;
+function pullRequestAssociationIdentity(connectionScope, repositoryId, number2) {
+  return connectionScope && repositoryId && number2 && number2 > 0 ? `connection:${connectionScope}\0repository:${repositoryId}\0pull-request:${number2}` : void 0;
 }
 function integrationSettingsHref(workspaceId) {
   return workspaceId ? `/settings/workspaces/${encodeURIComponent(workspaceId)}/integrations/bitbucket` : "/settings/integrations/bitbucket";
@@ -88,51 +300,61 @@ function toCapabilities(value) {
   if (typeof value === "string") {
     return value.split(",").map((capability) => capability.trim()).filter(Boolean);
   }
-  return array(value).flatMap((entry) => typeof entry === "string" ? [entry] : []);
+  return array(value).flatMap(
+    (entry) => typeof entry === "string" ? [entry] : []
+  );
 }
-function normalizeTaskLinks(value, reviewKey = "") {
-  return itemList(value, ["associations", "tasks", "items", "values"]).flatMap((entry) => {
-    const source = record(entry);
-    const taskId = string(source.task_id) ?? string(source.taskId);
-    const entryReviewKey = string(source.review_key) ?? string(source.reviewKey) ?? reviewKey;
-    if (!taskId || reviewKey && entryReviewKey !== reviewKey) return [];
-    return [
-      {
-        id: string(source.id) ?? `${entryReviewKey}:${taskId}`,
-        taskId,
-        fallbackTitle: string(source.task_title) ?? string(source.taskTitle) ?? string(source.title) ?? "Bitbucket task"
-      }
-    ];
-  });
+function normalizeTaskLinks(value, reviewKey = "", t = translateEnglish) {
+  return itemList(value, ["associations", "tasks", "items", "values"]).flatMap(
+    (entry) => {
+      const source = record(entry);
+      const taskId = string(source.task_id) ?? string(source.taskId);
+      const entryReviewKey = string(source.review_key) ?? string(source.reviewKey) ?? reviewKey;
+      if (!taskId || reviewKey && entryReviewKey !== reviewKey) return [];
+      return [
+        {
+          id: string(source.id) ?? `${entryReviewKey}:${taskId}`,
+          taskId,
+          fallbackTitle: string(source.task_title) ?? string(source.taskTitle) ?? string(source.title) ?? t("bitbucketTask")
+        }
+      ];
+    }
+  );
 }
-function normalizePullRequestAssociations(value) {
+function normalizePullRequestAssociations(value, t = translateEnglish) {
   const result = {};
   for (const entry of itemList(value, ["associations", "items", "values"])) {
     const source = record(entry);
     const reviewKey = string(source.review_key) ?? string(source.reviewKey);
     if (!reviewKey) continue;
-    const links = normalizeTaskLinks([source], reviewKey);
+    const links = normalizeTaskLinks([source], reviewKey, t);
     const repositoryId = string(source.repository_id) ?? string(source.repositoryId);
+    const connectionScope = string(source.provider_scope) ?? string(source.connectionScope);
     const changeRequestNumber = number(source.number) ?? number(source.changeRequestNumber);
     for (const link of links) {
       link.repositoryId = repositoryId;
+      link.connectionScope = connectionScope;
       link.changeRequestNumber = changeRequestNumber;
     }
     if (links.length) {
       result[reviewKey] = [...result[reviewKey] ?? [], ...links];
-      const identity = pullRequestAssociationIdentity(repositoryId, changeRequestNumber);
+      const identity = pullRequestAssociationIdentity(
+        connectionScope,
+        repositoryId,
+        changeRequestNumber
+      );
       if (identity) result[identity] = [...result[identity] ?? [], ...links];
     }
   }
   return result;
 }
-function normalizeReviewComment(value) {
+function normalizeReviewComment(value, t = translateEnglish) {
   const comment = record(value);
   const id = string(comment.id) ?? string(comment.ID) ?? string(comment.comment_id);
   if (!id) return null;
   const normalized = {
     id,
-    author: string(comment.author) ?? string(comment.Author) ?? string(record(comment.author).display_name) ?? string(record(comment.author).displayName) ?? "Unknown",
+    author: string(comment.author) ?? string(comment.Author) ?? string(record(comment.author).display_name) ?? string(record(comment.author).displayName) ?? t("unknown"),
     body: string(comment.body) ?? string(comment.Body) ?? string(comment.content) ?? string(record(comment.content).raw) ?? string(comment.text) ?? ""
   };
   const parentId = string(comment.parent_id) ?? string(comment.parentId) ?? string(comment.ParentID);
@@ -145,7 +367,8 @@ function normalizeReviewComment(value) {
 }
 function statusTone(state) {
   const normalized = state.toLowerCase();
-  if (/(success|passed|approved|merged|open)/.test(normalized)) return "success";
+  if (/(success|passed|approved|merged|open)/.test(normalized))
+    return "success";
   if (/(fail|declined|error|blocked)/.test(normalized)) return "danger";
   if (/(pending|build|review|draft)/.test(normalized)) return "warning";
   return "neutral";
@@ -203,9 +426,12 @@ function normalizeRepositoryInspection(value) {
   }
   return repository;
 }
-function workspaceReviewAction(workspaceId, reviewKey, pullRequestID, kind, options = {}) {
+function workspaceReviewAction(workspaceId, taskId, identity, pullRequestID, kind, options = {}) {
   const body = {
-    review_key: reviewKey,
+    review_key: identity.reviewKey,
+    provider_scope: identity.connectionScope,
+    repository_id: identity.repositoryId,
+    number: identity.changeRequestNumber,
     pull_request_id: pullRequestID,
     kind
   };
@@ -213,7 +439,7 @@ function workspaceReviewAction(workspaceId, reviewKey, pullRequestID, kind, opti
   if (comment) body.comment = comment;
   if (options.parentCommentId) body.parent_comment_id = options.parentCommentId;
   if (options.buildKey) body.build_key = options.buildKey;
-  return { workspaceId, body };
+  return { workspaceId, taskId, body };
 }
 function linkPullRequestBody(reference) {
   const key = reference.trim();
@@ -336,7 +562,7 @@ function newSavedQuery(input, id, createdAt) {
 }
 
 // ui/src/view-model-review.ts
-function normalizePullRequests(value) {
+function normalizePullRequests(value, t = translateEnglish) {
   return itemList(value, ["pull_requests", "pullRequests", "items", "values"]).map((item) => {
     const source = record(item);
     const id = string(source.id) ?? string(source.key) ?? string(source.uuid) ?? String(number(source.number) ?? number(source.id) ?? "");
@@ -345,7 +571,7 @@ function normalizePullRequests(value) {
     const repositoryNamespace = string(record(repository.project).key) ?? string(record(repository.owner).username) ?? string(record(repository.workspace).slug);
     const repositoryId = string(source.repository_id) ?? string(repository.provider_repository_id) ?? string(source.repositoryId) ?? string(repository.full_name) ?? (repositoryNamespace && repositorySlug ? `${repositoryNamespace}/${repositorySlug}` : void 0) ?? string(repository.id) ?? "";
     const numberValue = number(source.number) ?? number(source.id) ?? 0;
-    const title = string(source.title) ?? `Pull request ${numberValue || id}`;
+    const title = string(source.title) ?? t("pullRequestNumber", { values: { number: numberValue || id } });
     if (!id || !repositoryId || !numberValue) return null;
     const status = record(source.status);
     const state = string(source.state) ?? string(source.status) ?? "UNKNOWN";
@@ -380,7 +606,8 @@ function normalizePullRequests(value) {
       statusTone: statusTone(string(status.state) ?? state),
       tasks: normalizeTaskLinks(
         source.associations ?? source.tasks,
-        reviewKey
+        reviewKey,
+        t
       ),
       capabilities: toCapabilities(source.capabilities)
     };
@@ -405,9 +632,9 @@ function normalizeViewerApproval(source, participants) {
   if (!viewer) return void 0;
   return boolean(viewer.approved) ?? string(viewer.status)?.toUpperCase() === "APPROVED";
 }
-function normalizeReviewDetail(value) {
+function normalizeReviewDetail(value, t = translateEnglish) {
   const source = record(value);
-  const pr = normalizePullRequests({ pull_requests: [source] })[0];
+  const pr = normalizePullRequests({ pull_requests: [source] }, t)[0];
   if (!pr) return null;
   const participantItems = itemList(source.participants ?? source.reviewers, [
     "items",
@@ -468,7 +695,7 @@ function normalizeReviewDetail(value) {
       if (!id) return [];
       const comments = itemList(thread.comments, ["items", "values"]).flatMap(
         (comment) => {
-          const normalized = normalizeReviewComment(comment);
+          const normalized = normalizeReviewComment(comment, t);
           return normalized ? [normalized] : [];
         }
       );
@@ -476,7 +703,7 @@ function normalizeReviewDetail(value) {
       return [
         {
           id,
-          author: rootComment?.author ?? string(thread.author) ?? string(record(thread.author).display_name) ?? "Unknown",
+          author: rootComment?.author ?? string(thread.author) ?? string(record(thread.author).display_name) ?? t("unknown"),
           body: rootComment?.body ?? string(thread.body) ?? string(thread.content) ?? "",
           createdAt: rootComment?.createdAt ?? timestamp(thread.created_at) ?? timestamp(thread.createdAt),
           resolved: thread.resolved === true,
@@ -484,7 +711,7 @@ function normalizeReviewDetail(value) {
           comments: comments.length > 0 ? comments : [
             {
               id,
-              author: string(thread.author) ?? string(record(thread.author).display_name) ?? "Unknown",
+              author: string(thread.author) ?? string(record(thread.author).display_name) ?? t("unknown"),
               body: string(thread.body) ?? string(thread.content) ?? ""
             }
           ]
@@ -528,7 +755,7 @@ function hostChangeRequestState(value) {
   if (state === "DRAFT") return "draft";
   return "open";
 }
-function changeRequestDetailModel(detail) {
+function changeRequestDetailModel(detail, t = translateEnglish) {
   const reviewers = detail.participants.filter(
     (participant) => ["REVIEWER", "APPROVER"].includes(
       participant.role?.toUpperCase() ?? "REVIEWER"
@@ -567,7 +794,7 @@ function changeRequestDetailModel(detail) {
     state: hostChangeRequestState(detail.state),
     ...detail.state.trim().toUpperCase() === "DRAFT" ? { draft: true } : {},
     author: {
-      name: detail.author ?? "Unknown",
+      name: detail.author ?? t("unknown"),
       ...detail.authorUrl ? { url: detail.authorUrl } : {},
       ...detail.authorAvatarUrl ? { avatarUrl: detail.authorAvatarUrl } : {}
     },
@@ -613,7 +840,7 @@ function changeRequestDetailModel(detail) {
     ...detail.updatedAt ? { lastSyncedAt: detail.updatedAt } : {}
   };
 }
-function changeRequestDetailActions(detail) {
+function changeRequestDetailActions(detail, t = translateEnglish) {
   if (hostChangeRequestState(detail.state) !== "open") return [];
   const can = (capability) => detail.capabilities.includes(capability);
   const actions = [];
@@ -621,14 +848,14 @@ function changeRequestDetailActions(detail) {
     actions.push(
       detail.viewerApproved ? {
         id: "unapprove",
-        label: "Remove approval",
-        pendingLabel: "Removing approval\u2026",
+        label: t("removeApproval"),
+        pendingLabel: t("removingApproval"),
         placement: "header",
         tone: "secondary"
       } : {
         id: "approve",
-        label: "Approve",
-        pendingLabel: "Approving\u2026",
+        label: t("approve"),
+        pendingLabel: t("approving"),
         placement: "header",
         tone: "success"
       }
@@ -637,16 +864,16 @@ function changeRequestDetailActions(detail) {
   if (can("merge")) {
     actions.push({
       id: "merge",
-      label: "Merge",
-      pendingLabel: "Merging\u2026",
+      label: t("merge"),
+      pendingLabel: t("merging"),
       placement: "header"
     });
   }
   if (can("decline")) {
     actions.push({
       id: "decline",
-      label: "Decline",
-      pendingLabel: "Declining\u2026",
+      label: t("decline"),
+      pendingLabel: t("declining"),
       placement: "header",
       tone: "danger"
     });
@@ -654,7 +881,7 @@ function changeRequestDetailActions(detail) {
   if (can("comments")) {
     actions.push({
       id: "comment",
-      label: "Comment",
+      label: t("comment"),
       placement: "comment",
       input: "text"
     });
@@ -662,7 +889,7 @@ function changeRequestDetailActions(detail) {
   if (can("thread_replies")) {
     actions.push({
       id: "reply",
-      label: "Reply",
+      label: t("reply"),
       placement: "thread",
       input: "text"
     });
@@ -671,61 +898,70 @@ function changeRequestDetailActions(detail) {
 }
 
 // ui/src/view-model-connection.ts
-function connectionIdentity(product, authMethod) {
+function connectionIdentity(product, authMethod, t = translateEnglish) {
   if (product === "cloud" && authMethod === "api_token") {
     return {
       field: "auth_identity",
-      label: "Atlassian account email",
-      help: "Used with this API token for Bitbucket Cloud REST. Git uses x-bitbucket-api-token-auth.",
+      label: t("atlassianEmail"),
+      help: t("atlassianEmailHelp"),
       inputType: "email"
     };
   }
   if (product === "data_center" && (authMethod === "user_pat" || authMethod === "oauth")) {
     return {
       field: "auth_identity",
-      label: "Bitbucket username",
-      help: "Used for HTTPS Git with this Data Center PAT or OAuth credential.",
+      label: t("bitbucketUsername"),
+      help: t("bitbucketUsernameHelp"),
       inputType: "text"
     };
   }
   return null;
 }
-function validateConnectionIdentity(input) {
-  const identity = connectionIdentity(input.product, input.authMethod);
+function validateConnectionIdentity(input, t = translateEnglish) {
+  const identity = connectionIdentity(input.product, input.authMethod, t);
   const value = input.identity.trim();
   if (!identity) return null;
-  if (!value) return `Enter ${identity.label.toLowerCase()}.`;
+  if (!value)
+    return t("enterIdentity", {
+      values: { identity: identity.label.toLowerCase() }
+    });
   if (identity.inputType === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-    return "Enter a valid Atlassian account email.";
+    return t("invalidAtlassianEmail");
   }
   return null;
 }
-function validateCloudWorkspace(input) {
+function validateCloudWorkspace(input, t = translateEnglish) {
   if (input.product !== "cloud" || input.cloudWorkspace.trim()) return null;
-  return "Enter Bitbucket Cloud workspace slug or ID.";
+  return t("enterCloudWorkspace");
 }
-function taskLaunchPresets() {
+function taskLaunchPresets(t = translateEnglish) {
   return [
     {
       id: "review",
-      label: "Review",
-      hint: "Read the diff, flag issues",
+      label: t("reviewPreset"),
+      hint: t("reviewPresetHint"),
       iconName: "eye",
-      prompt: (pullRequest) => `Review Bitbucket pull request ${pullRequest.url || pullRequest.key}. Inspect the changes, run relevant tests, and report concrete findings.`
+      prompt: (pullRequest) => t("reviewPresetPrompt", {
+        values: { reference: pullRequest.url || pullRequest.key }
+      })
     },
     {
       id: "address-feedback",
-      label: "Address feedback",
-      hint: "Apply review comments",
+      label: t("addressFeedbackPreset"),
+      hint: t("addressFeedbackPresetHint"),
       iconName: "message",
-      prompt: (pullRequest) => `Address the review feedback on Bitbucket pull request ${pullRequest.url || pullRequest.key}. Make the requested changes, verify them, and summarize what changed.`
+      prompt: (pullRequest) => t("addressFeedbackPresetPrompt", {
+        values: { reference: pullRequest.url || pullRequest.key }
+      })
     },
     {
       id: "fix-ci",
-      label: "Fix CI",
-      hint: "Diagnose failing checks",
+      label: t("fixCiPreset"),
+      hint: t("fixCiPresetHint"),
       iconName: "tool",
-      prompt: (pullRequest) => `Fix the failing CI checks on Bitbucket pull request ${pullRequest.url || pullRequest.key}. Reproduce the failures, implement the smallest correct fix, and run the relevant checks.`
+      prompt: (pullRequest) => t("fixCiPresetPrompt", {
+        values: { reference: pullRequest.url || pullRequest.key }
+      })
     }
   ];
 }
@@ -764,10 +1000,10 @@ function taskLaunchBody(pullRequest, payload, launchId) {
   if (executorProfileID) task.executor_profile_id = executorProfileID;
   return { review_key: pullRequest.key, launch_id: launchId, task };
 }
-function taskFromLaunchResult(value) {
+function taskFromLaunchResult(value, t = translateEnglish) {
   const result = record(value);
   const taskID = string(result.task_id);
-  if (!taskID) throw new Error("Bitbucket task launch returned no task id.");
+  if (!taskID) throw new Error(t("taskLaunchMissingId"));
   return { id: taskID, bitbucketLinked: result.linked === true };
 }
 function normalizeWatches(value) {
@@ -784,16 +1020,15 @@ function normalizeWatches(value) {
     }
   );
 }
-function validateOAuthRegistration(input) {
+function validateOAuthRegistration(input, t = translateEnglish) {
   if (input.authMethod !== "oauth") return null;
   const clientID = input.oauthClientId.trim();
   const clientSecret = input.oauthClientSecret.trim();
   if (input.oauthRegistrationConfigured && !clientID && !clientSecret)
     return null;
-  if (!clientID) return "Enter OAuth client ID.";
-  if (!clientSecret) return "Enter OAuth client secret.";
-  if (!input.oauthCallbackUrl.trim())
-    return "OAuth callback URL is unavailable.";
+  if (!clientID) return t("enterOauthClientId");
+  if (!clientSecret) return t("enterOauthClientSecret");
+  if (!input.oauthCallbackUrl.trim()) return t("oauthCallbackUnavailable");
   return null;
 }
 function connectionOAuthRegistration(value) {
@@ -841,10 +1076,10 @@ function connectionState(value) {
     "unavailable"
   ].includes(candidate) ? candidate : "unavailable";
 }
-function errorMessage(error) {
+function errorMessage(error, t = translateEnglish) {
   if (error instanceof Error && error.message) return error.message;
   const source = record(error);
-  return string(source.message) ?? string(source.error) ?? "Bitbucket request failed. Try again.";
+  return string(source.message) ?? string(source.error) ?? t("requestFailed");
 }
 
 // ui/src/ui-runtime.ts
@@ -885,7 +1120,11 @@ function useSavedQueries(host, workspaceId) {
       setQueries([]);
       return;
     }
-    const entry = await host.storage.get("workspace", workspaceId, SAVED_QUERIES_KEY);
+    const entry = await host.storage.get(
+      "workspace",
+      workspaceId,
+      SAVED_QUERIES_KEY
+    );
     setQueries(normalizeSavedQueries(entry?.value));
   };
   React.useEffect(() => {
@@ -895,7 +1134,11 @@ function useSavedQueries(host, workspaceId) {
     }
     let active = true;
     const sync = async () => {
-      const entry = await host.storage.get("workspace", workspaceId, SAVED_QUERIES_KEY);
+      const entry = await host.storage.get(
+        "workspace",
+        workspaceId,
+        SAVED_QUERIES_KEY
+      );
       if (active) setQueries(normalizeSavedQueries(entry?.value));
     };
     void sync();
@@ -913,7 +1156,12 @@ function useSavedQueries(host, workspaceId) {
     const normalized = normalizeSavedQueries(next);
     setQueries(normalized);
     try {
-      await host.storage.set("workspace", workspaceId, SAVED_QUERIES_KEY, normalized);
+      await host.storage.set(
+        "workspace",
+        workspaceId,
+        SAVED_QUERIES_KEY,
+        normalized
+      );
     } catch (error) {
       await load();
       throw error;
@@ -941,6 +1189,7 @@ function requestBody(input) {
 }
 function usePluginQuery(host, key, input, enabled = true) {
   const { React } = host;
+  const { t } = usePluginTranslation(host);
   const serializedInput = JSON.stringify(input ?? {});
   const [reload, setReload] = React.useState(0);
   const [state, setState] = React.useState({
@@ -965,9 +1214,13 @@ function usePluginQuery(host, key, input, enabled = true) {
       };
     }
     setState((previous) => ({ ...previous, loading: true, error: null }));
-    void host.api.invokeAction(key, requestBody(JSON.parse(serializedInput)), {
-      signal: controller.signal
-    }).then((data) => {
+    void host.api.invokeAction(
+      key,
+      requestBody(JSON.parse(serializedInput)),
+      {
+        signal: controller.signal
+      }
+    ).then((data) => {
       if (active)
         setState({
           data,
@@ -980,14 +1233,14 @@ function usePluginQuery(host, key, input, enabled = true) {
         setState((previous) => ({
           ...previous,
           loading: false,
-          error: errorMessage(error)
+          error: errorMessage(error, t)
         }));
     });
     return () => {
       active = false;
       controller.abort();
     };
-  }, [enabled, host.api, key, reload, serializedInput]);
+  }, [enabled, host.api, key, reload, serializedInput, t]);
   const refresh = React.useCallback(() => setReload((value) => value + 1), []);
   return { ...state, refresh };
 }
@@ -998,16 +1251,21 @@ async function collectPluginActionPages(api, key, input, itemKey, signal) {
   let lastPage = {};
   for (let page = 0; page < 1e3; page += 1) {
     const body = { ...record2(input?.body), cursor };
-    const response = await api.invokeAction(key, requestBody({ ...input, body }), {
-      signal
-    });
+    const response = await api.invokeAction(
+      key,
+      requestBody({ ...input, body }),
+      {
+        signal
+      }
+    );
     if (signal.aborted) throw new DOMException("Request aborted", "AbortError");
     lastPage = record2(response);
     const pageItems = lastPage[itemKey];
     if (Array.isArray(pageItems)) items.push(...pageItems);
     const nextCursor = text(lastPage.next_cursor);
     if (!nextCursor) return { ...lastPage, [itemKey]: items, next_cursor: "" };
-    if (seenCursors.has(nextCursor)) throw new Error(`${key} pagination did not advance`);
+    if (seenCursors.has(nextCursor))
+      throw new Error(`${key} pagination did not advance`);
     seenCursors.add(nextCursor);
     cursor = nextCursor;
   }
@@ -1015,6 +1273,7 @@ async function collectPluginActionPages(api, key, input, itemKey, signal) {
 }
 function usePagedPluginQuery(host, key, input, itemKey, enabled = true) {
   const { React } = host;
+  const { t } = usePluginTranslation(host);
   const serializedInput = JSON.stringify(input ?? {});
   const [reload, setReload] = React.useState(0);
   const [state, setState] = React.useState({ data: null, loading: enabled, error: null, lastFetchedAt: null });
@@ -1053,14 +1312,14 @@ function usePagedPluginQuery(host, key, input, itemKey, enabled = true) {
         setState((previous) => ({
           ...previous,
           loading: false,
-          error: errorMessage(error)
+          error: errorMessage(error, t)
         }));
     });
     return () => {
       active = false;
       controller.abort();
     };
-  }, [enabled, host.api, itemKey, key, reload, serializedInput]);
+  }, [enabled, host.api, itemKey, key, reload, serializedInput, t]);
   const refresh = React.useCallback(() => setReload((value) => value + 1), []);
   return { ...state, refresh };
 }
@@ -1140,7 +1399,11 @@ function pullRequestStateIcon(host, pullRequest) {
   });
 }
 function Badge(host, label, tone = "neutral") {
-  return host.jsx(host.ui.Badge, { className: `bb-badge bb-badge-${tone}` }, label);
+  return host.jsx(
+    host.ui.Badge,
+    { className: `bb-badge bb-badge-${tone}` },
+    label
+  );
 }
 function EmptyState(host, title, detail, actionLabel, onAction) {
   const { jsx: h, ui } = host;
@@ -1149,7 +1412,11 @@ function EmptyState(host, title, detail, actionLabel, onAction) {
     { className: "bb-empty", role: "status" },
     h("h2", null, title),
     h("p", null, detail),
-    actionLabel && onAction ? h(ui.Button, { type: "button", className: "min-h-11", onClick: onAction }, actionLabel) : null
+    actionLabel && onAction ? h(
+      ui.Button,
+      { type: "button", className: "min-h-11", onClick: onAction },
+      actionLabel
+    ) : null
   );
 }
 
@@ -1189,6 +1456,7 @@ function DisconnectConfirmation({
   onCancel
 }) {
   const { jsx: h, ui, React } = host;
+  const { t } = usePluginTranslation(host);
   const [disconnecting, setDisconnecting] = React.useState(false);
   const [error, setError] = React.useState(null);
   const mutation = useAbortableOperation(host);
@@ -1206,7 +1474,8 @@ function DisconnectConfirmation({
       );
       if (request.isCurrent()) onSuccess();
     } catch (reason) {
-      if (request.isCurrent() && !isAbortError(reason)) setError(errorMessage(reason));
+      if (request.isCurrent() && !isAbortError(reason))
+        setError(errorMessage(reason, t));
     } finally {
       if (request.finish()) setDisconnecting(false);
     }
@@ -1214,12 +1483,8 @@ function DisconnectConfirmation({
   return h(
     "section",
     { className: "bb-disconnect-confirm" },
-    h("p", null, "Disconnect Bitbucket connection?"),
-    h(
-      "p",
-      { className: "bb-capability-note" },
-      "Stored Bitbucket credentials and connection settings for this workspace will be removed."
-    ),
+    h("p", null, t("disconnectTitle")),
+    h("p", { className: "bb-capability-note" }, t("disconnectDescription")),
     error ? h("p", { className: "bb-error", role: "alert" }, error) : null,
     h(
       "div",
@@ -1233,7 +1498,7 @@ function DisconnectConfirmation({
           disabled: disconnecting,
           onClick: onCancel
         },
-        "Cancel"
+        t("cancel")
       ),
       h(
         ui.Button,
@@ -1244,7 +1509,7 @@ function DisconnectConfirmation({
           disabled: disconnecting,
           onClick: () => void disconnect()
         },
-        disconnecting ? "Disconnecting\u2026" : "Disconnect Bitbucket"
+        disconnecting ? t("disconnecting") : t("disconnectBitbucket")
       )
     )
   );
@@ -1256,6 +1521,7 @@ function ConnectionHealth({
   workspaceId: scopedWorkspaceId
 }) {
   const { jsx: h, ui, React } = host;
+  const { t } = usePluginTranslation(host);
   const responsive = host.useResponsiveBreakpoint();
   const connection = usePluginQuery(
     host,
@@ -1275,7 +1541,10 @@ function ConnectionHealth({
   const oauthRegistration = connectionOAuthRegistration(details);
   const [oauthClientId, setOAuthClientId] = React.useState("");
   const [oauthClientSecret, setOAuthClientSecret] = React.useState("");
-  const oauthCallbackUrl = deriveOAuthCallbackURL(host.api.baseUrl, window.location.origin);
+  const oauthCallbackUrl = deriveOAuthCallbackURL(
+    host.api.baseUrl,
+    window.location.origin
+  );
   const [disconnectOpen, setDisconnectOpen] = React.useState(false);
   const mutation = useAbortableOperation(host);
   React.useEffect(() => {
@@ -1301,7 +1570,7 @@ function ConnectionHealth({
     setIdentity(text(details.auth_identity));
   }, [connection.data]);
   const state = connectionState(details);
-  const identityField = connectionIdentity(product, authMethod);
+  const identityField = connectionIdentity(product, authMethod, t);
   const formInput = () => ({
     product,
     baseUrl,
@@ -1314,15 +1583,16 @@ function ConnectionHealth({
     oauthClientSecret,
     oauthCallbackUrl
   });
-  const connectionValidationError = () => validateCloudWorkspace(formInput()) ?? validateConnectionIdentity(formInput()) ?? validateOAuthRegistration(formInput());
+  const connectionValidationError = () => validateCloudWorkspace(formInput(), t) ?? validateConnectionIdentity(formInput(), t) ?? validateOAuthRegistration(formInput(), t);
   const oauthReady = authMethod === "oauth" && !connectionValidationError();
   const label = {
-    unconfigured: "Not configured",
-    checking: "Checking connection",
-    connected: "Connected",
-    auth_required: "Authentication required",
-    unavailable: "Unavailable"
+    unconfigured: t("notConfigured"),
+    checking: t("checkingConnection"),
+    connected: t("connected"),
+    auth_required: t("authenticationRequired"),
+    unavailable: t("unavailable")
   };
+  const productDescription = details.product === "cloud" ? t("bitbucketCloud") : details.product === "data_center" ? t("bitbucketDataCenter") : t("connectDescription");
   const saveConnection = async () => {
     if (!scopedWorkspaceId) return;
     const validationError = connectionValidationError();
@@ -1348,10 +1618,11 @@ function ConnectionHealth({
       if (!request.isCurrent()) return;
       setToken("");
       setOAuthClientSecret("");
-      setMessage("Connection saved and health check started.");
+      setMessage(t("connectionSaved"));
       connection.refresh();
     } catch (error) {
-      if (request.isCurrent() && !isAbortError(error)) setMessage(errorMessage(error));
+      if (request.isCurrent() && !isAbortError(error))
+        setMessage(errorMessage(error, t));
     } finally {
       if (request.finish()) setSaving(false);
     }
@@ -1387,9 +1658,10 @@ function ConnectionHealth({
       if (!request.isCurrent()) return;
       const href = text(record2(result).url) || text(record2(result).authorization_url);
       if (href) window.location.assign(href);
-      else setMessage("OAuth authorization is ready. Continue in the connection settings.");
+      else setMessage(t("oauthReady"));
     } catch (error) {
-      if (request.isCurrent() && !isAbortError(error)) setMessage(errorMessage(error));
+      if (request.isCurrent() && !isAbortError(error))
+        setMessage(errorMessage(error, t));
     } finally {
       if (request.finish()) setSaving(false);
     }
@@ -1404,7 +1676,7 @@ function ConnectionHealth({
     setIdentity("");
     setOAuthClientId("");
     setDisconnectOpen(false);
-    setMessage("Bitbucket disconnected. Stored credentials cleared.");
+    setMessage(t("disconnected"));
     connection.refresh();
   };
   const openDisconnectConfirmation = () => {
@@ -1415,7 +1687,7 @@ function ConnectionHealth({
     }
     let modal;
     modal = host.openModal({
-      title: "Disconnect Bitbucket",
+      title: t("disconnectBitbucket"),
       size: "sm",
       content: () => h(DisconnectConfirmation, {
         host,
@@ -1440,26 +1712,22 @@ function ConnectionHealth({
       h(
         "div",
         { className: "bb-title-row" },
-        h(ui.CardTitle, null, "Connection"),
+        h(ui.CardTitle, null, t("connection")),
         Badge(
           host,
           label[state],
           state === "connected" ? "success" : state === "auth_required" ? "warning" : "neutral"
         )
       ),
-      h(
-        ui.CardDescription,
-        null,
-        text(details.product, "Connect Bitbucket Cloud or Data Center for this workspace.")
-      )
+      h(ui.CardDescription, null, productDescription)
     ),
     h(
       ui.CardContent,
       { className: "bb-settings-form" },
-      connection.loading ? h(ui.Spinner, { "aria-label": "Checking Bitbucket connection" }) : null,
+      connection.loading ? h(ui.Spinner, { "aria-label": t("checkingBitbucketConnection") }) : null,
       connection.error ? h("p", { className: "bb-error", role: "alert" }, connection.error) : null,
       message ? h("p", { className: "bb-message", role: "status" }, message) : null,
-      h(ui.Label, { htmlFor: "bitbucket-product" }, "Bitbucket product"),
+      h(ui.Label, { htmlFor: "bitbucket-product" }, t("bitbucketProduct")),
       h(
         ui.Select,
         {
@@ -1482,14 +1750,18 @@ function ConnectionHealth({
         h(
           ui.SelectContent,
           null,
-          h(ui.SelectItem, { value: "cloud" }, "Bitbucket Cloud"),
-          h(ui.SelectItem, { value: "data_center" }, "Bitbucket Data Center")
+          h(ui.SelectItem, { value: "cloud" }, t("bitbucketCloud")),
+          h(ui.SelectItem, { value: "data_center" }, t("bitbucketDataCenter"))
         )
       ),
       product === "cloud" ? h(
         "div",
         { className: "bb-field" },
-        h(ui.Label, { htmlFor: "bitbucket-cloud-workspace" }, "Bitbucket workspace"),
+        h(
+          ui.Label,
+          { htmlFor: "bitbucket-cloud-workspace" },
+          t("bitbucketWorkspace")
+        ),
         h(ui.Input, {
           id: "bitbucket-cloud-workspace",
           "data-testid": "bitbucket-cloud-workspace",
@@ -1506,13 +1778,13 @@ function ConnectionHealth({
             id: "bitbucket-cloud-workspace-help",
             className: "bb-capability-note"
           },
-          "Workspace slug or ID from bitbucket.org/workspace; required to list repositories."
+          t("workspaceHelp")
         )
       ) : null,
       product === "data_center" ? h(
         "div",
         { className: "bb-field" },
-        h(ui.Label, { htmlFor: "bitbucket-base-url" }, "Data Center URL"),
+        h(ui.Label, { htmlFor: "bitbucket-base-url" }, t("dataCenterUrl")),
         h(ui.Input, {
           id: "bitbucket-base-url",
           className: "min-h-11",
@@ -1521,7 +1793,7 @@ function ConnectionHealth({
           placeholder: "https://bitbucket.example.com/bitbucket"
         })
       ) : null,
-      h(ui.Label, { htmlFor: "bitbucket-auth-method" }, "Authentication"),
+      h(ui.Label, { htmlFor: "bitbucket-auth-method" }, t("authentication")),
       h(
         ui.Select,
         {
@@ -1544,20 +1816,32 @@ function ConnectionHealth({
           ui.SelectContent,
           null,
           product === "cloud" ? [
-            h(ui.SelectItem, { value: "api_token" }, "API token"),
-            h(ui.SelectItem, { value: "oauth" }, "OAuth 2.0")
+            h(ui.SelectItem, { value: "api_token" }, t("apiToken")),
+            h(ui.SelectItem, { value: "oauth" }, t("oauth"))
           ] : [
-            h(ui.SelectItem, { value: "user_pat" }, "Personal access token"),
-            h(ui.SelectItem, { value: "project_token" }, "Project access token"),
-            h(ui.SelectItem, { value: "repository_token" }, "Repository access token"),
-            h(ui.SelectItem, { value: "oauth" }, "OAuth 2.0")
+            h(
+              ui.SelectItem,
+              { value: "user_pat" },
+              t("personalAccessToken")
+            ),
+            h(
+              ui.SelectItem,
+              { value: "project_token" },
+              t("projectAccessToken")
+            ),
+            h(
+              ui.SelectItem,
+              { value: "repository_token" },
+              t("repositoryAccessToken")
+            ),
+            h(ui.SelectItem, { value: "oauth" }, t("oauth"))
           ]
         )
       ),
       authMethod !== "oauth" ? h(
         "div",
         { className: "bb-field" },
-        h(ui.Label, { htmlFor: "bitbucket-token" }, "Access token"),
+        h(ui.Label, { htmlFor: "bitbucket-token" }, t("accessToken")),
         h(ui.Input, {
           id: "bitbucket-token",
           type: "password",
@@ -1565,13 +1849,17 @@ function ConnectionHealth({
           autoComplete: "off",
           value: token,
           onChange: (event) => setToken(event.target.value),
-          placeholder: "Stored only by Bitbucket secret handling"
+          placeholder: t("tokenPlaceholder")
         })
       ) : null,
       identityField ? h(
         "div",
         { className: "bb-field" },
-        h(ui.Label, { htmlFor: "bitbucket-connection-identity" }, identityField.label),
+        h(
+          ui.Label,
+          { htmlFor: "bitbucket-connection-identity" },
+          identityField.label
+        ),
         h(ui.Input, {
           id: "bitbucket-connection-identity",
           "data-testid": "bitbucket-connection-identity",
@@ -1595,12 +1883,12 @@ function ConnectionHealth({
         "section",
         {
           className: "bb-oauth-registration",
-          "aria-label": "OAuth client registration"
+          "aria-label": t("oauthClientRegistration")
         },
         oauthRegistration.configured ? h(
           "p",
           { className: "bb-capability-note", role: "status" },
-          "OAuth app registration is configured. Enter both values only to replace it."
+          t("oauthRegistrationConfigured")
         ) : null,
         h(
           "div",
@@ -1608,7 +1896,7 @@ function ConnectionHealth({
           h(
             ui.Label,
             { htmlFor: "bitbucket-oauth-client-id" },
-            oauthRegistration.configured ? "OAuth client ID (optional to replace)" : "OAuth client ID"
+            oauthRegistration.configured ? t("oauthClientIdReplace") : t("oauthClientId")
           ),
           h(ui.Input, {
             id: "bitbucket-oauth-client-id",
@@ -1625,7 +1913,7 @@ function ConnectionHealth({
           h(
             ui.Label,
             { htmlFor: "bitbucket-oauth-client-secret" },
-            oauthRegistration.configured ? "OAuth client secret (optional to replace)" : "OAuth client secret"
+            oauthRegistration.configured ? t("oauthClientSecretReplace") : t("oauthClientSecret")
           ),
           h(ui.Input, {
             id: "bitbucket-oauth-client-secret",
@@ -1643,13 +1931,17 @@ function ConnectionHealth({
               id: "bitbucket-oauth-client-secret-help",
               className: "bb-capability-note"
             },
-            "Stored only by Bitbucket secret handling. Existing secrets are never displayed."
+            t("oauthSecretHelp")
           )
         ),
         h(
           "div",
           { className: "bb-field" },
-          h(ui.Label, { htmlFor: "bitbucket-oauth-callback-url" }, "OAuth callback URL"),
+          h(
+            ui.Label,
+            { htmlFor: "bitbucket-oauth-callback-url" },
+            t("oauthCallbackUrl")
+          ),
           h(ui.Input, {
             id: "bitbucket-oauth-callback-url",
             "data-testid": "bitbucket-oauth-callback-url",
@@ -1665,7 +1957,7 @@ function ConnectionHealth({
               id: "bitbucket-oauth-callback-url-help",
               className: "bb-capability-note"
             },
-            "Copy this Kandev callback URL into your OAuth app. It is derived from this Kandev origin."
+            t("oauthCallbackHelp")
           )
         )
       ) : null,
@@ -1677,7 +1969,7 @@ function ConnectionHealth({
           disabled: saving || !oauthReady,
           onClick: startOauth
         },
-        "Connect with OAuth"
+        t("connectWithOauth")
       ) : null,
       h(ui.Separator, null),
       h(
@@ -1692,7 +1984,7 @@ function ConnectionHealth({
             disabled: saving,
             onClick: saveConnection
           },
-          "Check connection"
+          t("checkConnection")
         ),
         h(
           ui.Button,
@@ -1703,7 +1995,7 @@ function ConnectionHealth({
             disabled: saving || !scopedWorkspaceId,
             onClick: openDisconnectConfirmation
           },
-          "Disconnect Bitbucket"
+          t("disconnectBitbucket")
         )
       ),
       responsive.isMobile && scopedWorkspaceId ? h(
@@ -1718,8 +2010,12 @@ function ConnectionHealth({
           h(
             ui.DrawerHeader,
             null,
-            h(ui.DrawerTitle, null, "Disconnect Bitbucket"),
-            h(ui.DrawerDescription, null, "Remove this workspace Bitbucket connection.")
+            h(ui.DrawerTitle, null, t("disconnectBitbucket")),
+            h(
+              ui.DrawerDescription,
+              null,
+              t("disconnectWorkspaceDescription")
+            )
           ),
           h(
             "div",
@@ -1747,7 +2043,8 @@ function DashboardPullRequestList({
   onStartTask
 }) {
   const { jsx: h, ui } = host;
-  const presets = taskLaunchPresets();
+  const { t } = usePluginTranslation(host);
+  const presets = taskLaunchPresets(t);
   return h(
     "div",
     { "data-testid": "bitbucket-pr-queue" },
@@ -1756,7 +2053,7 @@ function DashboardPullRequestList({
       {
         loading,
         error,
-        emptyMessage: "No pull requests match this filter.",
+        emptyMessage: t("noMatchingPullRequests"),
         isEmpty: pullRequests.length === 0
       },
       ...pullRequests.map((pullRequest) => {
@@ -1766,17 +2063,25 @@ function DashboardPullRequestList({
           "span",
           { className: "bb-change-request-metadata" },
           h("span", null, pullRequest.key),
-          author ? h("span", null, ` \xB7 by ${author}`) : null,
-          opened ? h("span", null, ` \xB7 opened ${opened}`) : null,
-          pullRequest.sourceBranch && pullRequest.destinationBranch ? h("span", null, ` \xB7 ${pullRequest.sourceBranch} \u2192 ${pullRequest.destinationBranch}`) : null,
+          author ? h("span", null, ` \xB7 ${t("byAuthor", { values: { author } })}`) : null,
+          opened ? h(
+            "span",
+            null,
+            ` \xB7 ${t("openedAgo", { values: { value: opened } })}`
+          ) : null,
+          pullRequest.sourceBranch && pullRequest.destinationBranch ? h(
+            "span",
+            null,
+            ` \xB7 ${pullRequest.sourceBranch} \u2192 ${pullRequest.destinationBranch}`
+          ) : null,
           h("span", null, " \xB7 "),
-          Badge(host, pullRequest.statusLabel ?? pullRequest.state, pullRequest.statusTone)
+          Badge(
+            host,
+            pullRequest.statusLabel ?? pullRequest.state,
+            pullRequest.statusTone
+          )
         );
-        const identity = pullRequestAssociationIdentity(
-          pullRequest.repositoryId,
-          pullRequest.number
-        );
-        const tasks = tasksByReview[pullRequest.key] ?? (identity ? tasksByReview[identity] : void 0) ?? pullRequest.tasks;
+        const tasks = tasksForPullRequest(tasksByReview, pullRequest);
         return h(ui.ChangeRequestRow, {
           key: pullRequest.key,
           stateIcon: pullRequestStateIcon(host, pullRequest),
@@ -1790,7 +2095,9 @@ function DashboardPullRequestList({
           action: pullRequest.capabilities.includes("launch_task") ? h(ui.IntegrationStartTaskMenu, {
             presets,
             onSelect: (selected) => {
-              const preset = presets.find((candidate) => candidate.id === selected.id);
+              const preset = presets.find(
+                (candidate) => candidate.id === selected.id
+              );
               if (preset) onStartTask(pullRequest, preset);
             },
             triggerTestId: "bitbucket-start-task-trigger",
@@ -1803,6 +2110,24 @@ function DashboardPullRequestList({
     )
   );
 }
+function tasksForPullRequest(tasksByReview, pullRequest) {
+  const identity = pullRequestAssociationIdentity(
+    pullRequest.providerScope ?? connectionScopeFromURL(pullRequest.url),
+    pullRequest.repositoryId,
+    pullRequest.number
+  );
+  if (identity) {
+    return tasksByReview[identity] ?? pullRequest.tasks;
+  }
+  return tasksByReview[pullRequest.key] ?? pullRequest.tasks;
+}
+function connectionScopeFromURL(rawURL) {
+  try {
+    return new URL(rawURL).origin;
+  } catch {
+    return void 0;
+  }
+}
 
 // ui/src/dashboard-review.ts
 function ReviewDetailPanel({
@@ -1810,33 +2135,37 @@ function ReviewDetailPanel({
   workspaceId: scopedWorkspaceId,
   taskId,
   reviewKey,
+  connectionScope,
+  repositoryId,
+  changeRequestNumber,
   presentation
 }) {
   const { jsx: h, ui, React } = host;
+  const { t } = usePluginTranslation(host);
   const review = usePluginQuery(
     host,
-    taskId ? action.pullRequestsGet : action.pullRequestsInspect,
-    taskId ? {
+    action.pullRequestsGet,
+    {
+      workspaceId: scopedWorkspaceId,
       taskId,
       body: {
         review_key: reviewKey,
+        provider_scope: connectionScope,
+        repository_id: repositoryId,
+        number: changeRequestNumber,
         include: ["files", "participants", "threads", "status", "viewer"]
       }
-    } : scopedWorkspaceId ? {
-      workspaceId: scopedWorkspaceId,
-      body: {
-        review_key: reviewKey,
-        include: ["files", "participants", "threads", "status", "viewer"]
-      }
-    } : void 0,
-    Boolean((taskId || scopedWorkspaceId) && reviewKey)
+    },
+    Boolean(
+      scopedWorkspaceId && taskId && repositoryId && changeRequestNumber > 0
+    )
   );
-  const detail = normalizeReviewDetail(review.data);
+  const detail = normalizeReviewDetail(review.data, t);
   const [busyActionId, setBusyActionId] = React.useState(null);
   const [actionError, setActionError] = React.useState(null);
   const mutation = useAbortableOperation(host);
   const runAction = async (requestValue) => {
-    if (!detail || !scopedWorkspaceId || busyActionId) return;
+    if (!detail || busyActionId) return;
     const kind = requestValue.actionId === "comment" ? "add_comment" : requestValue.actionId;
     setBusyActionId(requestValue.actionId);
     setActionError(null);
@@ -1844,27 +2173,40 @@ function ReviewDetailPanel({
     try {
       await host.api.invokeAction(
         action.reviewsAction,
-        workspaceReviewAction(scopedWorkspaceId, detail.key, detail.id, kind, {
-          ...requestValue.body ? { comment: requestValue.body } : {},
-          ...requestValue.threadId ? { parentCommentId: requestValue.threadId } : {}
-        }),
+        workspaceReviewAction(
+          scopedWorkspaceId,
+          taskId,
+          {
+            reviewKey: detail.key,
+            connectionScope: detail.providerScope ?? connectionScope,
+            repositoryId: detail.repositoryId,
+            changeRequestNumber: detail.number
+          },
+          detail.id,
+          kind,
+          {
+            ...requestValue.body ? { comment: requestValue.body } : {},
+            ...requestValue.threadId ? { parentCommentId: requestValue.threadId } : {}
+          }
+        ),
         { signal: request.signal }
       );
       if (request.isCurrent()) review.refresh();
     } catch (reason) {
-      if (request.isCurrent() && !isAbortError(reason)) setActionError(errorMessage(reason));
+      if (request.isCurrent() && !isAbortError(reason))
+        setActionError(errorMessage(reason, t));
     } finally {
       if (request.finish()) setBusyActionId(null);
     }
   };
   return h(ui.ChangeRequestDetail, {
-    detail: detail ? changeRequestDetailModel(detail) : null,
+    detail: detail ? changeRequestDetailModel(detail, t) : null,
     presentation: presentation ?? "desktop",
     loading: review.loading,
     error: review.error,
     onRefresh: review.refresh,
     onRetry: review.refresh,
-    actions: detail ? changeRequestDetailActions(detail) : [],
+    actions: detail ? changeRequestDetailActions(detail, t) : [],
     busyActionId,
     onAction: runAction,
     notice: actionError ? h("p", { className: "bb-error", role: "alert" }, actionError) : null
@@ -1885,6 +2227,7 @@ function WatchRow({
   preview
 }) {
   const { jsx: h, ui } = host;
+  const { t } = usePluginTranslation(host);
   const toggleKey = watch.status === "running" ? action.watchesPause : action.watchesResume;
   return h(
     "li",
@@ -1893,8 +2236,20 @@ function WatchRow({
       "div",
       null,
       h("strong", null, watch.id),
-      Badge(host, watch.status, watch.status === "running" ? "success" : "neutral"),
-      watch.lastPolled ? h("span", null, `Last polled ${watch.lastPolled}`) : null
+      Badge(
+        host,
+        t(watch.status === "running" ? "running" : "paused"),
+        watch.status === "running" ? "success" : "neutral"
+      ),
+      watch.lastPolled ? h(
+        "span",
+        null,
+        t("lastPolled", {
+          values: {
+            value: host.utils.formatRelativeTime(watch.lastPolled)
+          }
+        })
+      ) : null
     ),
     h(
       "div",
@@ -1908,7 +2263,7 @@ function WatchRow({
           disabled,
           onClick: () => run(action.watchesRun, watch.id)
         },
-        "Run now"
+        t("runNow")
       ),
       h(
         ui.Button,
@@ -1919,7 +2274,7 @@ function WatchRow({
           disabled,
           onClick: () => run(toggleKey, watch.id)
         },
-        watch.status === "running" ? "Pause" : "Resume"
+        watch.status === "running" ? t("pause") : t("resume")
       ),
       h(
         ui.Button,
@@ -1930,7 +2285,7 @@ function WatchRow({
           disabled,
           onClick: () => preview("reset", watch.id)
         },
-        "Reset"
+        t("reset")
       ),
       h(
         ui.Button,
@@ -1941,7 +2296,7 @@ function WatchRow({
           disabled,
           onClick: () => preview("delete", watch.id)
         },
-        "Delete"
+        t("delete")
       )
     )
   );
@@ -1954,14 +2309,12 @@ function WatchConfirmation({
   cancel
 }) {
   const { jsx: h, ui } = host;
+  const { t } = usePluginTranslation(host);
+  const warningKey = pending.kind === "delete" ? "watchDeleteWarning" : "watchResetWarning";
   return h(
     "div",
     { className: "bb-watch-confirm", role: "alert" },
-    h(
-      "p",
-      null,
-      `${pending.kind === "delete" ? "Deleting" : "Resetting"} this watch will remove ${pending.taskCount} plugin-owned task${pending.taskCount === 1 ? "" : "s"}. Adopted and manual tasks stay untouched.`
-    ),
+    h("p", null, t(warningKey, { count: pending.taskCount })),
     h(
       "div",
       { className: "bb-secondary-actions" },
@@ -1974,7 +2327,7 @@ function WatchConfirmation({
           disabled,
           onClick: confirm
         },
-        `Confirm ${pending.kind}`
+        t(pending.kind === "delete" ? "confirmDelete" : "confirmReset")
       ),
       h(
         ui.Button,
@@ -1985,7 +2338,7 @@ function WatchConfirmation({
           disabled,
           onClick: cancel
         },
-        "Cancel"
+        t("cancel")
       )
     )
   );
@@ -1997,6 +2350,7 @@ function Watches({
   showCreate = true
 }) {
   const { jsx: h, ui, React } = host;
+  const { t } = usePluginTranslation(host);
   const watches = usePluginQuery(
     host,
     action.watchesGet,
@@ -2028,7 +2382,8 @@ function Watches({
       watches.refresh();
       return response;
     } catch (reason) {
-      if (request.isCurrent() && !isAbortError(reason)) setError(errorMessage(reason));
+      if (request.isCurrent() && !isAbortError(reason))
+        setError(errorMessage(reason, t));
       return null;
     } finally {
       if (request.finish()) setWorking(null);
@@ -2040,7 +2395,8 @@ function Watches({
   const preview = async (kind, watchId) => {
     const key = kind === "reset" ? action.watchesPreviewReset : action.watchesPreviewDelete;
     const response = await invoke(key, { watch_id: watchId });
-    if (response) setPending({ watchId, kind, taskCount: watchPreviewTaskCount(response) });
+    if (response)
+      setPending({ watchId, kind, taskCount: watchPreviewTaskCount(response) });
   };
   const confirm = async () => {
     if (!pending) return;
@@ -2055,12 +2411,8 @@ function Watches({
     h(
       ui.CardHeader,
       null,
-      h(ui.CardTitle, null, "Watches"),
-      h(
-        ui.CardDescription,
-        null,
-        "Poll saved pull-request criteria and create only plugin-owned tasks."
-      )
+      h(ui.CardTitle, null, t("watches")),
+      h(ui.CardDescription, null, t("watchesDescription"))
     ),
     h(
       ui.CardContent,
@@ -2079,7 +2431,7 @@ function Watches({
             preview: (kind, watchId) => void preview(kind, watchId)
           })
         )
-      ) : h("p", null, "No saved watches."),
+      ) : h("p", null, t("noSavedWatches")),
       pending ? h(WatchConfirmation, {
         host,
         pending,
@@ -2097,7 +2449,7 @@ function Watches({
           onClick: () => void invoke(action.watchesUpdate, { enabled: true, filter })
         },
         icon(h, "watch"),
-        "Add current filter watch"
+        t("addFilterWatch")
       ) : null
     )
   );
@@ -2106,6 +2458,7 @@ function Watches({
 // ui/src/dashboard-scope.ts
 function repositoryFilter(host, repositories, repository, setRepository) {
   const { jsx: h, ui } = host;
+  const t = pluginTranslate(host);
   return h(ui.IntegrationRepositoryFilter, {
     value: repository,
     onValueChange: setRepository,
@@ -2113,10 +2466,10 @@ function repositoryFilter(host, repositories, repository, setRepository) {
       const label = `${candidate.ownerOrProject}/${candidate.repositoryName}`;
       return { value: candidate.repositoryId, label, keywords: [label] };
     }),
-    ariaLabel: "Filter Bitbucket pull requests by repository",
-    allLabel: "All repositories",
-    searchPlaceholder: "Filter repositories...",
-    emptyMessage: "No repositories found.",
+    ariaLabel: t("filterRepositoryAria"),
+    allLabel: t("allRepositories"),
+    searchPlaceholder: t("filterRepositories"),
+    emptyMessage: t("noRepositories"),
     triggerClassName: "min-h-11 w-full border border-input bg-background px-2 py-1.5 text-xs/relaxed hover:bg-secondary/50 md:h-8 md:min-h-0 md:w-[220px]",
     className: "md:min-w-[360px]",
     testId: "bitbucket-repository-filter",
@@ -2133,13 +2486,24 @@ function StateScopeBar({
   onSaveCurrent
 }) {
   const { jsx: h, ui } = host;
+  const { t } = usePluginTranslation(host);
   const presets = [
-    { value: "open", label: "Open", iconName: "pull-request", group: "inbox" },
-    { value: "all", label: "All", iconName: "filter", group: "inbox" },
-    { value: "merged", label: "Merged", iconName: "merged", group: "created" },
+    {
+      value: "open",
+      label: t("open"),
+      iconName: "pull-request",
+      group: "inbox"
+    },
+    { value: "all", label: t("all"), iconName: "filter", group: "inbox" },
+    {
+      value: "merged",
+      label: t("merged"),
+      iconName: "merged",
+      group: "created"
+    },
     {
       value: "declined",
-      label: "Declined",
+      label: t("declined"),
       iconName: "pull-request-closed",
       group: "created"
     }
@@ -2147,7 +2511,7 @@ function StateScopeBar({
   return h(ui.IntegrationScopeBar, {
     testId: "bitbucket-scope-bar",
     savedMenuTestId: "bitbucket-saved-filters",
-    kinds: [{ value: "pull_requests", label: "Pull requests" }],
+    kinds: [{ value: "pull_requests", label: t("pullRequests") }],
     selected: selection,
     onSelect,
     presetsByKind: () => presets,
@@ -2169,6 +2533,7 @@ function MobileFilters({
   ...scope
 }) {
   const { jsx: h, ui, React } = host;
+  const { t } = usePluginTranslation(host);
   const [open, setOpen] = React.useState(false);
   const mobileScope = {
     ...scope,
@@ -2193,10 +2558,10 @@ function MobileFilters({
           type: "button",
           variant: "outline",
           className: "min-h-11",
-          "aria-label": "Open Bitbucket filters"
+          "aria-label": t("openFilters")
         },
         h(ui.IntegrationIcon, { name: "filter", className: "h-4 w-4" }),
-        "Filters"
+        t("filters")
       )
     ),
     h(
@@ -2205,14 +2570,18 @@ function MobileFilters({
       h(
         ui.SheetHeader,
         null,
-        h(ui.SheetTitle, null, "Bitbucket filters"),
-        h(ui.SheetDescription, null, "Narrow pull requests by repository and state.")
+        h(ui.SheetTitle, null, t("bitbucketFilters")),
+        h(ui.SheetDescription, null, t("filtersDescription"))
       ),
       h(
         "div",
         { className: "bb-mobile-filter-fields" },
         h(StateScopeBar, { host, ...mobileScope }),
-        h(ui.Label, { htmlFor: "bitbucket-repository-filter" }, "Repository"),
+        h(
+          ui.Label,
+          { htmlFor: "bitbucket-repository-filter" },
+          t("repository")
+        ),
         repositoryFilter(host, repositories, repository, setRepository)
       )
     )
@@ -2224,23 +2593,24 @@ function ConnectionNotice({
   workspaceId
 }) {
   const { jsx: h, ui } = host;
+  const { t } = usePluginTranslation(host);
   if (connection.loading)
     return h(
       "div",
       { className: "bb-connection-loading" },
-      h(ui.Spinner, { "aria-label": "Checking Bitbucket connection" })
+      h(ui.Spinner, { "aria-label": t("checkingBitbucketConnection") })
     );
   const state = connectionState(record2(connection.data));
   if (state === "connected") return null;
   const checking = state === "checking";
-  const message = connection.error ?? (checking ? "Kandev is verifying the saved connection." : "Connect Bitbucket for this workspace to load pull requests.");
+  const message = connection.error ?? (checking ? t("verifyingConnection") : t("connectToLoad"));
   return h(
     ui.Alert,
     { className: "bb-connection-notice" },
     h(
       ui.AlertTitle,
       null,
-      checking ? "Checking Bitbucket connection" : "Bitbucket needs attention"
+      checking ? t("checkingBitbucketConnection") : t("bitbucketNeedsAttention")
     ),
     h(
       ui.AlertDescription,
@@ -2254,7 +2624,7 @@ function ConnectionNotice({
           className: "min-h-11",
           onClick: () => host.navigate(integrationSettingsHref(workspaceId))
         },
-        "Configure Bitbucket"
+        t("configureBitbucket")
       )
     )
   );
@@ -2263,6 +2633,7 @@ function ConnectionNotice({
 // ui/src/bitbucket-page.ts
 function BitbucketPage({ host }) {
   const { jsx: h, ui, React } = host;
+  const { t } = usePluginTranslation(host);
   const responsive = host.useResponsiveBreakpoint();
   const activeWorkspaceId = useActiveWorkspaceId(host);
   const initialQuery = pullRequestScopeQuery("open");
@@ -2311,14 +2682,20 @@ function BitbucketPage({ host }) {
   const [queuePagination, setQueuePagination] = React.useState(() => ({ scopeKey: queueScopeKey, page: 1, cursors: [""] }));
   const activeQueuePagination = queuePagination.scopeKey === queueScopeKey ? queuePagination : { scopeKey: queueScopeKey, page: 1, cursors: [""] };
   const queueCursor = activeQueuePagination.cursors[activeQueuePagination.page - 1] ?? "";
-  const queueRequest = pullRequestListRequest(selectedRepository, search, state, queueCursor, 25);
+  const queueRequest = pullRequestListRequest(
+    selectedRepository,
+    search,
+    state,
+    queueCursor,
+    25
+  );
   const queue = usePluginQuery(
     host,
     queueRequest.actionKey,
     activeWorkspaceId ? { workspaceId: activeWorkspaceId, body: queueRequest.body } : void 0,
     Boolean(activeWorkspaceId && connected)
   );
-  const pullRequests = normalizePullRequests(queue.data);
+  const pullRequests = normalizePullRequests(queue.data, t);
   const nextQueueCursor = text(record2(queue.data).next_cursor);
   const associations = usePluginQuery(
     host,
@@ -2331,7 +2708,7 @@ function BitbucketPage({ host }) {
     } : void 0,
     Boolean(activeWorkspaceId && connected && pullRequests.length)
   );
-  const tasksByReview = normalizePullRequestAssociations(associations.data);
+  const tasksByReview = normalizePullRequestAssociations(associations.data, t);
   const createContext = useTaskCreationContext(host, activeWorkspaceId);
   const noWorkspace = !activeWorkspaceId;
   const commitSearch = () => {
@@ -2355,7 +2732,9 @@ function BitbucketPage({ host }) {
       selectScopeState(selection.id);
       return;
     }
-    const saved = savedQueries.queries.find((query) => query.id === selection.id);
+    const saved = savedQueries.queries.find(
+      (query) => query.id === selection.id
+    );
     if (!saved) return;
     setScopeSelection(selection);
     setSearchDraft(saved.query);
@@ -2365,7 +2744,8 @@ function BitbucketPage({ host }) {
   };
   const deleteSavedQuery = (id) => {
     savedQueries.remove(id);
-    if (scopeSelection.source === "saved" && scopeSelection.id === id) selectScopeState("open");
+    if (scopeSelection.source === "saved" && scopeSelection.id === id)
+      selectScopeState("open");
   };
   const saveCurrentQuery = async (label, defaultRepositoryId) => {
     const query = searchDraft.trim();
@@ -2432,9 +2812,12 @@ function BitbucketPage({ host }) {
     providerScope: launch.pullRequest.providerScope,
     providerRepositoryId: launch.pullRequest.repositoryId
   }) : void 0;
-  const launchRemoteRepository = launch ? repositories.find((candidate) => candidate.repositoryId === launch.pullRequest.repositoryId) : void 0;
+  const launchRemoteRepository = launch ? repositories.find(
+    (candidate) => candidate.repositoryId === launch.pullRequest.repositoryId
+  ) : void 0;
   const createBitbucketTask = async (payload) => {
-    if (!activeWorkspaceId || !launch) throw new Error("Bitbucket task launch is unavailable.");
+    if (!activeWorkspaceId || !launch)
+      throw new Error(t("taskLaunchUnavailable"));
     const request = taskLaunchMutation.begin();
     try {
       const result = await host.api.invokeAction(
@@ -2445,10 +2828,12 @@ function BitbucketPage({ host }) {
         },
         { signal: request.signal }
       );
-      if (!request.isCurrent()) throw new DOMException("Task launch aborted", "AbortError");
-      const task = taskFromLaunchResult(result);
+      if (!request.isCurrent())
+        throw new DOMException("Task launch aborted", "AbortError");
+      const task = taskFromLaunchResult(result, t);
       const taskId = text(task.id);
-      if (task.bitbucketLinked === true) pluginCreatedTaskIDs.current.add(taskId);
+      if (task.bitbucketLinked === true)
+        pluginCreatedTaskIDs.current.add(taskId);
       associations.refresh();
       return task;
     } finally {
@@ -2488,7 +2873,7 @@ function BitbucketPage({ host }) {
   const workbenchBody = !connected ? null : [
     responsive.isMobile ? null : h(StateScopeBar, { host, ...scopeProps }),
     h(ui.IntegrationListToolbar, {
-      title: "Pull requests",
+      title: t("pullRequests"),
       count: pullRequests.length,
       loading: queue.loading,
       lastFetchedAt: queue.lastFetchedAt,
@@ -2498,7 +2883,7 @@ function BitbucketPage({ host }) {
       onCommitCustomQuery: commitSearch,
       onRefresh: queue.refresh,
       filter,
-      queryPlaceholder: 'Custom query \u2014 press Enter. e.g. "state:open fix login"',
+      queryPlaceholder: t("customQueryPlaceholder"),
       titleTestId: "bitbucket-list-toolbar",
       queryTestId: "bitbucket-list-query",
       refreshTestId: "bitbucket-list-refresh"
@@ -2508,7 +2893,7 @@ function BitbucketPage({ host }) {
       {
         className: "bb-results",
         "data-testid": "bitbucket-results",
-        "aria-label": "Pull request results"
+        "aria-label": t("pullRequestResults")
       },
       h(DashboardPullRequestList, {
         host,
@@ -2538,7 +2923,10 @@ function BitbucketPage({ host }) {
       },
       onNext: () => {
         if (!nextQueueCursor) return;
-        const cursors = activeQueuePagination.cursors.slice(0, activeQueuePagination.page);
+        const cursors = activeQueuePagination.cursors.slice(
+          0,
+          activeQueuePagination.page
+        );
         cursors.push(nextQueueCursor);
         setQueuePagination({
           scopeKey: queueScopeKey,
@@ -2552,8 +2940,8 @@ function BitbucketPage({ host }) {
     h(ui.IntegrationSaveQueryDialog, {
       open: saveDialogOpen,
       onOpenChange: setSaveDialogOpen,
-      description: "Save this Bitbucket pull-request search for the current workspace.",
-      suggestedLabel: searchDraft.trim() || (repository ? "Repository pull requests" : "Saved query"),
+      description: t("saveQueryDescription"),
+      suggestedLabel: searchDraft.trim() || (repository ? t("repositoryPullRequests") : t("savedQuery")),
       query: searchDraft,
       repositoryId: repository,
       repositoryOptions: repositories.map((candidate) => ({
@@ -2569,11 +2957,7 @@ function BitbucketPage({ host }) {
       className: `bb-workbench ${responsive.isMobile ? "bb-mobile" : "bb-desktop"}`,
       "data-testid": "bitbucket-workbench"
     },
-    noWorkspace ? EmptyState(
-      host,
-      "Choose a workspace",
-      "Open Bitbucket from a workspace to connect and browse pull requests."
-    ) : [
+    noWorkspace ? EmptyState(host, t("chooseWorkspace"), t("chooseWorkspaceDescription")) : [
       h(ConnectionNotice, {
         host,
         connection,
@@ -2585,7 +2969,7 @@ function BitbucketPage({ host }) {
 }
 
 // ui/src/task-review-status.ts
-async function loadTaskPullRequestDetails(invokeAction, context, signal) {
+async function loadTaskPullRequestDetails(invokeAction, context, signal, t = translateEnglish) {
   const scope = {
     ...context.workspaceId ? { workspaceId: context.workspaceId } : {},
     taskId: context.taskId
@@ -2595,28 +2979,36 @@ async function loadTaskPullRequestDetails(invokeAction, context, signal) {
     { ...scope, body: { view: "task" } },
     { signal }
   );
-  const linked = normalizePullRequests(linkedResponse);
-  return Promise.all(linked.map(async (pullRequest) => {
-    const detailResponse = await invokeAction(
-      "pullrequests.get",
-      {
-        ...scope,
-        body: {
-          review_key: pullRequest.key,
-          pull_request_id: pullRequest.id,
-          include: ["participants", "status"]
-        }
-      },
-      { signal }
-    );
-    return normalizeReviewDetail(detailResponse) ?? pullRequest;
-  }));
+  const linked = normalizePullRequests(linkedResponse, t);
+  return Promise.all(
+    linked.map(async (pullRequest) => {
+      const detailResponse = await invokeAction(
+        "pullrequests.get",
+        {
+          ...scope,
+          body: {
+            review_key: pullRequest.key,
+            provider_scope: pullRequest.providerScope ?? pullRequestConnectionScope(pullRequest.url),
+            repository_id: pullRequest.repositoryId,
+            number: pullRequest.number,
+            pull_request_id: pullRequest.id,
+            include: ["participants", "status"]
+          }
+        },
+        { signal }
+      );
+      return normalizeReviewDetail(detailResponse, t) ?? pullRequest;
+    })
+  );
 }
 function normalizePipelineState(value) {
   const state = value.trim().toUpperCase();
-  if (["SUCCESS", "SUCCESSFUL", "PASSED", "COMPLETED"].includes(state)) return "success";
-  if (["FAILED", "FAILURE", "ERROR", "STOPPED"].includes(state)) return "failure";
-  if (["PENDING", "INPROGRESS", "IN_PROGRESS", "RUNNING"].includes(state)) return "pending";
+  if (["SUCCESS", "SUCCESSFUL", "PASSED", "COMPLETED"].includes(state))
+    return "success";
+  if (["FAILED", "FAILURE", "ERROR", "STOPPED"].includes(state))
+    return "failure";
+  if (["PENDING", "INPROGRESS", "IN_PROGRESS", "RUNNING"].includes(state))
+    return "pending";
   return "neutral";
 }
 function pullRequestState(value) {
@@ -2636,7 +3028,9 @@ function changeRequestStatusView(pullRequest, refreshedAt = Date.now()) {
   }));
   const states = checks.map((row) => row.state);
   const reviewers = "participants" in pullRequest && Array.isArray(pullRequest.participants) ? pullRequest.participants.filter(
-    (participant) => ["REVIEWER", "APPROVER"].includes(participant.role?.toUpperCase() ?? "REVIEWER")
+    (participant) => ["REVIEWER", "APPROVER"].includes(
+      participant.role?.toUpperCase() ?? "REVIEWER"
+    )
   ) : [];
   const approved = reviewers.filter(
     (participant) => participant.verdict === "approved" || participant.approved
@@ -2674,6 +3068,8 @@ function reviewSummaryForPullRequest(pullRequest, refreshedAt = Date.now()) {
     title: pullRequest.title,
     url: pullRequest.url,
     repositoryId: pullRequest.repositoryId,
+    connectionScope: pullRequest.providerScope ?? pullRequestConnectionScope(pullRequest.url),
+    changeRequestNumber: pullRequest.number,
     state: pullRequest.state,
     ...pullRequest.statusLabel ? {
       statusBadge: {
@@ -2683,6 +3079,13 @@ function reviewSummaryForPullRequest(pullRequest, refreshedAt = Date.now()) {
     } : {},
     taskStatus: changeRequestStatusView(pullRequest, refreshedAt)
   };
+}
+function pullRequestConnectionScope(rawURL) {
+  try {
+    return new URL(rawURL).origin;
+  } catch {
+    return "bitbucket";
+  }
 }
 
 // ui/src/review-store.ts
@@ -2698,7 +3101,9 @@ var reviewStore = /* @__PURE__ */ (() => {
     set(taskId, pullRequests) {
       snapshots.set(
         taskId,
-        pullRequests.map((pullRequest) => reviewSummaryForPullRequest(pullRequest))
+        pullRequests.map(
+          (pullRequest) => reviewSummaryForPullRequest(pullRequest)
+        )
       );
       listeners.get(taskId)?.forEach((listener) => listener());
     },
@@ -2723,7 +3128,9 @@ var reviewStore = /* @__PURE__ */ (() => {
       epoch += 1;
       refreshes.clear();
       snapshots.clear();
-      listeners.forEach((taskListeners) => taskListeners.forEach((listener) => listener()));
+      listeners.forEach(
+        (taskListeners) => taskListeners.forEach((listener) => listener())
+      );
       listeners.clear();
     }
   };
@@ -2737,20 +3144,23 @@ var associationStore = /* @__PURE__ */ (() => {
     get(workspaceId) {
       return snapshots.get(workspaceId) ?? [];
     },
-    set(workspaceId, value) {
-      const associations = normalizePullRequestAssociations(value);
+    set(workspaceId, value, t = translateEnglish) {
+      const associations = normalizePullRequestAssociations(value, t);
       snapshots.set(
         workspaceId,
         Object.entries(associations).flatMap(
-          ([reviewKey, tasks]) => reviewKey.startsWith("repository:") ? [] : tasks.map((task) => ({
-            providerId: "bitbucket",
-            taskId: task.taskId,
-            reviewKey,
-            ...task.repositoryId && task.changeRequestNumber ? {
-              repositoryId: task.repositoryId,
-              changeRequestNumber: task.changeRequestNumber
-            } : {}
-          }))
+          ([reviewKey, tasks]) => reviewKey.startsWith("repository:") || reviewKey.startsWith("connection:") ? [] : tasks.flatMap(
+            (task) => task.connectionScope && task.repositoryId && task.changeRequestNumber ? [
+              {
+                providerId: "bitbucket",
+                taskId: task.taskId,
+                reviewKey,
+                connectionScope: task.connectionScope,
+                repositoryId: task.repositoryId,
+                changeRequestNumber: task.changeRequestNumber
+              }
+            ] : []
+          )
         )
       );
       listeners.get(workspaceId)?.forEach((listener) => listener());
@@ -2791,14 +3201,15 @@ async function refreshAssociationStore(host, workspaceId, signal) {
     { signal }
   );
   if (!signal.aborted && associationStore.isCurrentRefresh(workspaceId, refresh))
-    associationStore.set(workspaceId, response);
+    associationStore.set(workspaceId, response, pluginTranslate(host));
 }
 async function refreshReviewStore(host, taskId, signal, workspaceId) {
   const refresh = reviewStore.beginRefresh(taskId);
   const pullRequests = await loadTaskPullRequestDetails(
     (key, input, options) => host.api.invokeAction(key, input, options),
     { taskId, ...workspaceId ? { workspaceId } : {} },
-    signal
+    signal,
+    pluginTranslate(host)
   );
   if (!signal.aborted && reviewStore.isCurrentRefresh(taskId, refresh))
     reviewStore.set(taskId, pullRequests);
@@ -2813,12 +3224,21 @@ function isCredentialFreeHTTPSURL(rawURL) {
     return false;
   }
 }
-function registerNativeIntegrations(registry, host) {
+function registerNativeIntegrations(registry, host, bitbucketIcon) {
+  const t = pluginTranslate(host);
   registry.registerRepositoryProvider({
     id: "bitbucket",
-    label: "Bitbucket",
-    icon: "bitbucket",
-    async listRepositories({ workspaceId: scopedWorkspaceId, query, cursor, limit, signal }) {
+    get label() {
+      return t("bitbucket");
+    },
+    icon: bitbucketIcon,
+    async listRepositories({
+      workspaceId: scopedWorkspaceId,
+      query,
+      cursor,
+      limit,
+      signal
+    }) {
       const response = await host.api.invokeAction(
         action.repositoriesList,
         {
@@ -2902,24 +3322,26 @@ function registerNativeIntegrations(registry, host) {
   });
   registry.registerTaskAction({
     id: "link-pull-request",
-    label: "Bitbucket Pull Request",
-    icon: "bitbucket",
+    get label() {
+      return t("linkPullRequestMenu");
+    },
+    icon: bitbucketIcon,
     placement: "link",
     async run(context) {
       host.openTaskLinkDialog({
-        title: "Link Bitbucket pull request",
-        description: "Use a Bitbucket pull request URL or canonical key for this task.",
-        inputLabel: "Pull request",
+        title: t("linkPullRequestTitle"),
+        description: t("linkPullRequestDescription"),
+        inputLabel: t("pullRequest"),
         placeholder: "workspace/repository#42",
-        emptyError: "Enter a Bitbucket pull request URL or key.",
-        failureMessage: "Failed to link Bitbucket pull request.",
-        successMessage: "Bitbucket pull request linked",
+        emptyError: t("linkPullRequestEmpty"),
+        failureMessage: t("linkPullRequestFailure"),
+        successMessage: t("linkPullRequestSuccess"),
         inputTestId: "bitbucket-review-reference",
         errorTestId: "bitbucket-review-reference-error",
         submitTestId: "bitbucket-review-reference-submit",
         async onSubmit(reference, signal) {
           const body = linkPullRequestBody(reference);
-          if (!body) throw new Error("Enter a Bitbucket pull request URL or key.");
+          if (!body) throw new Error(t("linkPullRequestEmpty"));
           await host.api.invokeAction(
             action.pullRequestsLink,
             {
@@ -2930,7 +3352,12 @@ function registerNativeIntegrations(registry, host) {
             { signal }
           );
           await Promise.all([
-            refreshReviewStore(host, context.taskId, signal, context.workspaceId),
+            refreshReviewStore(
+              host,
+              context.taskId,
+              signal,
+              context.workspaceId
+            ),
             refreshAssociationStore(host, context.workspaceId, signal)
           ]).catch(() => void 0);
         }
@@ -2939,9 +3366,13 @@ function registerNativeIntegrations(registry, host) {
   });
   registry.registerReviewProvider({
     id: "bitbucket",
-    label: "Bitbucket",
-    icon: "bitbucket",
-    changeRequestNoun: "pull request",
+    get label() {
+      return t("bitbucket");
+    },
+    icon: bitbucketIcon,
+    get changeRequestNoun() {
+      return t("pullRequestNoun");
+    },
     order: 30,
     getSnapshot: (taskId) => reviewStore.get(taskId),
     subscribe: (taskId, listener) => reviewStore.subscribe(taskId, listener),
@@ -2953,21 +3384,67 @@ function registerNativeIntegrations(registry, host) {
     async refreshAssociations(workspaceId, signal) {
       await refreshAssociationStore(host, workspaceId, signal);
     },
-    async unlink({ workspaceId, taskId, reviewKey, signal }) {
+    async unlink({
+      workspaceId,
+      taskId,
+      reviewKey,
+      connectionScope,
+      repositoryId,
+      changeRequestNumber,
+      signal
+    }) {
       await host.api.invokeAction(
         action.pullRequestsUnlink,
-        { workspaceId, taskId, body: { review_key: reviewKey } },
+        {
+          workspaceId,
+          taskId,
+          body: {
+            review_key: reviewKey,
+            provider_scope: connectionScope,
+            repository_id: repositoryId,
+            number: changeRequestNumber
+          }
+        },
         { signal }
       );
     },
     ReviewPanel: (props) => host.jsx(ReviewDetailPanel, {
       host,
-      workspaceId: text(props.workspaceId) || void 0,
-      taskId: text(props.taskId) || void 0,
+      workspaceId: text(props.workspaceId),
+      taskId: text(props.taskId),
       reviewKey: text(props.reviewKey),
+      connectionScope: text(props.connectionScope),
+      repositoryId: text(props.repositoryId),
+      changeRequestNumber: Number(props.changeRequestNumber),
       presentation: text(props.presentation) === "mobile" ? "mobile" : "desktop"
     })
   });
+}
+
+// ui/src/bitbucket-icon.ts
+function createBitbucketIcon(host) {
+  return function BitbucketIcon({ className, "aria-hidden": ariaHidden }) {
+    return host.jsx(
+      "svg",
+      {
+        xmlns: "http://www.w3.org/2000/svg",
+        width: 24,
+        height: 24,
+        viewBox: "0 0 24 24",
+        fill: "none",
+        stroke: "currentColor",
+        strokeWidth: 2,
+        strokeLinecap: "round",
+        strokeLinejoin: "round",
+        className,
+        "aria-hidden": ariaHidden ?? true
+      },
+      host.jsx("path", {
+        d: "M3.648 4a.64 .64 0 0 0 -.64 .744l3.14 14.528c.07 .417 .43 .724 .852 .728h10a.644 .644 0 0 0 .642 -.539l3.35 -14.71a.641 .641 0 0 0 -.64 -.744l-16.704 -.007"
+      }),
+      host.jsx("path", { d: "M14 15h-4l-1 -6h6l-1 6" })
+    );
+  };
 }
 
 // ui/src/bundle.ts
@@ -2997,6 +3474,7 @@ function makeIntegrationSettings(host) {
 function makeTopbarActions(host) {
   return function TopbarActions() {
     const activeWorkspaceId = useActiveWorkspaceId(host);
+    const { t } = usePluginTranslation(host);
     return host.jsx(
       host.ui.Button,
       {
@@ -3004,38 +3482,55 @@ function makeTopbarActions(host) {
         variant: "ghost",
         size: "sm",
         className: "bb-topbar-settings",
-        "aria-label": "Open Bitbucket settings",
+        "aria-label": t("openSettings"),
         onClick: () => host.navigate(integrationSettingsHref(activeWorkspaceId))
       },
-      "Settings"
+      t("settings")
     );
   };
 }
 window.registerKandevPlugin(PLUGIN_ID, {
   initialize(registry, host) {
+    registerTranslations(registry);
+    const t = pluginTranslate(host);
+    const bitbucketIcon = createBitbucketIcon(host);
     registry.registerNavItem({
       id: "bitbucket",
-      label: "Bitbucket",
+      get label() {
+        return t("bitbucket");
+      },
       path: "/bitbucket",
-      icon: "bitbucket",
+      icon: bitbucketIcon,
       section: "integrations"
     });
-    registry.registerRoute("/bitbucket", () => host.jsx(BitbucketPage, { host }), {
-      topbar: {
-        title: "Bitbucket",
-        subtitle: "Pull requests",
-        icon: "bitbucket",
-        actions: makeTopbarActions(host)
+    registry.registerRoute(
+      "/bitbucket",
+      () => host.jsx(BitbucketPage, { host }),
+      {
+        topbar: {
+          get title() {
+            return t("bitbucket");
+          },
+          get subtitle() {
+            return t("pullRequests");
+          },
+          icon: bitbucketIcon,
+          actions: makeTopbarActions(host)
+        }
       }
-    });
+    );
     registry.registerIntegrationSettings({
       id: "bitbucket",
-      label: "Bitbucket",
-      description: "Connect Bitbucket Cloud or Data Center for this workspace.",
-      icon: "bitbucket",
+      get label() {
+        return t("bitbucket");
+      },
+      get description() {
+        return t("connectDescription");
+      },
+      icon: bitbucketIcon,
       Component: makeIntegrationSettings(host)
     });
-    registerNativeIntegrations(registry, host);
+    registerNativeIntegrations(registry, host, bitbucketIcon);
   },
   destroy() {
     reviewStore.clear();

@@ -5,6 +5,7 @@ import {
   type PullRequest,
   type ReviewDetail,
 } from "./view-models";
+import { translateEnglish, type Translate } from "./i18n";
 
 type ActionInput = {
   workspaceId?: string;
@@ -52,6 +53,8 @@ export type ReviewSummaryForHost = {
   title: string;
   url: string;
   repositoryId: string;
+  connectionScope: string;
+  changeRequestNumber: string | number;
   state: string;
   statusBadge?: { label: string; tone?: string };
   taskStatus: ChangeRequestStatusView;
@@ -61,6 +64,7 @@ export async function loadTaskPullRequestDetails(
   invokeAction: InvokeAction,
   context: { taskId: string; workspaceId?: string },
   signal: AbortSignal,
+  t: Translate = translateEnglish,
 ): Promise<PullRequestWithStatus[]> {
   const scope = {
     ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
@@ -71,33 +75,47 @@ export async function loadTaskPullRequestDetails(
     { ...scope, body: { view: "task" } },
     { signal },
   );
-  const linked = normalizePullRequests(linkedResponse);
-  return Promise.all(linked.map(async (pullRequest) => {
-    const detailResponse = await invokeAction<unknown>(
-      "pullrequests.get",
-      {
-        ...scope,
-        body: {
-          review_key: pullRequest.key,
-          pull_request_id: pullRequest.id,
-          include: ["participants", "status"],
+  const linked = normalizePullRequests(linkedResponse, t);
+  return Promise.all(
+    linked.map(async (pullRequest) => {
+      const detailResponse = await invokeAction<unknown>(
+        "pullrequests.get",
+        {
+          ...scope,
+          body: {
+            review_key: pullRequest.key,
+            provider_scope:
+              pullRequest.providerScope ??
+              pullRequestConnectionScope(pullRequest.url),
+            repository_id: pullRequest.repositoryId,
+            number: pullRequest.number,
+            pull_request_id: pullRequest.id,
+            include: ["participants", "status"],
+          },
         },
-      },
-      { signal },
-    );
-    return normalizeReviewDetail(detailResponse) ?? pullRequest;
-  }));
+        { signal },
+      );
+      return normalizeReviewDetail(detailResponse, t) ?? pullRequest;
+    }),
+  );
 }
 
-function normalizePipelineState(value: string): "success" | "failure" | "pending" | "neutral" {
+function normalizePipelineState(
+  value: string,
+): "success" | "failure" | "pending" | "neutral" {
   const state = value.trim().toUpperCase();
-  if (["SUCCESS", "SUCCESSFUL", "PASSED", "COMPLETED"].includes(state)) return "success";
-  if (["FAILED", "FAILURE", "ERROR", "STOPPED"].includes(state)) return "failure";
-  if (["PENDING", "INPROGRESS", "IN_PROGRESS", "RUNNING"].includes(state)) return "pending";
+  if (["SUCCESS", "SUCCESSFUL", "PASSED", "COMPLETED"].includes(state))
+    return "success";
+  if (["FAILED", "FAILURE", "ERROR", "STOPPED"].includes(state))
+    return "failure";
+  if (["PENDING", "INPROGRESS", "IN_PROGRESS", "RUNNING"].includes(state))
+    return "pending";
   return "neutral";
 }
 
-function pullRequestState(value: string): "open" | "merged" | "closed" | "draft" {
+function pullRequestState(
+  value: string,
+): "open" | "merged" | "closed" | "draft" {
   const state = value.trim().toUpperCase();
   if (state === "MERGED") return "merged";
   if (state === "DRAFT") return "draft";
@@ -117,11 +135,14 @@ export function changeRequestStatusView(
     ...(status.url ? { url: status.url } : {}),
   }));
   const states = checks.map((row) => row.state);
-  const reviewers = "participants" in pullRequest && Array.isArray(pullRequest.participants)
-    ? pullRequest.participants.filter((participant) =>
-        ["REVIEWER", "APPROVER"].includes(participant.role?.toUpperCase() ?? "REVIEWER"),
-      )
-    : [];
+  const reviewers =
+    "participants" in pullRequest && Array.isArray(pullRequest.participants)
+      ? pullRequest.participants.filter((participant) =>
+          ["REVIEWER", "APPROVER"].includes(
+            participant.role?.toUpperCase() ?? "REVIEWER",
+          ),
+        )
+      : [];
   const approved = reviewers.filter(
     (participant) => participant.verdict === "approved" || participant.approved,
   ).length;
@@ -134,12 +155,17 @@ export function changeRequestStatusView(
       participant.verdict !== "approved" &&
       !participant.approved,
   ).length;
-  const unresolvedComments = pullRequest.unresolvedThreadCount ??
+  const unresolvedComments =
+    pullRequest.unresolvedThreadCount ??
     ("threads" in pullRequest && Array.isArray(pullRequest.threads)
       ? pullRequest.threads.filter((thread) => !thread.resolved).length
       : 0);
-  const providerUpdatedAt = pullRequest.updatedAt ? Date.parse(pullRequest.updatedAt) : Number.NaN;
-  const updatedAt = Number.isFinite(providerUpdatedAt) ? providerUpdatedAt : refreshedAt;
+  const providerUpdatedAt = pullRequest.updatedAt
+    ? Date.parse(pullRequest.updatedAt)
+    : Number.NaN;
+  const updatedAt = Number.isFinite(providerUpdatedAt)
+    ? providerUpdatedAt
+    : refreshedAt;
   const pipelineState = states.includes("failure")
     ? "failure"
     : states.includes("pending")
@@ -155,11 +181,12 @@ export function changeRequestStatusView(
     ...(reviewers.length > 0
       ? {
           review: {
-            state: changesRequested > 0
-              ? "changes_requested" as const
-              : approved > 0
-                ? "approved" as const
-                : "pending" as const,
+            state:
+              changesRequested > 0
+                ? ("changes_requested" as const)
+                : approved > 0
+                  ? ("approved" as const)
+                  : ("pending" as const),
             approved,
             ...(requested > 0 ? { requested } : {}),
           },
@@ -180,6 +207,9 @@ export function reviewSummaryForPullRequest(
     title: pullRequest.title,
     url: pullRequest.url,
     repositoryId: pullRequest.repositoryId,
+    connectionScope:
+      pullRequest.providerScope ?? pullRequestConnectionScope(pullRequest.url),
+    changeRequestNumber: pullRequest.number,
     state: pullRequest.state,
     ...(pullRequest.statusLabel
       ? {
@@ -191,4 +221,12 @@ export function reviewSummaryForPullRequest(
       : {}),
     taskStatus: changeRequestStatusView(pullRequest, refreshedAt),
   };
+}
+
+function pullRequestConnectionScope(rawURL: string): string {
+  try {
+    return new URL(rawURL).origin;
+  } catch {
+    return "bitbucket";
+  }
 }

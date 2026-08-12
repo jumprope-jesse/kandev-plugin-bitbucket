@@ -220,6 +220,35 @@ func (w *Workflows) pullRequest(ctx context.Context, workspaceID string, body []
 }
 
 func (w *Workflows) pullRequestLookup(ctx context.Context, workspaceID string, input pullRequestLookup) (domain.Provider, domain.PullRequest, error) {
+	immutableFields := 0
+	if input.ProviderScope != "" {
+		immutableFields++
+	}
+	if input.RepositoryID != "" {
+		immutableFields++
+	}
+	if input.Number > 0 {
+		immutableFields++
+	}
+	if immutableFields > 0 {
+		if immutableFields != 3 {
+			return nil, domain.PullRequest{}, invalidActionError("complete pull request identity is required")
+		}
+		provider, err := w.provider(ctx, workspaceID)
+		if err != nil {
+			return nil, domain.PullRequest{}, err
+		}
+		repository, err := persistedRepository(ctx, provider, input.RepositoryID, input.ProviderScope)
+		if err != nil {
+			return nil, domain.PullRequest{}, notFoundActionError("Bitbucket repository is unavailable")
+		}
+		pullRequest, err := provider.GetPullRequest(ctx, repository, input.Number)
+		if err != nil || pullRequest.Repository.ID != input.RepositoryID ||
+			pullRequest.Repository.ProviderScope != input.ProviderScope || pullRequest.Number != input.Number {
+			return nil, domain.PullRequest{}, notFoundActionError("Bitbucket pull request is unavailable")
+		}
+		return provider, pullRequest, nil
+	}
 	if input.ReviewKey != "" {
 		provider, err := w.provider(ctx, workspaceID)
 		if err != nil {

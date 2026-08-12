@@ -297,13 +297,24 @@ func sortedAssociations(values map[string]watchAssociation) []watchAssociation {
 	return result
 }
 
-func (w *Workflows) taskHasPullRequestAssociation(ctx context.Context, workspaceID, taskID, key string) (bool, error) {
+func (w *Workflows) taskHasPullRequestAssociation(
+	ctx context.Context,
+	workspaceID, taskID string,
+	lookup pullRequestLookup,
+) (bool, error) {
+	target, complete := (domain.PullRequestIdentity{
+		ProviderID: "bitbucket", ProviderScope: lookup.ProviderScope,
+		RepositoryID: lookup.RepositoryID, Number: int64(lookup.Number),
+	}).StorageKey()
+	if !complete {
+		return false, invalidActionError("complete pull request identity is required")
+	}
 	links, err := w.links.List(ctx, taskID)
 	if err != nil {
 		return false, err
 	}
 	for _, link := range links {
-		if link.Key != key {
+		if pullRequestLinkStorageKey(link) != target {
 			continue
 		}
 		matches, err := w.linkMatchesConnection(ctx, workspaceID, link)
@@ -318,26 +329,8 @@ func (w *Workflows) taskHasPullRequestAssociation(ctx context.Context, workspace
 	if err != nil {
 		return false, err
 	}
-	return hasWatchAssociationKey(watchAssociations[taskID], key), nil
-}
-
-func (w *Workflows) pullRequestLookupKey(ctx context.Context, workspaceID string, lookup pullRequestLookup) (string, error) {
-	if lookup.ReviewKey != "" {
-		provider, err := w.provider(ctx, workspaceID)
-		if err != nil {
-			return "", err
-		}
-		_, _, key, ok := pullRequestIdentity(provider, lookup.ReviewKey)
-		if !ok {
-			return "", fmt.Errorf("invalid Bitbucket pull request key")
-		}
-		return key, nil
-	}
-	repository, err := domainRepository(lookup.Repository)
-	if err != nil || lookup.Number <= 0 {
-		return "", fmt.Errorf("invalid Bitbucket pull request key")
-	}
-	return fmt.Sprintf("%s/%s#%d", repository.Namespace, repository.Slug, lookup.Number), nil
+	_, found := watchAssociations[taskID][target]
+	return found, nil
 }
 
 func (w *Workflows) autoLinkTaskPullRequests(ctx context.Context, workspaceID, taskID string, provider domain.Provider) error {
