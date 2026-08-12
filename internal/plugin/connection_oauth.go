@@ -38,8 +38,11 @@ type oauthFlow struct {
 // are exchanged only by the callback and are kept in host secret storage.
 func (r *ConnectionResolver) StartOAuth(ctx context.Context, workspaceID string) (*url.URL, error) {
 	settings, found, err := r.Load(ctx, workspaceID)
-	if err != nil || !found || settings.AuthMethod != "oauth" {
-		return nil, fmt.Errorf("Bitbucket OAuth is not configured")
+	if err != nil {
+		return nil, unavailableActionError("load Bitbucket OAuth connection: %v", err)
+	}
+	if !found || settings.AuthMethod != "oauth" {
+		return nil, conflictActionError("Bitbucket OAuth is not configured")
 	}
 	registration, err := r.oauthRegistration(ctx, workspaceID, settings)
 	if err != nil {

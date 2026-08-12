@@ -2,6 +2,7 @@ package datacenter
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,9 +18,18 @@ import (
 )
 
 const (
-	maxPageLength        = 100
-	defaultResponseLimit = 1 << 20
+	maxPageLength           = 100
+	defaultResponseLimit    = 1 << 20
+	repositoryCursorVersion = 1
 )
+
+type repositoryCursor struct {
+	Version int    `json:"version"`
+	Scope   string `json:"scope"`
+	Query   string `json:"query"`
+	Limit   int    `json:"limit"`
+	Start   int    `json:"start"`
+}
 
 // TokenSource provides a Data Center PAT or OAuth token without exposing persistence.
 type TokenSource interface {
@@ -160,10 +170,11 @@ func (c *Client) ListRepositoriesPage(ctx context.Context, _ string, query domai
 	if query.Limit <= 0 {
 		return domain.RepositoryPage{}, fmt.Errorf("repository limit must be positive")
 	}
+	search := strings.TrimSpace(query.Text)
 	start := 0
 	if query.Cursor != "" {
-		parsed, err := strconv.Atoi(query.Cursor)
-		if err != nil || parsed < 0 {
+		parsed, err := c.parseRepositoryCursor(query.Cursor, search, min(query.Limit, maxPageLength))
+		if err != nil {
 			return domain.RepositoryPage{}, fmt.Errorf("invalid Data Center repository cursor")
 		}
 		start = parsed
@@ -171,7 +182,7 @@ func (c *Client) ListRepositoriesPage(ctx context.Context, _ string, query domai
 	endpoint := *c.connection.APIBase
 	endpoint.Path = path.Join(endpoint.Path, "repos")
 	endpoint.RawPath = ""
-	payload, err := c.repositoryPage(ctx, &endpoint, strings.TrimSpace(query.Text), start, min(query.Limit, maxPageLength))
+	payload, err := c.repositoryPage(ctx, &endpoint, search, start, min(query.Limit, maxPageLength))
 	if err != nil {
 		return domain.RepositoryPage{}, err
 	}
@@ -188,9 +199,34 @@ func (c *Client) ListRepositoriesPage(ctx context.Context, _ string, query domai
 		if payload.NextPageStart <= start {
 			return domain.RepositoryPage{}, fmt.Errorf("Data Center repository pagination did not advance")
 		}
-		nextCursor = strconv.Itoa(payload.NextPageStart)
+		nextCursor = c.encodeRepositoryCursor(search, min(query.Limit, maxPageLength), payload.NextPageStart)
 	}
 	return domain.RepositoryPage{Repositories: repositories, NextCursor: nextCursor}, nil
+}
+
+func (c *Client) encodeRepositoryCursor(query string, limit, start int) string {
+	payload, _ := json.Marshal(repositoryCursor{
+		Version: repositoryCursorVersion, Scope: c.connection.Scope,
+		Query: query, Limit: limit, Start: start,
+	})
+	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
+func (c *Client) parseRepositoryCursor(raw, query string, limit int) (int, error) {
+	if len(raw) > 8192 {
+		return 0, fmt.Errorf("invalid repository cursor")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return 0, err
+	}
+	var cursor repositoryCursor
+	if err := json.Unmarshal(payload, &cursor); err != nil ||
+		cursor.Version != repositoryCursorVersion || cursor.Start < 0 ||
+		cursor.Scope != c.connection.Scope || cursor.Query != query || cursor.Limit != limit {
+		return 0, fmt.Errorf("invalid repository cursor")
+	}
+	return cursor.Start, nil
 }
 
 // SearchRepositories uses Data Center's case-insensitive name filter before

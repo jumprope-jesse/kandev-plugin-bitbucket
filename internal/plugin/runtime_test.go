@@ -78,6 +78,62 @@ func TestRuntime_MapsLocalWorkflowFailuresToTypedResponses(t *testing.T) {
 	}
 }
 
+func TestRuntime_MapsUnavailableConnectionCapabilitiesAndMissingVerifiedTask(t *testing.T) {
+	provider := &workflowProvider{pullRequest: testPullRequest()}
+	plainHost := newConnectionHost()
+	plainWorkflows, err := NewWorkflows(plainHost, staticResolver{provider: provider})
+	require.NoError(t, err)
+	unavailableWorkflows, err := NewWorkflows(
+		plainHost,
+		staticResolver{err: errors.New("connection state unavailable")},
+	)
+	require.NoError(t, err)
+	missingTaskHost := &scopedConnectionHost{
+		connectionHost: newConnectionHost(), tasks: &taskReader{}, repositories: &repositoryReader{},
+	}
+	missingTaskWorkflows, err := NewWorkflows(missingTaskHost, staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		runtime    *Runtime
+		request    *pluginsdk.PluginActionRequest
+		wantStatus int
+		wantCode   pluginsdk.ActionErrorCode
+	}{
+		{
+			name: "connection updates unavailable", runtime: &Runtime{workflows: plainWorkflows},
+			request:    &pluginsdk.PluginActionRequest{ActionKey: "connection.disconnect", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"}},
+			wantStatus: http.StatusServiceUnavailable, wantCode: pluginsdk.ActionErrorUnavailable,
+		},
+		{
+			name: "OAuth coordinator unavailable", runtime: &Runtime{workflows: plainWorkflows},
+			request:    &pluginsdk.PluginActionRequest{ActionKey: "oauth.start", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"}},
+			wantStatus: http.StatusConflict, wantCode: pluginsdk.ActionErrorConflict,
+		},
+		{
+			name: "provider resolution unavailable", runtime: &Runtime{workflows: unavailableWorkflows},
+			request:    &pluginsdk.PluginActionRequest{ActionKey: "repositories.list", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"}},
+			wantStatus: http.StatusServiceUnavailable, wantCode: pluginsdk.ActionErrorUnavailable,
+		},
+		{
+			name: "verified task unavailable", runtime: &Runtime{workflows: missingTaskWorkflows},
+			request:    &pluginsdk.PluginActionRequest{ActionKey: "pullrequests.create", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1", TaskID: "missing-task"}, Body: []byte(`{"title":"PR"}`)},
+			wantStatus: http.StatusForbidden, wantCode: pluginsdk.ActionErrorPermissionDenied,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response, actionErr := test.runtime.HandleAction(context.Background(), test.request)
+			require.NoError(t, actionErr)
+			require.Equal(t, test.wantStatus, response.Status)
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(response.Body, &body))
+			require.Equal(t, string(test.wantCode), body["code"])
+		})
+	}
+}
+
 func TestRuntime_MapsConnectionAndWatchValidationToTypedResponses(t *testing.T) {
 	host := newConnectionHost()
 	resolver, err := NewConnectionResolver(host)
@@ -93,6 +149,13 @@ func TestRuntime_MapsConnectionAndWatchValidationToTypedResponses(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, http.StatusBadRequest, response.Status)
 	require.JSONEq(t, `{"code":"invalid_argument","error":"Invalid Bitbucket action request."}`, string(response.Body))
+
+	response, err = runtime.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "oauth.start", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusConflict, response.Status)
+	require.JSONEq(t, `{"code":"conflict","error":"Bitbucket resource changed. Refresh and retry."}`, string(response.Body))
 
 	response, err = runtime.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
 		ActionKey: "watches.create", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"}, Body: []byte(`{}`),

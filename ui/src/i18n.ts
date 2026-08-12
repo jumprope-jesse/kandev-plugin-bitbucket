@@ -159,6 +159,8 @@ const english = {
   unknown: "Unknown",
   bitbucketTask: "Bitbucket task",
   taskLaunchUnavailable: "Bitbucket task launch is unavailable.",
+  pullRequestIdentityUnavailable:
+    "Bitbucket pull request identity is unavailable. Refresh and try again.",
   taskLaunchMissingId: "Bitbucket task launch returned no task id.",
   enterOauthClientId: "Enter OAuth client ID.",
   enterOauthClientSecret: "Enter OAuth client secret.",

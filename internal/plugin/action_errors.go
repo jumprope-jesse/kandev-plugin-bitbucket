@@ -33,6 +33,10 @@ func conflictActionError(format string, args ...any) error {
 	return categorizedActionError(pluginsdk.ActionErrorConflict, format, args...)
 }
 
+func unavailableActionError(format string, args ...any) error {
+	return categorizedActionError(pluginsdk.ActionErrorUnavailable, format, args...)
+}
+
 func actionFailureResponse(err error) (*pluginsdk.PluginActionResponse, error) {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return nil, err

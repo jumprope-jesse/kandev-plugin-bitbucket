@@ -114,7 +114,7 @@ func (w *Workflows) HandleWebhook(ctx context.Context, request *pluginsdk.Webhoo
 
 func (w *Workflows) SearchEntityReferences(ctx context.Context, request *pluginsdk.SearchEntityReferencesRequest) (*pluginsdk.SearchEntityReferencesResponse, error) {
 	if request == nil || request.Source != referenceSource || request.WorkspaceID == "" {
-		return nil, fmt.Errorf("invalid Bitbucket reference search")
+		return nil, invalidActionError("invalid Bitbucket reference search")
 	}
 	provider, err := w.provider(ctx, request.WorkspaceID)
 	if err != nil {
@@ -179,14 +179,14 @@ func (w *Workflows) provider(ctx context.Context, workspaceID string) (domain.Pr
 	}
 	provider, err := w.resolver.Provider(ctx, workspaceID)
 	if err != nil {
-		return nil, fmt.Errorf("resolve Bitbucket connection: %w", err)
+		return nil, unavailableActionError("resolve Bitbucket connection: %v", err)
 	}
 	return provider, nil
 }
 
 func (w *Workflows) workspaceIsUnconfigured(ctx context.Context, workspaceID string) (bool, error) {
 	if workspaceID == "" {
-		return false, fmt.Errorf("verified workspace context is required")
+		return false, forbiddenActionError("verified workspace context is required")
 	}
 	connections, ok := w.resolver.(ConnectionSettingsStore)
 	if !ok {
@@ -194,7 +194,7 @@ func (w *Workflows) workspaceIsUnconfigured(ctx context.Context, workspaceID str
 	}
 	_, found, err := connections.Load(ctx, workspaceID)
 	if err != nil {
-		return false, fmt.Errorf("load Bitbucket connection: %w", err)
+		return false, unavailableActionError("load Bitbucket connection: %v", err)
 	}
 	return !found, nil
 }
@@ -220,6 +220,9 @@ func (w *Workflows) pullRequest(ctx context.Context, workspaceID string, body []
 }
 
 func (w *Workflows) pullRequestLookup(ctx context.Context, workspaceID string, input pullRequestLookup) (domain.Provider, domain.PullRequest, error) {
+	if input.PullRequestID != "" && input.Number > 0 && input.PullRequestID != fmt.Sprint(input.Number) {
+		return nil, domain.PullRequest{}, invalidActionError("pull request identity is inconsistent")
+	}
 	immutableFields := 0
 	if input.ProviderScope != "" {
 		immutableFields++
@@ -263,7 +266,8 @@ func (w *Workflows) pullRequestLookup(ctx context.Context, workspaceID string, i
 			return nil, domain.PullRequest{}, notFoundActionError("Bitbucket repository is unavailable")
 		}
 		pullRequest, err := provider.GetPullRequest(ctx, repository, number)
-		if err != nil || pullRequest.Key() != key {
+		if err != nil || pullRequest.Key() != key ||
+			(input.PullRequestID != "" && input.PullRequestID != fmt.Sprint(pullRequest.Number)) {
 			return nil, domain.PullRequest{}, notFoundActionError("Bitbucket pull request is unavailable")
 		}
 		return provider, pullRequest, nil

@@ -1390,6 +1390,44 @@ func TestPullRequestReservationIdentityChangesAfterRepositoryRecreation(t *testi
 	require.NotEqual(t, first, second)
 }
 
+func TestWorkflows_TasksLaunchCannotRetargetRecreatedRepository(t *testing.T) {
+	pullRequest := launchablePullRequest(t)
+	pullRequest.Repository.ID = "repo-uuid-new"
+	provider := &workflowProvider{pullRequest: pullRequest}
+	host := &scopedConnectionHost{
+		connectionHost: newConnectionHost(), tasks: &taskReader{}, repositories: &repositoryReader{},
+	}
+	workflows, err := NewWorkflows(host, staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	_, err = workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "tasks.launch", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body: []byte(`{"review_key":"workspace/repo#42","provider_scope":"https://bitbucket.org","repository_id":"repo-uuid-old","number":42,"pull_request_id":"42"}`),
+	})
+
+	require.ErrorContains(t, err, "repository is unavailable")
+	require.Zero(t, host.tasks.createCalls)
+}
+
+func TestWorkflows_TasksLaunchRejectsConflictingProviderPullRequestID(t *testing.T) {
+	pullRequest := launchablePullRequest(t)
+	provider := &workflowProvider{pullRequest: pullRequest}
+	host := &scopedConnectionHost{
+		connectionHost: newConnectionHost(), tasks: &taskReader{}, repositories: &repositoryReader{},
+	}
+	workflows, err := NewWorkflows(host, staticResolver{provider: provider})
+	require.NoError(t, err)
+
+	_, err = workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "tasks.launch", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+		Body: []byte(`{"review_key":"workspace/repo#42","provider_scope":"https://bitbucket.org","repository_id":"repo-uuid","number":42,"pull_request_id":"99"}`),
+	})
+
+	require.ErrorContains(t, err, "pull request identity is inconsistent")
+	require.Zero(t, provider.getPullRequestCalls)
+	require.Zero(t, host.tasks.createCalls)
+}
+
 func TestWorkflows_TasksLaunchUsesSafeDefaults(t *testing.T) {
 	host := &scopedConnectionHost{connectionHost: newConnectionHost(), tasks: &taskReader{}, repositories: &repositoryReader{}}
 	pullRequest := launchablePullRequest(t)

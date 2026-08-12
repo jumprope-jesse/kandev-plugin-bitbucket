@@ -161,20 +161,6 @@ export function pullRequestCreateBody(
   return body;
 }
 
-export function workspacePullRequestAction(
-  workspaceId: string,
-  reviewKey: string,
-  pullRequestID: string,
-  operation?: string,
-): { workspaceId: string; body: JsonRecord } {
-  const body: JsonRecord = {
-    review_key: reviewKey,
-    pull_request_id: pullRequestID,
-  };
-  if (operation) body.operation = operation;
-  return { workspaceId, body };
-}
-
 export function workspaceReviewAction(
   workspaceId: string,
   taskId: string,

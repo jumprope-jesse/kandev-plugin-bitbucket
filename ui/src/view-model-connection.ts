@@ -138,6 +138,7 @@ export function taskLaunchBody(
   pullRequest: PullRequest,
   payload: JsonRecord,
   launchId: string,
+  t: Translate = translateEnglish,
 ): JsonRecord {
   const task: JsonRecord = {
     title: string(payload.title) ?? "",
@@ -152,7 +153,33 @@ export function taskLaunchBody(
   if (workflowStepID) task.workflow_step_id = workflowStepID;
   if (agentProfileID) task.agent_profile_id = agentProfileID;
   if (executorProfileID) task.executor_profile_id = executorProfileID;
-  return { review_key: pullRequest.key, launch_id: launchId, task };
+  return {
+    ...pullRequestLookupBody(pullRequest, t),
+    launch_id: launchId,
+    task,
+  };
+}
+
+export function pullRequestLookupBody(
+  pullRequest: PullRequest,
+  t: Translate = translateEnglish,
+): JsonRecord {
+  const providerScope = pullRequest.providerScope?.trim();
+  if (
+    !providerScope ||
+    !pullRequest.repositoryId.trim() ||
+    pullRequest.number <= 0 ||
+    !pullRequest.id.trim()
+  ) {
+    throw new Error(t("pullRequestIdentityUnavailable"));
+  }
+  return {
+    review_key: pullRequest.key,
+    provider_scope: providerScope,
+    repository_id: pullRequest.repositoryId,
+    number: pullRequest.number,
+    pull_request_id: pullRequest.id,
+  };
 }
 
 export function taskFromLaunchResult(

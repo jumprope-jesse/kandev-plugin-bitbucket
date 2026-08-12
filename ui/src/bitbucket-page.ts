@@ -6,6 +6,7 @@ import {
   normalizeRepositories,
   parsePullRequestListQuery,
   pullRequestListRequest,
+  pullRequestLookupBody,
   pullRequestScopeQuery,
   taskDialogInitialValues,
   taskFromLaunchResult,
@@ -220,10 +221,7 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
           {
             workspaceId: activeWorkspaceId,
             taskId,
-            body: {
-              review_key: launch.pullRequest.key,
-              pull_request_id: launch.pullRequest.id,
-            },
+            body: pullRequestLookupBody(launch.pullRequest, t),
           },
           { signal: request.signal },
         );
@@ -263,7 +261,12 @@ export function BitbucketPage({ host }: { host: PluginHost }) {
         action.tasksLaunch,
         {
           workspaceId: activeWorkspaceId,
-          body: taskLaunchBody(launch.pullRequest, payload, launch.launchId),
+          body: taskLaunchBody(
+            launch.pullRequest,
+            payload,
+            launch.launchId,
+            t,
+          ),
         },
         { signal: request.signal },
       );

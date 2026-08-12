@@ -33,7 +33,8 @@ type PullRequest struct {
 	Capabilities      Capabilities
 }
 
-// Key returns the stable external identity used for links and watch deduplication.
+// Key returns the human-readable provider reference. Durable ownership and
+// deduplication must use PullRequestIdentity because namespace/slug is mutable.
 func (p PullRequest) Key() string {
 	return fmt.Sprintf("%s/%s#%d", p.Repository.Namespace, p.Repository.Slug, p.Number)
 }

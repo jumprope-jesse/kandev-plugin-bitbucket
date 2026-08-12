@@ -35,7 +35,6 @@ import {
   validateCloudWorkspace,
   validateConnectionIdentity,
   validateOAuthRegistration,
-  workspacePullRequestAction,
   workspaceReviewAction,
 } from "../src/view-models";
 import { describe, expect, it } from "vitest";
@@ -852,26 +851,6 @@ describe("Bitbucket view models", () => {
     ).toBe(true);
   });
 
-  it("uses workspace scope for remote pull-request actions without a provider-local repository ID", () => {
-    const input = workspacePullRequestAction(
-      "workspace-1",
-      "acme/widgets#42",
-      "42",
-      "merge",
-    );
-
-    expect(input).toEqual({
-      workspaceId: "workspace-1",
-      body: {
-        review_key: "acme/widgets#42",
-        pull_request_id: "42",
-        operation: "merge",
-      },
-    });
-    expect(input).not.toHaveProperty("repositoryId");
-    expect(input.body).not.toHaveProperty("repository_id");
-  });
-
   it("builds bounded approve, comment, and reply review mutations", () => {
     const identity = {
       reviewKey: "acme/widgets#42",
@@ -1016,7 +995,8 @@ describe("Bitbucket view models", () => {
           id: 42,
           review_key: "acme/widgets#42",
           title: "Improve mobile review",
-          repository_id: "acme/widgets",
+          provider_scope: "https://bitbucket.org",
+          repository_id: "repository-uuid",
           repository_name: "widgets",
         },
       ],
@@ -1050,6 +1030,10 @@ describe("Bitbucket view models", () => {
       ),
     ).toEqual({
       review_key: "acme/widgets#42",
+      provider_scope: "https://bitbucket.org",
+      repository_id: "repository-uuid",
+      number: 42,
+      pull_request_id: "42",
       launch_id: "launch-123",
       task: {
         title: "Review: Improve mobile review",
@@ -1062,6 +1046,24 @@ describe("Bitbucket view models", () => {
         plan_mode: true,
       },
     });
+  });
+
+  it("fails closed when task launch lacks immutable pull-request identity", () => {
+    const pullRequest = normalizePullRequests({
+      pull_requests: [
+        {
+          id: 42,
+          review_key: "acme/widgets#42",
+          title: "Stale pull request",
+          repository_id: "repository-uuid",
+          repository_name: "widgets",
+        },
+      ],
+    })[0]!;
+
+    expect(() => taskLaunchBody(pullRequest, {}, "launch-123")).toThrow(
+      "identity is unavailable",
+    );
   });
 
   it("keeps persisted host repositories on the native REST task transport", () => {

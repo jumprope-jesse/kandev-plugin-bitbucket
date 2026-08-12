@@ -3,6 +3,7 @@ package cloud
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,10 +18,20 @@ import (
 )
 
 const (
-	defaultMaxResponseBytes  int64 = 1 << 20
-	maxPageLength                  = 100
-	maxPullRequestPageLength       = 50
+	defaultMaxResponseBytes      int64 = 1 << 20
+	maxPageLength                      = 100
+	maxPullRequestPageLength           = 50
+	cloudRepositoryCursorVersion       = 1
 )
+
+type cloudRepositoryCursor struct {
+	Version   int    `json:"version"`
+	Scope     string `json:"scope"`
+	Workspace string `json:"workspace"`
+	Query     string `json:"query"`
+	Limit     int    `json:"limit"`
+	NextURL   string `json:"next_url"`
+}
 
 // TokenSource provides an OAuth access token or API token without exposing persistence.
 type TokenSource interface {
@@ -143,23 +154,29 @@ func (c *Client) ListRepositories(ctx context.Context, workspace string, limit i
 }
 
 // ListRepositoriesPage performs one server-filtered page request. Cursor is
-// opaque to callers and revalidated against the configured API origin/path.
+// opaque to callers and bound to the configured API scope, workspace, query,
+// and page size before its provider URL is followed.
 func (c *Client) ListRepositoriesPage(ctx context.Context, workspace string, query domain.RepositoryQuery) (domain.RepositoryPage, error) {
 	if !isPathSegment(workspace) || query.Limit <= 0 {
 		return domain.RepositoryPage{}, fmt.Errorf("workspace and positive repository limit are required")
 	}
+	search := strings.TrimSpace(query.Text)
 	endpoint := *c.apiBase
 	endpoint.Path = path.Join(endpoint.Path, "repositories", workspace)
 	endpoint.RawPath = ""
 	if query.Cursor == "" {
 		values := endpoint.Query()
 		values.Set("pagelen", fmt.Sprintf("%d", min(query.Limit, maxPageLength)))
-		if search := strings.TrimSpace(query.Text); search != "" {
+		if search != "" {
 			values.Set("q", `name ~ "`+escapeQueryLiteral(search)+`"`)
 		}
 		endpoint.RawQuery = values.Encode()
 	} else {
-		parsed, err := c.nextURL(&endpoint, query.Cursor)
+		nextURL, err := c.parseRepositoryCursor(query.Cursor, workspace, search, min(query.Limit, maxPageLength))
+		if err != nil {
+			return domain.RepositoryPage{}, err
+		}
+		parsed, err := c.nextURL(&endpoint, nextURL)
 		if err != nil || parsed == nil || parsed.Path != endpoint.Path {
 			return domain.RepositoryPage{}, fmt.Errorf("invalid Bitbucket Cloud repository cursor")
 		}
@@ -186,9 +203,35 @@ func (c *Client) ListRepositoriesPage(ctx context.Context, workspace string, que
 	}
 	nextCursor := ""
 	if next != nil {
-		nextCursor = next.String()
+		nextCursor = c.encodeRepositoryCursor(workspace, search, min(query.Limit, maxPageLength), next.String())
 	}
 	return domain.RepositoryPage{Repositories: repositories, NextCursor: nextCursor}, nil
+}
+
+func (c *Client) encodeRepositoryCursor(workspace, query string, limit int, nextURL string) string {
+	payload, _ := json.Marshal(cloudRepositoryCursor{
+		Version: cloudRepositoryCursorVersion, Scope: c.apiBase.String(),
+		Workspace: workspace, Query: query, Limit: limit, NextURL: nextURL,
+	})
+	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
+func (c *Client) parseRepositoryCursor(raw, workspace, query string, limit int) (string, error) {
+	if len(raw) > 8192 {
+		return "", fmt.Errorf("invalid Bitbucket Cloud repository cursor")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid Bitbucket Cloud repository cursor")
+	}
+	var cursor cloudRepositoryCursor
+	if err := json.Unmarshal(payload, &cursor); err != nil ||
+		cursor.Version != cloudRepositoryCursorVersion ||
+		cursor.Scope != c.apiBase.String() || cursor.Workspace != workspace ||
+		cursor.Query != query || cursor.Limit != limit || cursor.NextURL == "" {
+		return "", fmt.Errorf("invalid Bitbucket Cloud repository cursor")
+	}
+	return cursor.NextURL, nil
 }
 
 // SearchRepositories delegates filtering to Bitbucket before following its

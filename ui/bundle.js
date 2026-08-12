@@ -131,6 +131,7 @@ var english = {
   unknown: "Unknown",
   bitbucketTask: "Bitbucket task",
   taskLaunchUnavailable: "Bitbucket task launch is unavailable.",
+  pullRequestIdentityUnavailable: "Bitbucket pull request identity is unavailable. Refresh and try again.",
   taskLaunchMissingId: "Bitbucket task launch returned no task id.",
   enterOauthClientId: "Enter OAuth client ID.",
   enterOauthClientSecret: "Enter OAuth client secret.",
@@ -984,7 +985,7 @@ function taskDialogInitialValues(pullRequest, preset, hostRepositoryId, remoteRe
 function usePluginTaskCreation(hostRepositoryId) {
   return !hostRepositoryId?.trim();
 }
-function taskLaunchBody(pullRequest, payload, launchId) {
+function taskLaunchBody(pullRequest, payload, launchId, t = translateEnglish) {
   const task = {
     title: string(payload.title) ?? "",
     description: string(payload.description) ?? "",
@@ -998,7 +999,24 @@ function taskLaunchBody(pullRequest, payload, launchId) {
   if (workflowStepID) task.workflow_step_id = workflowStepID;
   if (agentProfileID) task.agent_profile_id = agentProfileID;
   if (executorProfileID) task.executor_profile_id = executorProfileID;
-  return { review_key: pullRequest.key, launch_id: launchId, task };
+  return {
+    ...pullRequestLookupBody(pullRequest, t),
+    launch_id: launchId,
+    task
+  };
+}
+function pullRequestLookupBody(pullRequest, t = translateEnglish) {
+  const providerScope = pullRequest.providerScope?.trim();
+  if (!providerScope || !pullRequest.repositoryId.trim() || pullRequest.number <= 0 || !pullRequest.id.trim()) {
+    throw new Error(t("pullRequestIdentityUnavailable"));
+  }
+  return {
+    review_key: pullRequest.key,
+    provider_scope: providerScope,
+    repository_id: pullRequest.repositoryId,
+    number: pullRequest.number,
+    pull_request_id: pullRequest.id
+  };
 }
 function taskFromLaunchResult(value, t = translateEnglish) {
   const result = record(value);
@@ -2788,10 +2806,7 @@ function BitbucketPage({ host }) {
           {
             workspaceId: activeWorkspaceId,
             taskId,
-            body: {
-              review_key: launch.pullRequest.key,
-              pull_request_id: launch.pullRequest.id
-            }
+            body: pullRequestLookupBody(launch.pullRequest, t)
           },
           { signal: request.signal }
         );
@@ -2824,7 +2839,12 @@ function BitbucketPage({ host }) {
         action.tasksLaunch,
         {
           workspaceId: activeWorkspaceId,
-          body: taskLaunchBody(launch.pullRequest, payload, launch.launchId)
+          body: taskLaunchBody(
+            launch.pullRequest,
+            payload,
+            launch.launchId,
+            t
+          )
         },
         { signal: request.signal }
       );
@@ -2969,6 +2989,7 @@ function BitbucketPage({ host }) {
 }
 
 // ui/src/task-review-status.ts
+var STATUS_HYDRATION_CONCURRENCY = 4;
 async function loadTaskPullRequestDetails(invokeAction, context, signal, t = translateEnglish) {
   const scope = {
     ...context.workspaceId ? { workspaceId: context.workspaceId } : {},
@@ -2980,8 +3001,11 @@ async function loadTaskPullRequestDetails(invokeAction, context, signal, t = tra
     { signal }
   );
   const linked = normalizePullRequests(linkedResponse, t);
-  return Promise.all(
-    linked.map(async (pullRequest) => {
+  return mapWithConcurrency(
+    linked,
+    STATUS_HYDRATION_CONCURRENCY,
+    signal,
+    async (pullRequest) => {
       const detailResponse = await invokeAction(
         "pullrequests.get",
         {
@@ -2998,8 +3022,40 @@ async function loadTaskPullRequestDetails(invokeAction, context, signal, t = tra
         { signal }
       );
       return normalizeReviewDetail(detailResponse, t) ?? pullRequest;
-    })
+    }
   );
+}
+async function mapWithConcurrency(values, concurrency, signal, map) {
+  const results = new Array(values.length);
+  let nextIndex = 0;
+  let failed = false;
+  let failure;
+  const worker = async () => {
+    while (!failed) {
+      if (signal.aborted) {
+        failed = true;
+        failure = signal.reason ?? new DOMException("Operation aborted", "AbortError");
+        return;
+      }
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= values.length) return;
+      try {
+        results[index] = await map(values[index]);
+      } catch (reason) {
+        failed = true;
+        failure = reason;
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(Math.max(1, concurrency), values.length) },
+      () => worker()
+    )
+  );
+  if (failed) throw failure;
+  return results;
 }
 function normalizePipelineState(value) {
   const state = value.trim().toUpperCase();

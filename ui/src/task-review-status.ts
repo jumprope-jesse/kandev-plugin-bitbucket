@@ -19,6 +19,8 @@ type InvokeAction = <T>(
   options?: { signal?: AbortSignal },
 ) => Promise<T>;
 
+const STATUS_HYDRATION_CONCURRENCY = 4;
+
 export type PullRequestWithStatus = PullRequest & {
   statuses?: BuildStatus[];
   participants?: ReviewDetail["participants"];
@@ -76,8 +78,11 @@ export async function loadTaskPullRequestDetails(
     { signal },
   );
   const linked = normalizePullRequests(linkedResponse, t);
-  return Promise.all(
-    linked.map(async (pullRequest) => {
+  return mapWithConcurrency(
+    linked,
+    STATUS_HYDRATION_CONCURRENCY,
+    signal,
+    async (pullRequest) => {
       const detailResponse = await invokeAction<unknown>(
         "pullrequests.get",
         {
@@ -96,8 +101,46 @@ export async function loadTaskPullRequestDetails(
         { signal },
       );
       return normalizeReviewDetail(detailResponse, t) ?? pullRequest;
-    }),
+    },
   );
+}
+
+async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  signal: AbortSignal,
+  map: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  let failed = false;
+  let failure: unknown;
+  const worker = async () => {
+    while (!failed) {
+      if (signal.aborted) {
+        failed = true;
+        failure = signal.reason ?? new DOMException("Operation aborted", "AbortError");
+        return;
+      }
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= values.length) return;
+      try {
+        results[index] = await map(values[index]!);
+      } catch (reason) {
+        failed = true;
+        failure = reason;
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(Math.max(1, concurrency), values.length) },
+      () => worker(),
+    ),
+  );
+  if (failed) throw failure;
+  return results;
 }
 
 function normalizePipelineState(

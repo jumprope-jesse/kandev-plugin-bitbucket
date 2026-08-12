@@ -74,6 +74,55 @@ describe("Bitbucket task review status", () => {
     expect(details[0]?.unresolvedThreadCount).toBeUndefined();
   });
 
+  it("bounds concurrent status hydration while preserving linked order", async () => {
+    let active = 0;
+    let maximum = 0;
+    const releases: Array<() => void> = [];
+    const linked = Array.from({ length: 9 }, (_, index) => ({
+      id: String(index + 1),
+      review_key: `acme/widgets#${index + 1}`,
+      number: index + 1,
+      title: `Pull request ${index + 1}`,
+      url: `https://bitbucket.org/acme/widgets/pull-requests/${index + 1}`,
+      provider_scope: "https://bitbucket.org",
+      repository_id: "repository-uuid",
+      repository_name: "widgets",
+      state: "OPEN",
+    }));
+    const invokeMock = vi.fn(async (_key: string, input?: { body?: unknown }) => {
+      const body = input?.body as { view?: string; number?: number } | undefined;
+      if (body?.view === "task") return { pull_requests: linked };
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      active -= 1;
+      const match = linked[(body?.number ?? 1) - 1];
+      return match;
+    });
+    const invoke = invokeMock as unknown as Parameters<
+      typeof loadTaskPullRequestDetails
+    >[0];
+
+    const pending = loadTaskPullRequestDetails(
+      invoke,
+      { taskId: "task-1", workspaceId: "workspace-1" },
+      new AbortController().signal,
+    );
+    await vi.waitFor(() => expect(releases).toHaveLength(4));
+    expect(maximum).toBe(4);
+    releases.splice(0).forEach((release) => release());
+    await vi.waitFor(() => expect(releases).toHaveLength(4));
+    releases.splice(0).forEach((release) => release());
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    releases.splice(0).forEach((release) => release());
+
+    const details = await pending;
+    expect(details.map((detail) => detail.number)).toEqual(
+      linked.map((detail) => detail.number),
+    );
+    expect(maximum).toBe(4);
+  });
+
   it("maps provider state and builds to the host-native status contract", () => {
     expect(
       changeRequestStatusView({

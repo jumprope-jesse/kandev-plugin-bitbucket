@@ -3,7 +3,6 @@ package plugin
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/url"
 
 	"github.com/kandev/kandev/pkg/pluginsdk"
@@ -15,7 +14,7 @@ func (w *Workflows) handleConnectionAction(ctx context.Context, request *plugins
 		if connections, ok := w.resolver.(ConnectionSettingsStore); ok {
 			settings, found, loadErr := connections.Load(ctx, request.Context.WorkspaceID)
 			if loadErr != nil {
-				return nil, fmt.Errorf("load Bitbucket connection: %w", loadErr)
+				return nil, unavailableActionError("load Bitbucket connection: %v", loadErr)
 			}
 			if !found {
 				return actionResponse(map[string]any{"state": "unconfigured", "healthy": false})
@@ -44,10 +43,10 @@ func (w *Workflows) handleConnectionAction(ctx context.Context, request *plugins
 			Disconnect(context.Context, string) error
 		})
 		if !ok {
-			return nil, fmt.Errorf("Bitbucket connection updates are unavailable")
+			return nil, unavailableActionError("Bitbucket connection updates are unavailable")
 		}
 		if err := connections.Disconnect(ctx, request.Context.WorkspaceID); err != nil {
-			return nil, err
+			return nil, unavailableActionError("disconnect Bitbucket connection: %v", err)
 		}
 		return actionResponse(map[string]any{"state": "unconfigured", "healthy": false})
 	case "connection.save":
@@ -57,14 +56,14 @@ func (w *Workflows) handleConnectionAction(ctx context.Context, request *plugins
 		}
 		connections, ok := w.resolver.(ConnectionSettingsStore)
 		if !ok {
-			return nil, fmt.Errorf("Bitbucket connection updates are unavailable")
+			return nil, unavailableActionError("Bitbucket connection updates are unavailable")
 		}
 		settings, err := connections.Save(ctx, request.Context.WorkspaceID, input.ConnectionInput)
 		if err != nil {
 			if errors.Is(err, ErrInvalidConnectionInput) {
 				return nil, pluginsdk.CategorizeActionError(pluginsdk.ActionErrorInvalidArgument, err)
 			}
-			return nil, fmt.Errorf("save Bitbucket connection: %w", err)
+			return nil, unavailableActionError("save Bitbucket connection: %v", err)
 		}
 		if !input.Probe {
 			return actionResponse(connectionResponse(settings, false, nil))
@@ -80,7 +79,7 @@ func (w *Workflows) handleConnectionAction(ctx context.Context, request *plugins
 			StartOAuth(context.Context, string) (*url.URL, error)
 		})
 		if !ok {
-			return nil, fmt.Errorf("Bitbucket OAuth is not configured")
+			return nil, conflictActionError("Bitbucket OAuth is not configured")
 		}
 		authorizationURL, err := coordinator.StartOAuth(ctx, request.Context.WorkspaceID)
 		if err != nil {
@@ -88,6 +87,6 @@ func (w *Workflows) handleConnectionAction(ctx context.Context, request *plugins
 		}
 		return actionResponse(map[string]any{"url": authorizationURL.String()})
 	default:
-		return nil, fmt.Errorf("unsupported Bitbucket action %q", request.ActionKey)
+		return nil, notFoundActionError("unsupported Bitbucket action %q", request.ActionKey)
 	}
 }

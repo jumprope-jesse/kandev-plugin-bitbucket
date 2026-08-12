@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"kandev-plugin-bitbucket/internal/domain"
 )
 
 func TestListRepositoriesFollowsCloudCursorAndRespectsLimit(t *testing.T) {
@@ -65,6 +66,32 @@ func TestSearchRepositoriesSendsCloudServerSideFilter(t *testing.T) {
 
 	_, err = client.SearchRepositories(context.Background(), "acme", `widget" api`, 3)
 	require.NoError(t, err)
+}
+
+func TestRepositoryCursorIsBoundToCloudWorkspaceAndQuery(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("after") == "" {
+			_, _ = w.Write([]byte(`{"values":[],"next":"` + server.URL + `/2.0/repositories/acme?after=next&q=name+~+%22widgets%22"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"values":[]}`))
+	}))
+	defer server.Close()
+
+	apiBase, err := url.Parse(server.URL + "/2.0")
+	require.NoError(t, err)
+	client := NewClient(ClientOptions{APIBase: apiBase, TokenSource: staticTokenSource("cloud-token")})
+	page, err := client.ListRepositoriesPage(context.Background(), "acme", domain.RepositoryQuery{Text: "widgets", Limit: 10})
+	require.NoError(t, err)
+	require.NotEmpty(t, page.NextCursor)
+
+	_, err = client.ListRepositoriesPage(context.Background(), "other", domain.RepositoryQuery{Text: "widgets", Limit: 10, Cursor: page.NextCursor})
+	require.ErrorContains(t, err, "invalid Bitbucket Cloud repository cursor")
+	_, err = client.ListRepositoriesPage(context.Background(), "acme", domain.RepositoryQuery{Text: "dashboard", Limit: 10, Cursor: page.NextCursor})
+	require.ErrorContains(t, err, "invalid Bitbucket Cloud repository cursor")
+	_, err = client.ListRepositoriesPage(context.Background(), "acme", domain.RepositoryQuery{Text: "widgets", Limit: 25, Cursor: page.NextCursor})
+	require.ErrorContains(t, err, "invalid Bitbucket Cloud repository cursor")
 }
 
 func TestListRepositoriesRetriesRateLimitsWithBoundedBackoff(t *testing.T) {

@@ -96,7 +96,7 @@ func (w *Workflows) pullRequestAssociations(
 	visibleReviewKeys *[]string,
 ) ([]map[string]any, error) {
 	if workspaceID == "" {
-		return nil, fmt.Errorf("verified workspace context is required")
+		return nil, forbiddenActionError("verified workspace context is required")
 	}
 	watchAssociations, err := w.watchOwnedAssociations(ctx, workspaceID)
 	if err != nil {

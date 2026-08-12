@@ -75,6 +75,35 @@ func TestSearchRepositoriesSendsDataCenterNameFilter(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestRepositoryCursorIsBoundToDataCenterScopeAndQuery(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"isLastPage":false,"nextPageStart":25,"values":[]}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{
+		ConnectionOptions: ConnectionOptions{BaseURL: server.URL + "/bitbucket", AllowInsecureHTTP: true},
+		HTTPClient:        server.Client(), TokenSource: staticTokenSource("dc-token"),
+	})
+	require.NoError(t, err)
+	page, err := client.ListRepositoriesPage(context.Background(), "", domain.RepositoryQuery{Text: "widgets", Limit: 25})
+	require.NoError(t, err)
+	require.NotEmpty(t, page.NextCursor)
+
+	_, err = client.ListRepositoriesPage(context.Background(), "", domain.RepositoryQuery{Text: "dashboard", Limit: 25, Cursor: page.NextCursor})
+	require.ErrorContains(t, err, "invalid Data Center repository cursor")
+	_, err = client.ListRepositoriesPage(context.Background(), "", domain.RepositoryQuery{Text: "widgets", Limit: 50, Cursor: page.NextCursor})
+	require.ErrorContains(t, err, "invalid Data Center repository cursor")
+
+	other, err := NewClient(ClientOptions{
+		ConnectionOptions: ConnectionOptions{BaseURL: server.URL + "/other", AllowInsecureHTTP: true},
+		HTTPClient:        server.Client(), TokenSource: staticTokenSource("dc-token"),
+	})
+	require.NoError(t, err)
+	_, err = other.ListRepositoriesPage(context.Background(), "", domain.RepositoryQuery{Text: "widgets", Limit: 25, Cursor: page.NextCursor})
+	require.ErrorContains(t, err, "invalid Data Center repository cursor")
+}
+
 func TestListRepositoriesRetriesTransientDataCenterFailures(t *testing.T) {
 	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
