@@ -25,8 +25,13 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           repository: kdlbs/kandev
+          # Pre-release contract pin. Replace this with the released host tag
+          # through manifest.min_kandev_version before publishing the plugin.
+          ref: f218880ecbaa3d019d65b5d84fca6bdf160eced6
           path: kandev
-          sparse-checkout: apps/backend
+          sparse-checkout: |
+            apps/backend
+            apps/packages/plugin-sdk
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
@@ -34,10 +39,21 @@ jobs:
           go-version-file: plugin/go.mod
           cache-dependency-path: plugin/go.sum
 
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: plugin/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: plugin
+        run: npm ci
+
       - name: Build host binary
         working-directory: plugin
         run: make build
 
       - name: Package all supported platforms
         working-directory: plugin
-        run: make package
+        run: make package verify-package

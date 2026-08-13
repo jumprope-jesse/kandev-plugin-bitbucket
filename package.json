@@ -1,0 +1,22 @@
+{
+  "name": "kandev-plugin-bitbucket",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:ui": "npm run typecheck && esbuild ui/src/bundle.ts --bundle --format=esm --target=es2022 --external:react --external:react-dom --outfile=ui/bundle.js",
+    "lint": "npm run typecheck",
+    "typecheck": "tsc --project ui/tsconfig.json --noEmit",
+    "test": "npm run build:ui && vitest run",
+    "e2e": "playwright test",
+    "e2e:contract": "playwright test --config playwright.config.ts",
+    "e2e:live": "playwright test --config playwright.live.config.ts"
+  },
+  "devDependencies": {
+    "@kandev/plugin-sdk": "file:../kandev/apps/packages/plugin-sdk",
+    "@types/node": "24.3.0",
+    "@playwright/test": "1.55.0",
+    "esbuild": "0.28.1",
+    "typescript": "5.9.2",
+    "vitest": "3.2.4"
+  }
+}

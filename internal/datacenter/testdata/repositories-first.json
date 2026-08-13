@@ -1,0 +1,15 @@
+{
+  "size": 1,
+  "limit": 2,
+  "isLastPage": false,
+  "nextPageStart": 1,
+  "values": [
+    {
+      "id": 42,
+      "slug": "widgets",
+      "defaultBranch": "main",
+      "project": {"key": "ENG"},
+      "links": {"clone": [{"name": "http", "href": "http://dc.example.test/bitbucket/scm/ENG/widgets.git"}, {"name": "https", "href": "https://dc.example.test/bitbucket/scm/ENG/widgets.git"}]}
+    }
+  ]
+}

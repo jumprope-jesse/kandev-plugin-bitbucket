@@ -1,0 +1,12 @@
+{
+  "values": [
+    {
+      "status": "modified",
+      "lines_added": 1,
+      "lines_removed": 1,
+      "old": {"path": "race.go"},
+      "new": {"path": "race.go"}
+    }
+  ],
+  "next": "/2.0/repositories/acme/widgets/pullrequests/42/diffstat?page=2"
+}

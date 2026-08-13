@@ -1,0 +1,7 @@
+diff --git a/race.go b/race.go
+index 1111111..2222222 100644
+--- a/race.go
++++ b/race.go
+@@ -1 +1 @@
+-unsafe()
++safe()

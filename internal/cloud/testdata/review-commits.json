@@ -1,0 +1,6 @@
+{
+  "values": [
+    {"hash": "source-hash", "message": "Fix race", "author": {"raw": "Ada <ada@example.test>"}, "date": "2026-07-31T12:00:00Z"}
+  ],
+  "next": "/2.0/repositories/acme/widgets/pullrequests/42/commits?page=2"
+}

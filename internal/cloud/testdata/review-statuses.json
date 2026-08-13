@@ -1,0 +1,6 @@
+{
+  "values": [
+    {"key": "build-7", "name": "CI", "state": "SUCCESSFUL", "url": "https://ci.example.test/build/7"}
+  ],
+  "next": "/2.0/repositories/acme/widgets/commit/source-hash/statuses?page=2"
+}

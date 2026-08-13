@@ -1,0 +1,14 @@
+{
+  "isLastPage": true,
+  "values": [
+    {
+      "id":42,
+      "title":"Fix race",
+      "description":"Safe now",
+      "state":"OPEN",
+      "links":{"self":[{"href":"https://dc.example.test/bitbucket/projects/ENG/repos/widgets/pull-requests/42"}]},
+      "fromRef":{"displayId":"feature/race","latestCommit":"source-hash","repository":{"id":84,"slug":"fork-widgets","project":{"key":"FORK"}}},
+      "toRef":{"displayId":"main","latestCommit":"dest-hash","repository":{"defaultBranch":"main"}}
+    }
+  ]
+}

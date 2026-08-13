@@ -111,7 +111,7 @@ jobs:
           set -euo pipefail
           sed -i -E "s/^version: \"[0-9]+\.[0-9]+\.[0-9]+\"$/version: \"$VERSION\"/" manifest.yaml
           sed -i -E "s/^VERSION := [0-9]+\.[0-9]+\.[0-9]+$/VERSION := $VERSION/" Makefile
-          sed -i -E "s/kandev-plugin-template-[0-9]+\.[0-9]+\.[0-9]+\.tar\.gz/kandev-plugin-template-$VERSION.tar.gz/" README.md
+          sed -i -E "s/kandev-plugin-bitbucket-[0-9]+\.[0-9]+\.[0-9]+\.tar\.gz/kandev-plugin-bitbucket-$VERSION.tar.gz/" README.md
 
           RANGE="${PREVIOUS_TAG:+$PREVIOUS_TAG..}HEAD"
           CHANGES="$(git log --no-merges --format='- %s (%h)' "$RANGE")"
@@ -160,12 +160,27 @@ jobs:
           path: plugin
           ref: ${{ github.event_name == 'push' && github.ref || needs.prepare.outputs.tag }}
 
+      - name: Verify release version and minimum host
+        id: manifest
+        working-directory: plugin
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || needs.prepare.outputs.tag }}
+        run: |
+          version="$(sed -nE 's/^version: "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' manifest.yaml)"
+          min_kandev_version="$(sed -nE 's/^min_kandev_version: "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' manifest.yaml)"
+          test "$RELEASE_TAG" = "v$version"
+          test -n "$min_kandev_version" || { echo "min_kandev_version must name the released compatible host"; exit 1; }
+          echo "min_kandev_version=$min_kandev_version" >> "$GITHUB_OUTPUT"
+
       - name: Checkout kandev SDK
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           repository: kdlbs/kandev
+          ref: v${{ steps.manifest.outputs.min_kandev_version }}
           path: kandev
-          sparse-checkout: apps/backend
+          sparse-checkout: |
+            apps/backend
+            apps/packages/plugin-sdk
 
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
@@ -173,26 +188,45 @@ jobs:
           go-version-file: plugin/go.mod
           cache-dependency-path: plugin/go.sum
 
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: plugin/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: plugin
+        run: npm ci
+
       - name: Verify
         working-directory: plugin
         run: |
-          test -z "$(gofmt -l ./server)" || { echo "gofmt needed:"; gofmt -l ./server; exit 1; }
-          go vet ./server/...
+          test -z "$(gofmt -l .)" || { echo "gofmt needed:"; gofmt -l .; exit 1; }
+          make vet
           make test
 
-      - name: Package all platforms
+      - name: Exercise the packaged plugin in Kandev
         working-directory: plugin
-        run: make package
+        env:
+          KANDEV_PLUGIN_E2E_URL: ${{ secrets.KANDEV_PLUGIN_E2E_URL }}
+        run: make e2e
+
+      - name: Package (all platforms)
+        working-directory: plugin
+        run: make package verify-package
 
       - name: Extract checksums
         working-directory: plugin
-        run: tar -xzf kandev-plugin-template-*.tar.gz checksums.txt
+        run: |
+          pkg="$(ls kandev-plugin-bitbucket-*.tar.gz)"
+          tar -xzf "$pkg" checksums.txt
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ github.event_name == 'push' && github.ref_name || needs.prepare.outputs.tag }}
           files: |
-            plugin/kandev-plugin-template-*.tar.gz
+            plugin/kandev-plugin-bitbucket-*.tar.gz
             plugin/checksums.txt
           generate_release_notes: true
