@@ -33,14 +33,12 @@ installation and capabilities are API permission gates, not a sandbox.
 
 ## Requirements
 
-- A Kandev host that includes the declared-action, provider-registration,
-  reference-authorization, credential-broker, and live `api_write` contracts.
-  This plugin intentionally does **not** set `min_kandev_version` until that
-  compatible Kandev release has merged and shipped.
+- Kandev 0.88.0 or newer. This is the first release line that contains the
+  declared-action, provider-registration, reference-authorization,
+  credential-broker, and live `api_write` contracts required by this plugin.
 - Go version from `go.mod` and Node 24 for the UI toolchain.
-- A sibling Kandev checkout while developing, because the pre-release Go and
-  frontend SDKs are resolved from that exact host source until their first
-  compatible versions are published:
+- A sibling Kandev checkout while developing, because the Go and frontend SDKs
+  are resolved from that exact host source:
 
   ```text
   parent-directory/
@@ -162,10 +160,11 @@ will report it as unsigned. Plugin signing is deferred until Kandev has a
 host-wide verifier, trust policy, and key lifecycle; it is not a Bitbucket-only
 release gate.
 
-Do not tag, publish a GitHub Release, add a marketplace registry entry, or set
-`min_kandev_version` yet. Those are external compatibility steps that must wait
-for the compatible Kandev host change to merge and release. This repository
-does not infer that version.
+The first public plugin release is planned as v0.2.0 through the release
+workflow's **minor** bump and requires the released Kandev v0.88.0 tag. The
+workflow validates against that exact host tag before publishing. Add the
+official marketplace registry entry only after the GitHub Release exposes the
+required `kandev-plugin-bitbucket-<version>.tar.gz` asset.
 
 ## License
 

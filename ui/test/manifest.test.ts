@@ -16,6 +16,7 @@ describe("Bitbucket manifest", () => {
     expect(manifest).not.toContain('key: "pullrequests.update"');
     expect(manifest).toContain('repository_providers: ["bitbucket"]');
     expect(manifest).toContain('source: "bitbucket"');
+    expect(manifest).toContain('min_kandev_version: "0.88.0"');
   });
 
   it("materializes both pre-release Kandev SDKs in every packaging workflow", async () => {
