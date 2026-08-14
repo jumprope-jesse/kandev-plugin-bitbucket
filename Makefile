@@ -2,7 +2,7 @@
 
 # Keep these values synchronized with manifest.yaml.
 BIN := bin/kandev-plugin-bitbucket
-VERSION := 0.1.12
+VERSION := 0.2.0
 STAGE := .build/stage
 PKG_OUT := kandev-plugin-bitbucket-$(VERSION).tar.gz
 KANDEV_BACKEND := ../kandev/apps/backend
