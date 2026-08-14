@@ -25,9 +25,9 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           repository: kdlbs/kandev
-          # Pre-release contract pin. Replace this with the released host tag
-          # through manifest.min_kandev_version before publishing the plugin.
-          ref: f218880ecbaa3d019d65b5d84fca6bdf160eced6
+          # Keep this aligned with manifest.min_kandev_version so PR builds
+          # prove compatibility against the oldest supported Kandev release.
+          ref: v0.88.0
           path: kandev
           sparse-checkout: |
             apps/backend
