@@ -135,6 +135,15 @@ jobs:
         working-directory: plugin
         run: make package-host verify-package-host
 
+      - name: Resolve plugin package path
+        id: package
+        working-directory: plugin
+        run: |
+          version="$(sed -nE 's/^version: "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' manifest.yaml)"
+          package="$PWD/kandev-plugin-bitbucket-$version.tar.gz"
+          test -n "$version" && test -f "$package"
+          echo "path=$package" >> "$GITHUB_OUTPUT"
+
       - name: Build disposable Kandev test host
         working-directory: kandev
         run: |
@@ -148,7 +157,7 @@ jobs:
       - name: Exercise exact plugin package on desktop and mobile surfaces
         working-directory: kandev/apps/web
         env:
-          KANDEV_BITBUCKET_PLUGIN_PACKAGE: ${{ github.workspace }}/plugin/kandev-plugin-bitbucket-0.1.12.tar.gz
+          KANDEV_BITBUCKET_PLUGIN_PACKAGE: ${{ steps.package.outputs.path }}
         run: >-
           pnpm e2e:raw --project=chromium
           tests/plugins/bitbucket-packaged-plugin.spec.ts

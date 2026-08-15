@@ -68,4 +68,18 @@ describe("Bitbucket manifest", () => {
     expect(workflow).toContain("KANDEV_BITBUCKET_PLUGIN_PACKAGE:");
     expect(workflow).toMatch(/Exercise optional external Kandev host[\s\S]*if:/);
   });
+
+  it("resolves the pull-request package from release metadata", async () => {
+    const workflow = await readFile(
+      new URL("../../.github/workflows/ci.yml", import.meta.url),
+      "utf8",
+    );
+
+    expect(workflow).toContain("id: package");
+    expect(workflow).toContain("manifest.yaml");
+    expect(workflow).toContain(
+      "KANDEV_BITBUCKET_PLUGIN_PACKAGE: ${{ steps.package.outputs.path }}",
+    );
+    expect(workflow).not.toMatch(/kandev-plugin-bitbucket-\d+\.\d+\.\d+\.tar\.gz/);
+  });
 });
