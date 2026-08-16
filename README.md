@@ -160,11 +160,11 @@ will report it as unsigned. Plugin signing is deferred until Kandev has a
 host-wide verifier, trust policy, and key lifecycle; it is not a Bitbucket-only
 release gate.
 
-The first public plugin release is planned as v0.2.0 through the release
-workflow's **minor** bump and requires the released Kandev v0.88.0 tag. The
-workflow validates against that exact host tag before publishing. Add the
-official marketplace registry entry only after the GitHub Release exposes the
-required `kandev-plugin-bitbucket-<version>.tar.gz` asset.
+Version v0.2.0 is the first public plugin release and requires Kandev v0.88.0
+or newer. The release workflow validates against that exact minimum host tag
+before publishing. The plugin is listed in Kandev's official marketplace, which
+resolves the latest GitHub Release containing the required
+`kandev-plugin-bitbucket-<version>.tar.gz` asset.
 
 ## License
 
