@@ -75,6 +75,7 @@ package-host: build-ui
 ## installer performs the same checksum check; this gate also proves every
 ## executable the selected package form promises is actually present.
 define verify_package_archive
+set -eu; \
 VERIFY_DIR="$$(mktemp -d)"; \
 trap 'rm -rf "$$VERIFY_DIR"' EXIT; \
 test -f "$(PKG_OUT)" || { echo "package not found: $(PKG_OUT)"; exit 1; }; \
@@ -87,7 +88,11 @@ test -f "$$VERIFY_DIR/ui/bundle.js"; \
 test -f "$$VERIFY_DIR/ui/plugin.css"; \
 test -f "$$VERIFY_DIR/checksums.txt"; \
 grep -Eq '^[0-9a-f]{64}  assets/icon\.svg$$' "$$VERIFY_DIR/checksums.txt"; \
-(cd "$$VERIFY_DIR" && sha256sum -c checksums.txt); \
+if command -v sha256sum >/dev/null 2>&1; then \
+	(cd "$$VERIFY_DIR" && sha256sum -c checksums.txt); \
+else \
+	(cd "$$VERIFY_DIR" && shasum -a 256 -c checksums.txt); \
+fi; \
 $(1)
 endef
 
