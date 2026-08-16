@@ -7,6 +7,7 @@ description: "Connect Bitbucket Cloud or Data Center to native Kandev repository
 author: "kdlbs"
 categories: ["connector"]
 repo_url: "https://github.com/kdlbs/kandev-plugin-bitbucket"
+icon: "assets/icon.svg"
 
 # runtime.executables maps each supported platform to the binary kandev
 # spawns as a gRPC subprocess. `make package` cross-compiles all five;

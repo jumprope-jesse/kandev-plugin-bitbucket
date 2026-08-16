@@ -35,8 +35,8 @@ vet:
 	go vet ./...
 
 ## Cross-compile server/plugin-<goos>-<goarch>[.exe] for every platform in
-## manifest.yaml's runtime.executables, stage manifest.yaml + ui/ alongside
-## them, and pack the tree into $(PKG_OUT) with
+## manifest.yaml's runtime.executables, stage manifest.yaml + assets/ + ui/
+## alongside them, and pack the tree into $(PKG_OUT) with
 ## Kandev's cmd/plugin-pack using the sibling host module. Running the tool in
 ## that module keeps its tool-only dependencies owned by Kandev rather than
 ## leaking them into this plugin's go.sum. Install the tarball via Settings >
@@ -45,6 +45,7 @@ package: build-ui
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)/server
 	cp manifest.yaml $(STAGE)/manifest.yaml
+	cp -r assets $(STAGE)/assets
 	mkdir -p $(STAGE)/ui
 	cp ui/bundle.js ui/plugin.css $(STAGE)/ui/
 	GOOS=linux   GOARCH=amd64 go build -o $(STAGE)/server/plugin-linux-amd64       ./server
@@ -62,6 +63,7 @@ package-host: build-ui
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)/server
 	cp manifest.yaml $(STAGE)/manifest.yaml
+	cp -r assets $(STAGE)/assets
 	mkdir -p $(STAGE)/ui
 	cp ui/bundle.js ui/plugin.css $(STAGE)/ui/
 	go build -o $(STAGE)/server/plugin-$$(go env GOOS)-$$(go env GOARCH)$$(go env GOEXE) ./server
@@ -78,9 +80,13 @@ trap 'rm -rf "$$VERIFY_DIR"' EXIT; \
 test -f "$(PKG_OUT)" || { echo "package not found: $(PKG_OUT)"; exit 1; }; \
 tar -xzf "$(PKG_OUT)" -C "$$VERIFY_DIR"; \
 test -f "$$VERIFY_DIR/manifest.yaml"; \
+grep -Fx 'icon: "assets/icon.svg"' "$$VERIFY_DIR/manifest.yaml" >/dev/null; \
+test -f "$$VERIFY_DIR/assets/icon.svg"; \
+test -f "$$VERIFY_DIR/assets/NOTICE.md"; \
 test -f "$$VERIFY_DIR/ui/bundle.js"; \
 test -f "$$VERIFY_DIR/ui/plugin.css"; \
 test -f "$$VERIFY_DIR/checksums.txt"; \
+grep -Eq '^[0-9a-f]{64}  assets/icon\.svg$$' "$$VERIFY_DIR/checksums.txt"; \
 (cd "$$VERIFY_DIR" && sha256sum -c checksums.txt); \
 $(1)
 endef
