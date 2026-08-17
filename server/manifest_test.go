@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/xml"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
+
+const officialMarketplaceIconSHA256 = "1979d590ffb94871a6fb18d16008e62c755275f4e254e2f7f7d6aac170b91da7"
 
 func TestManifestParses(t *testing.T) {
 	contents, err := os.ReadFile("../manifest.yaml")
@@ -36,6 +40,7 @@ func TestManifestIncludesPackagedMarketplaceIcon(t *testing.T) {
 
 func assertMarketplaceSVG(t *testing.T, icon []byte) {
 	t.Helper()
+	require.Equal(t, officialMarketplaceIconSHA256, fmt.Sprintf("%x", sha256.Sum256(icon)))
 
 	var root struct {
 		XMLName xml.Name
@@ -45,9 +50,9 @@ func assertMarketplaceSVG(t *testing.T, icon []byte) {
 	}
 	require.NoError(t, xml.Unmarshal(icon, &root))
 	require.Equal(t, "svg", root.XMLName.Local)
-	require.Equal(t, "128", root.Width)
-	require.Equal(t, "128", root.Height)
-	require.Equal(t, "0 0 128 128", root.ViewBox)
+	require.Equal(t, "48", root.Width)
+	require.Equal(t, "48", root.Height)
+	require.Equal(t, "0 0 48 48", root.ViewBox)
 
 	lower := strings.ToLower(string(icon))
 	for _, forbidden := range []string{"<script", "<foreignobject", "href=", "url(", "currentcolor"} {
