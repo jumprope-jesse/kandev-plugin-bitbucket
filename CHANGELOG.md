@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1] - 2026-08-21
+
+### Changed
+
+- feat: add marketplace icon (#7) (a91ea4b)
+- ci: derive packaged contract artifact version (#6) (c0fb412)
+
+
 ## [0.2.0] - 2026-08-14
 
 ### Changed
