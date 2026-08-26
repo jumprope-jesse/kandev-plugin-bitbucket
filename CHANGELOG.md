@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0] - 2026-08-26
+
+### Changed
+
+- Fix OAuth callback issue on localhost (invalid Bitbucket action request.) (#10) (e899a8a)
+- fix: attribute Bitbucket plugin to Kandev (#8) (0551b9d)
+
+
 ## [0.2.1] - 2026-08-21
 
 ### Changed
