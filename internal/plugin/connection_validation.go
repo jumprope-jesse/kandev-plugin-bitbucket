@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 
+	"kandev-plugin-bitbucket/internal/auth"
 	"kandev-plugin-bitbucket/internal/cloud"
 	"kandev-plugin-bitbucket/internal/datacenter"
 	"kandev-plugin-bitbucket/internal/domain"
@@ -114,6 +115,17 @@ func validateHTTPSURL(raw, label string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return fmt.Errorf("%s must be a credential-free HTTPS URL", label)
+	}
+	return nil
+}
+
+func validateOAuthRedirectURL(raw, label string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%s must be a credential-free URL without a query or fragment", label)
+	}
+	if err := auth.ValidateOAuthRedirectURL(parsed); err != nil {
+		return fmt.Errorf("%s: %w", label, err)
 	}
 	return nil
 }
