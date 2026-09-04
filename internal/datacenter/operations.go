@@ -242,7 +242,7 @@ func (c *Client) ResolveGitCredential(ctx context.Context) (domain.GitCredential
 
 // ListBranches lists matching Data Center branches using start/limit pagination.
 func (c *Client) ListBranches(ctx context.Context, repository domain.Repository) ([]domain.Branch, error) {
-	return c.listBranches(ctx, repository, "", maxPageLength)
+	return c.listBranches(ctx, repository, "", int(^uint(0)>>1))
 }
 func (c *Client) listBranches(ctx context.Context, repository domain.Repository, search string, limit int) ([]domain.Branch, error) {
 	if err := validateRepository(repository); err != nil {
@@ -253,10 +253,12 @@ func (c *Client) listBranches(ctx context.Context, repository domain.Repository,
 	}
 	endpoint := c.repositoryEndpoint(repository, "branches")
 	var branches []domain.Branch
+	seen := make(map[string]struct{})
 	for start := 0; len(branches) < limit; {
 		query := endpoint.Query()
 		query.Set("start", fmt.Sprint(start))
 		query.Set("limit", fmt.Sprint(min(limit, maxPageLength)))
+		query.Set("orderBy", "MODIFICATION")
 		if search != "" {
 			query.Set("filterText", search)
 		}
@@ -269,6 +271,10 @@ func (c *Client) listBranches(ctx context.Context, repository domain.Repository,
 			if item.DisplayID == "" {
 				return nil, fmt.Errorf("Data Center branch omitted a display id")
 			}
+			if _, duplicate := seen[item.DisplayID]; duplicate {
+				continue
+			}
+			seen[item.DisplayID] = struct{}{}
 			branches = append(branches, domain.Branch{Name: item.DisplayID, Commit: item.LatestCommit, IsDefault: item.IsDefault})
 			if len(branches) == limit {
 				break

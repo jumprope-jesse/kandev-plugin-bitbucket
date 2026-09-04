@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -57,6 +58,81 @@ func TestDataCenterListsBranchesAndPullRequestsWithStartLimitPagination(t *testi
 	require.Equal(t, "main", gotPullRequests[0].Repository.DefaultBranch)
 	require.Equal(t, server.URL+"/bitbucket/scm/ENG/widgets.git", gotPullRequests[0].Repository.CloneURL.String())
 	require.Equal(t, server.URL+"/bitbucket/projects/ENG/repos/widgets/pull-requests/42", gotPullRequests[0].URL)
+}
+
+func TestDataCenterListBranchesFollowsPaginationBeyondOneHundredAndDeduplicatesRefs(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		require.Equal(t, "100", r.URL.Query().Get("limit"))
+		require.Equal(t, "MODIFICATION", r.URL.Query().Get("orderBy"))
+		start := r.URL.Query().Get("start")
+		values := make([]map[string]any, 0, 100)
+		if start == "0" {
+			for index := 0; index < 100; index++ {
+				values = append(values, map[string]any{"displayId": fmt.Sprintf("branch-%03d", index), "latestCommit": fmt.Sprintf("commit-%03d", index)})
+			}
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"isLastPage": false, "nextPageStart": 100, "values": values}))
+			return
+		}
+		require.Equal(t, "100", start)
+		values = append(values, map[string]any{"displayId": "branch-050", "latestCommit": "duplicate"})
+		for index := 100; index < 125; index++ {
+			values = append(values, map[string]any{"displayId": fmt.Sprintf("branch-%03d", index), "latestCommit": fmt.Sprintf("commit-%03d", index)})
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"isLastPage": true, "values": values}))
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{
+		ConnectionOptions: ConnectionOptions{BaseURL: server.URL + "/bitbucket", AllowInsecureHTTP: true},
+		HTTPClient:        server.Client(), TokenSource: staticTokenSource("dc-token"),
+	})
+	require.NoError(t, err)
+
+	branches, err := client.ListBranches(context.Background(), domain.Repository{Namespace: "ENG", Slug: "widgets"})
+	require.NoError(t, err)
+	require.Len(t, branches, 125)
+	require.Equal(t, "commit-050", branches[50].Commit)
+	require.Equal(t, 2, requests)
+}
+
+func TestDataCenterListBranchesReturnsLaterPageFailure(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Query().Get("start") == "1" {
+			http.Error(w, "unavailable", http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`{"isLastPage":false,"nextPageStart":1,"values":[{"displayId":"main","latestCommit":"one"}]}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{
+		ConnectionOptions: ConnectionOptions{BaseURL: server.URL + "/bitbucket", AllowInsecureHTTP: true},
+		HTTPClient:        server.Client(), TokenSource: staticTokenSource("dc-token"),
+	})
+	require.NoError(t, err)
+
+	branches, err := client.ListBranches(context.Background(), domain.Repository{Namespace: "ENG", Slug: "widgets"})
+	require.Error(t, err)
+	require.Nil(t, branches)
+	require.GreaterOrEqual(t, requests, 2)
+}
+
+func TestDataCenterListBranchesRejectsNonAdvancingPage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"isLastPage":false,"nextPageStart":0,"values":[{"displayId":"main","latestCommit":"one"}]}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{
+		ConnectionOptions: ConnectionOptions{BaseURL: server.URL + "/bitbucket", AllowInsecureHTTP: true},
+		HTTPClient:        server.Client(), TokenSource: staticTokenSource("dc-token"),
+	})
+	require.NoError(t, err)
+
+	branches, err := client.ListBranches(context.Background(), domain.Repository{Namespace: "ENG", Slug: "widgets"})
+	require.EqualError(t, err, "Data Center branch pagination did not advance")
+	require.Nil(t, branches)
 }
 
 func TestDataCenterSearchPullRequestsUsesRequestedState(t *testing.T) {

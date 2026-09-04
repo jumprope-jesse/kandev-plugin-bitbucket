@@ -6,7 +6,8 @@ type branchPage struct {
 	Values []struct {
 		Name   string `json:"name"`
 		Target struct {
-			Hash string `json:"hash"`
+			Hash string    `json:"hash"`
+			Date time.Time `json:"date"`
 		} `json:"target"`
 	} `json:"values"`
 	Next string `json:"next"`
