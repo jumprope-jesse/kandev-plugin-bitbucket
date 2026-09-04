@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1] - 2026-09-04
+
+### Changed
+
+- Paginate Bitbucket Cloud and Data Center branch listings, deduplicate refs, and order recent branches first when provider metadata supports it.
+- Fail closed on later-page errors and repeated or non-advancing pagination cursors.
+
+
 ## [0.3.0] - 2026-08-26
 
 ### Changed
@@ -26,4 +34,3 @@
 - chore(security): bump x/net & x/text, pin CI actions to commit SHA (#3) (2ab6e5e)
 - ci: add manual release workflow (71a13d0)
 - Initial commit (6329785)
-
