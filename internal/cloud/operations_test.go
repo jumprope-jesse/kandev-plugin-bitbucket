@@ -57,6 +57,92 @@ func TestCloudListsBranchesAndPullRequestsWithV2QueryPagination(t *testing.T) {
 	require.Equal(t, "https://bitbucket.org/acme/widgets.git", gotPullRequests[0].Repository.CloneURL.String())
 }
 
+func TestCloudListBranchesFollowsPaginationBeyondOneHundredAndDeduplicatesRefs(t *testing.T) {
+	firstValues := make([]map[string]any, 100)
+	for index := range firstValues {
+		firstValues[index] = map[string]any{
+			"name":   fmt.Sprintf("branch-%03d", index),
+			"target": map[string]any{"hash": fmt.Sprintf("commit-%03d", index), "date": "2026-01-01T00:00:00Z"},
+		}
+	}
+	secondValues := make([]map[string]any, 0, 26)
+	secondValues = append(secondValues, map[string]any{
+		"name": "branch-050", "target": map[string]any{"hash": "duplicate", "date": "2025-01-01T00:00:00Z"},
+	})
+	for index := 100; index < 125; index++ {
+		secondValues = append(secondValues, map[string]any{
+			"name":   fmt.Sprintf("branch-%03d", index),
+			"target": map[string]any{"hash": fmt.Sprintf("commit-%03d", index), "date": "2026-01-01T00:00:00Z"},
+		})
+	}
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "100", r.URL.Query().Get("pagelen"))
+		require.Equal(t, "-target.date", r.URL.Query().Get("sort"))
+		if r.URL.Query().Get("page") == "2" {
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"values": secondValues}))
+			return
+		}
+		next := server.URL + "/2.0/repositories/acme/widgets/refs/branches?page=2&pagelen=100&sort=-target.date"
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"values": firstValues, "next": next}))
+	}))
+	defer server.Close()
+	baseURL, err := url.Parse(server.URL + "/2.0")
+	require.NoError(t, err)
+	client := NewClient(ClientOptions{APIBase: baseURL, HTTPClient: server.Client(), TokenSource: staticTokenSource("cloud-token")})
+
+	branches, err := client.ListBranches(context.Background(), domain.Repository{Namespace: "acme", Slug: "widgets"})
+	require.NoError(t, err)
+	require.Len(t, branches, 125)
+	require.Equal(t, "commit-050", branches[50].Commit)
+}
+
+func TestCloudListBranchesReturnsNextPageFailure(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "2" {
+			http.Error(w, "unavailable", http.StatusBadGateway)
+			return
+		}
+		next := server.URL + "/2.0/repositories/acme/widgets/refs/branches?page=2"
+		_, _ = fmt.Fprintf(w, `{"values":[{"name":"main","target":{"hash":"one"}}],"next":%q}`, next)
+	}))
+	defer server.Close()
+	baseURL, err := url.Parse(server.URL + "/2.0")
+	require.NoError(t, err)
+	client := NewClient(ClientOptions{APIBase: baseURL, HTTPClient: server.Client(), TokenSource: staticTokenSource("cloud-token")})
+
+	branches, err := client.ListBranches(context.Background(), domain.Repository{Namespace: "acme", Slug: "widgets"})
+	require.Error(t, err)
+	require.Nil(t, branches)
+}
+
+func TestCloudListBranchesOrdersNewestFirstWithDeterministicTies(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"values":[
+			{"name":"zeta","target":{"hash":"old-zeta","date":"2026-01-02T00:00:00Z"}},
+			{"name":"beta","target":{"hash":"beta","date":"2026-01-03T00:00:00Z"}},
+			{"name":"alpha","target":{"hash":"alpha","date":"2026-01-03T00:00:00Z"}},
+			{"name":"zeta","target":{"hash":"new-zeta","date":"2026-01-04T00:00:00Z"}},
+			{"name":"undated","target":{"hash":"undated"}}
+		]}`))
+	}))
+	defer server.Close()
+	baseURL, err := url.Parse(server.URL + "/2.0")
+	require.NoError(t, err)
+	client := NewClient(ClientOptions{APIBase: baseURL, HTTPClient: server.Client(), TokenSource: staticTokenSource("cloud-token")})
+
+	branches, err := client.ListBranches(context.Background(), domain.Repository{Namespace: "acme", Slug: "widgets"})
+	require.NoError(t, err)
+	require.Equal(t, []domain.Branch{
+		{Name: "zeta", Commit: "new-zeta"},
+		{Name: "alpha", Commit: "alpha"},
+		{Name: "beta", Commit: "beta"},
+		{Name: "undated", Commit: "undated"},
+	}, branches)
+}
+
 func TestCloudSearchPullRequestsPagePreservesProviderCursorAndAuthor(t *testing.T) {
 	requests := 0
 	var server *httptest.Server

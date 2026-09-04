@@ -11,6 +11,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	"kandev-plugin-bitbucket/internal/domain"
 )
@@ -217,7 +218,7 @@ func (c *Client) ResolveGitCredential(ctx context.Context) (domain.GitCredential
 
 // ListBranches lists matching branches from the Cloud v2 branch endpoint.
 func (c *Client) ListBranches(ctx context.Context, repository domain.Repository) ([]domain.Branch, error) {
-	return c.listBranches(ctx, repository, "", maxPageLength)
+	return c.listBranches(ctx, repository, "", int(^uint(0)>>1))
 }
 func (c *Client) listBranches(ctx context.Context, repository domain.Repository, search string, limit int) ([]domain.Branch, error) {
 	if err := validateRepository(repository); err != nil {
@@ -229,13 +230,19 @@ func (c *Client) listBranches(ctx context.Context, repository domain.Repository,
 	endpoint := c.repositoryEndpoint(repository, "refs", "branches")
 	query := endpoint.Query()
 	query.Set("pagelen", fmt.Sprint(min(limit, maxPageLength)))
+	query.Set("sort", "-target.date")
 	if search != "" {
 		query.Set("q", fmt.Sprintf("name~%q", search))
 	}
 	endpoint.RawQuery = query.Encode()
 
-	var branches []domain.Branch
-	for next := &endpoint; next != nil && len(branches) < limit; {
+	type datedBranch struct {
+		branch domain.Branch
+		date   time.Time
+	}
+	var results []datedBranch
+	seen := make(map[string]int)
+	for next := &endpoint; next != nil && len(results) < limit; {
 		var page branchPage
 		if err := c.getJSON(ctx, next, &page); err != nil {
 			return nil, err
@@ -244,8 +251,21 @@ func (c *Client) listBranches(ctx context.Context, repository domain.Repository,
 			if item.Name == "" {
 				return nil, fmt.Errorf("Cloud branch omitted a name")
 			}
-			branches = append(branches, domain.Branch{Name: item.Name, Commit: item.Target.Hash})
-			if len(branches) == limit {
+			if index, duplicate := seen[item.Name]; duplicate {
+				if item.Target.Date.After(results[index].date) {
+					results[index] = datedBranch{
+						branch: domain.Branch{Name: item.Name, Commit: item.Target.Hash},
+						date:   item.Target.Date,
+					}
+				}
+				continue
+			}
+			seen[item.Name] = len(results)
+			results = append(results, datedBranch{
+				branch: domain.Branch{Name: item.Name, Commit: item.Target.Hash},
+				date:   item.Target.Date,
+			})
+			if len(results) == limit {
 				break
 			}
 		}
@@ -254,6 +274,16 @@ func (c *Client) listBranches(ctx context.Context, repository domain.Repository,
 		if err != nil {
 			return nil, err
 		}
+	}
+	sort.SliceStable(results, func(i, j int) bool {
+		if !results[i].date.Equal(results[j].date) {
+			return results[i].date.After(results[j].date)
+		}
+		return results[i].branch.Name < results[j].branch.Name
+	})
+	branches := make([]domain.Branch, len(results))
+	for index := range results {
+		branches[index] = results[index].branch
 	}
 	return branches, nil
 }
