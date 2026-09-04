@@ -118,6 +118,48 @@ func TestCloudListBranchesReturnsNextPageFailure(t *testing.T) {
 	require.Nil(t, branches)
 }
 
+func TestCloudListBranchesRejectsSelfReferentialNextPage(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		self := "http://" + r.Host + r.URL.RequestURI()
+		_, _ = fmt.Fprintf(w, `{"values":[{"name":"main","target":{"hash":"one"}}],"next":%q}`, self)
+	}))
+	defer server.Close()
+	baseURL, err := url.Parse(server.URL + "/2.0")
+	require.NoError(t, err)
+	client := NewClient(ClientOptions{APIBase: baseURL, HTTPClient: server.Client(), TokenSource: staticTokenSource("cloud-token")})
+
+	branches, err := client.ListBranches(context.Background(), domain.Repository{Namespace: "acme", Slug: "widgets"})
+	require.EqualError(t, err, "Cloud branch pagination repeated a page URL")
+	require.Nil(t, branches)
+	require.Equal(t, 1, requests)
+}
+
+func TestCloudListBranchesRejectsMultiPageCycle(t *testing.T) {
+	requests := 0
+	var firstURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		current := "http://" + r.Host + r.URL.RequestURI()
+		if firstURL == "" {
+			firstURL = current
+			_, _ = fmt.Fprintf(w, `{"values":[{"name":"one","target":{"hash":"one"}}],"next":%q}`, current+"&page=2")
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"values":[{"name":"two","target":{"hash":"two"}}],"next":%q}`, firstURL)
+	}))
+	defer server.Close()
+	baseURL, err := url.Parse(server.URL + "/2.0")
+	require.NoError(t, err)
+	client := NewClient(ClientOptions{APIBase: baseURL, HTTPClient: server.Client(), TokenSource: staticTokenSource("cloud-token")})
+
+	branches, err := client.ListBranches(context.Background(), domain.Repository{Namespace: "acme", Slug: "widgets"})
+	require.EqualError(t, err, "Cloud branch pagination repeated a page URL")
+	require.Nil(t, branches)
+	require.Equal(t, 2, requests)
+}
+
 func TestCloudListBranchesOrdersNewestFirstWithDeterministicTies(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"values":[

@@ -242,7 +242,13 @@ func (c *Client) listBranches(ctx context.Context, repository domain.Repository,
 	}
 	var results []datedBranch
 	seen := make(map[string]int)
+	visitedPages := make(map[string]struct{})
 	for next := &endpoint; next != nil && len(results) < limit; {
+		pageURL := next.String()
+		if _, visited := visitedPages[pageURL]; visited {
+			return nil, fmt.Errorf("Cloud branch pagination repeated a page URL")
+		}
+		visitedPages[pageURL] = struct{}{}
 		var page branchPage
 		if err := c.getJSON(ctx, next, &page); err != nil {
 			return nil, err

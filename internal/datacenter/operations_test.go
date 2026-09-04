@@ -96,6 +96,45 @@ func TestDataCenterListBranchesFollowsPaginationBeyondOneHundredAndDeduplicatesR
 	require.Equal(t, 2, requests)
 }
 
+func TestDataCenterListBranchesReturnsLaterPageFailure(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Query().Get("start") == "1" {
+			http.Error(w, "unavailable", http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`{"isLastPage":false,"nextPageStart":1,"values":[{"displayId":"main","latestCommit":"one"}]}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{
+		ConnectionOptions: ConnectionOptions{BaseURL: server.URL + "/bitbucket", AllowInsecureHTTP: true},
+		HTTPClient:        server.Client(), TokenSource: staticTokenSource("dc-token"),
+	})
+	require.NoError(t, err)
+
+	branches, err := client.ListBranches(context.Background(), domain.Repository{Namespace: "ENG", Slug: "widgets"})
+	require.Error(t, err)
+	require.Nil(t, branches)
+	require.GreaterOrEqual(t, requests, 2)
+}
+
+func TestDataCenterListBranchesRejectsNonAdvancingPage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"isLastPage":false,"nextPageStart":0,"values":[{"displayId":"main","latestCommit":"one"}]}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{
+		ConnectionOptions: ConnectionOptions{BaseURL: server.URL + "/bitbucket", AllowInsecureHTTP: true},
+		HTTPClient:        server.Client(), TokenSource: staticTokenSource("dc-token"),
+	})
+	require.NoError(t, err)
+
+	branches, err := client.ListBranches(context.Background(), domain.Repository{Namespace: "ENG", Slug: "widgets"})
+	require.EqualError(t, err, "Data Center branch pagination did not advance")
+	require.Nil(t, branches)
+}
+
 func TestDataCenterSearchPullRequestsUsesRequestedState(t *testing.T) {
 	pullRequests, err := os.ReadFile("testdata/pullrequests.json")
 	require.NoError(t, err)
