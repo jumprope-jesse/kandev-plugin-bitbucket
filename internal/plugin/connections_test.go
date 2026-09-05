@@ -437,9 +437,10 @@ func TestConnectionResolver_ExchangesBYOOAuthCallbackOnceAndUsesRotatingCredenti
 			require.Equal(t, "client-secret", clientSecret)
 			require.NotEmpty(t, request.FormValue("code_verifier"))
 			_, _ = writer.Write([]byte(`{"access_token":"access-token","refresh_token":"refresh-token","expires_in":3600}`))
-		case http.MethodGet + " /2.0/user":
+		case http.MethodGet + " /2.0/repositories/acme":
 			require.Equal(t, "Bearer access-token", request.Header.Get("Authorization"))
-			_, _ = writer.Write([]byte(`{}`))
+			require.Equal(t, "1", request.URL.Query().Get("pagelen"))
+			_, _ = writer.Write([]byte(`{"values":[]}`))
 		default:
 			http.NotFound(writer, request)
 		}
@@ -582,8 +583,9 @@ func TestWorkflows_OAuthCallbackWithoutCodeFailsWithoutGrant(t *testing.T) {
 
 func TestWorkflows_ConnectionGetNeverReflectsOAuthSecrets(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		require.Equal(t, "/2.0/user", request.URL.Path)
-		_, _ = writer.Write([]byte(`{}`))
+		require.Equal(t, "/2.0/repositories/acme", request.URL.Path)
+		require.Equal(t, "1", request.URL.Query().Get("pagelen"))
+		_, _ = writer.Write([]byte(`{"values":[]}`))
 	}))
 	defer server.Close()
 	host := newConnectionHost()
@@ -614,6 +616,84 @@ func TestWorkflows_ConnectionGetNeverReflectsOAuthSecrets(t *testing.T) {
 	require.Equal(t, true, payload["oauth_registration_configured"])
 	require.NotContains(t, payload, "oauth_authorization_url")
 	require.NotContains(t, payload, "oauth_token_url")
+}
+
+func TestWorkflows_ConnectionGetUsesRepositoryScopedCloudHealth(t *testing.T) {
+	userCalls := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/2.0/user":
+			userCalls++
+			writer.WriteHeader(http.StatusForbidden)
+			_, _ = writer.Write([]byte(`{"error":{"message":"account scope required"}}`))
+		case "/2.0/repositories/acme":
+			require.Equal(t, "1", request.URL.Query().Get("pagelen"))
+			_, _ = writer.Write([]byte(`{"values":[]}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	host := newConnectionHost()
+	resolver, err := NewConnectionResolver(host)
+	require.NoError(t, err)
+	resolver.httpClient = server.Client()
+	resolver.cloudAPIBaseOverride, err = url.Parse(server.URL + "/2.0")
+	require.NoError(t, err)
+	_, err = resolver.Save(context.Background(), "workspace-1", ConnectionInput{
+		Product: domain.ProductCloud, CloudWorkspace: "acme", AuthMethod: "api_token",
+		AuthIdentity: "dev@example.test", Token: "repository-scoped-token",
+	})
+	require.NoError(t, err)
+	workflows, err := NewWorkflows(host, resolver)
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "connection.get", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+	})
+
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(response.Body, &payload))
+	require.Equal(t, "connected", payload["state"])
+	require.Equal(t, true, payload["healthy"])
+	require.Empty(t, payload["error"])
+	require.Zero(t, userCalls, "Cloud health must not require account-profile scope")
+}
+
+func TestWorkflows_ConnectionGetRequiresAuthenticationWhenCloudRepositoriesAreForbidden(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		require.Equal(t, "/2.0/repositories/acme", request.URL.Path)
+		writer.WriteHeader(http.StatusForbidden)
+		_, _ = writer.Write([]byte(`{"error":{"message":"repository scope required"}}`))
+	}))
+	defer server.Close()
+
+	host := newConnectionHost()
+	resolver, err := NewConnectionResolver(host)
+	require.NoError(t, err)
+	resolver.httpClient = server.Client()
+	resolver.cloudAPIBaseOverride, err = url.Parse(server.URL + "/2.0")
+	require.NoError(t, err)
+	_, err = resolver.Save(context.Background(), "workspace-1", ConnectionInput{
+		Product: domain.ProductCloud, CloudWorkspace: "acme", AuthMethod: "api_token",
+		AuthIdentity: "dev@example.test", Token: "insufficient-token",
+	})
+	require.NoError(t, err)
+	workflows, err := NewWorkflows(host, resolver)
+	require.NoError(t, err)
+
+	response, err := workflows.HandleAction(context.Background(), &pluginsdk.PluginActionRequest{
+		ActionKey: "connection.get", Context: pluginsdk.VerifiedActionContext{WorkspaceID: "workspace-1"},
+	})
+
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(response.Body, &payload))
+	require.Equal(t, "auth_required", payload["state"])
+	require.Equal(t, false, payload["healthy"])
+	require.Equal(t, "Bitbucket connection health check failed", payload["error"])
 }
 
 func TestWorkflows_UnconfiguredWorkspaceReturnsEmptyBrowseSurfaces(t *testing.T) {

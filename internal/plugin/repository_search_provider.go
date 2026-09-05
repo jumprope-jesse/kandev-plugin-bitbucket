@@ -16,6 +16,19 @@ type repositorySearchProvider struct {
 	workspace string
 }
 
+// Health probes the configured Cloud workspace's repository collection. Cloud
+// credentials may be intentionally limited to repository access and therefore
+// unable to read /user even though every plugin repository operation works.
+// Data Center providers have no wrapper workspace and retain their native
+// server health probe.
+func (p repositorySearchProvider) Health(ctx context.Context) error {
+	if strings.TrimSpace(p.workspace) == "" {
+		return p.Provider.Health(ctx)
+	}
+	_, err := p.ListRepositories(ctx, "", 1)
+	return err
+}
+
 func (p repositorySearchProvider) SearchPullRequestsPage(ctx context.Context, query domain.PullRequestQuery) (domain.PullRequestPage, error) {
 	if pager, ok := p.Provider.(domain.PullRequestPager); ok {
 		return pager.SearchPullRequestsPage(ctx, query)
