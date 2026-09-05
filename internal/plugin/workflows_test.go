@@ -859,6 +859,12 @@ func (*associationTaskReader) Update(context.Context, pluginsdk.UpdateTaskInput)
 	return nil, nil
 }
 
+// Move satisfies pluginsdk.TaskReader. The association tests exercise link and
+// unlink only, so this stays an unused stub like Create and Update.
+func (*associationTaskReader) Move(context.Context, pluginsdk.MoveTaskInput) (*pluginsdk.MoveTaskOutcome, error) {
+	return nil, nil
+}
+
 type associationHost struct {
 	*connectionHost
 	tasks *associationTaskReader

@@ -165,6 +165,13 @@ func (*taskReader) Update(context.Context, pluginsdk.UpdateTaskInput) (*pluginsd
 	return nil, nil
 }
 
+// Move satisfies pluginsdk.TaskReader. No plugin test drives a host-side task
+// move, so this mirrors Update's unused-stub shape rather than modelling
+// step transitions.
+func (*taskReader) Move(context.Context, pluginsdk.MoveTaskInput) (*pluginsdk.MoveTaskOutcome, error) {
+	return nil, nil
+}
+
 type repositoryReader struct{ repositories []pluginsdk.Repository }
 
 func (r *repositoryReader) List(context.Context, string, pluginsdk.Page) ([]pluginsdk.Repository, *pluginsdk.PageInfo, error) {
