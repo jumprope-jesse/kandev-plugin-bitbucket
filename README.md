@@ -168,6 +168,25 @@ before publishing. The plugin is listed in Kandev's official marketplace, which
 resolves the latest GitHub Release containing the required
 `kandev-plugin-bitbucket-<version>.tar.gz` asset.
 
+### Running a fork build ahead of the public catalog
+
+If you install a package built from a fork of this repository, your instance can
+end up running a version that is newer than the one published in the marketplace
+catalog it subscribes to. Kandev handles that safely on its own: auto-update only
+moves forward, so it will not pull the older catalog version over your newer
+build, and it is off by default.
+
+The hazard is manual. Reinstalling or repairing the plugin from the marketplace
+screen installs the *catalog's* version, which in this situation is older than
+what you are running — silently reverting whatever your fork build added. Kandev
+cannot currently warn about this: its marketplace model treats "installed at a
+version greater than or equal to the catalog version" as a single `installed`
+state, so a plugin running ahead of the catalog is indistinguishable from one
+exactly in sync.
+
+If you are running a fork build, treat marketplace reinstall and repair as a
+downgrade, and reinstall your own package instead.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
