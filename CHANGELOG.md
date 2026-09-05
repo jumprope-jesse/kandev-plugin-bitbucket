@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2] - 2026-09-05
+
+### Fixed
+
+- Test Bitbucket Cloud connection health against the configured workspace repository collection instead of `/2.0/user`, so a repository-scoped access token is reported as connected rather than requiring authentication.
+- Keep failing closed with the existing generic health error when repository access itself is denied; Data Center continues to use its native health probe.
+
+
 ## [0.3.1] - 2026-09-04
 
 ### Changed
