@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3] - 2026-09-05
+
+### Changed
+
+- No runtime change. Restores `internal/plugin` test compilation against the current Kandev SDK, and documents that a marketplace reinstall downgrades a fork build. The packaged plugin binary is byte-identical to 0.3.2.
+
+
 ## [0.3.2] - 2026-09-05
 
 ### Fixed
