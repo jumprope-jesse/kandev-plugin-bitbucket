@@ -150,6 +150,42 @@ func TestRepositorySearchProviderDispatchesCloudWorkspaceSearch(t *testing.T) {
 	require.Equal(t, 7, searcher.limit)
 }
 
+func TestRepositorySearchProviderHealthUsesCloudRepositoryScope(t *testing.T) {
+	provider := &workflowProvider{healthErr: fmt.Errorf("account profile is forbidden")}
+	wrapped := repositorySearchProvider{Provider: provider, workspace: "acme"}
+
+	err := wrapped.Health(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, 1, provider.listRepositoryLimit)
+	require.Zero(t, provider.healthCalls, "Cloud health must not require account-profile scope")
+}
+
+func TestRepositorySearchProviderHealthPropagatesCloudRepositoryFailure(t *testing.T) {
+	want := fmt.Errorf("repository scope is forbidden")
+	provider := &healthRepositoryProvider{workflowProvider: workflowProvider{}, err: want}
+	wrapped := repositorySearchProvider{Provider: provider, workspace: "acme"}
+
+	err := wrapped.Health(context.Background())
+
+	require.ErrorIs(t, err, want)
+	require.Equal(t, "acme", provider.workspace)
+	require.Equal(t, 1, provider.limit)
+	require.Zero(t, provider.healthCalls)
+}
+
+func TestRepositorySearchProviderHealthRetainsDataCenterProbe(t *testing.T) {
+	want := fmt.Errorf("server unavailable")
+	provider := &workflowProvider{healthErr: want}
+	wrapped := repositorySearchProvider{Provider: provider}
+
+	err := wrapped.Health(context.Background())
+
+	require.ErrorIs(t, err, want)
+	require.Equal(t, 1, provider.healthCalls)
+	require.Zero(t, provider.listRepositoryLimit)
+}
+
 func TestRepositorySearchProviderDispatchesDataCenterSearch(t *testing.T) {
 	searcher := &dataCenterRepositorySearcher{workflowProvider: workflowProvider{pullRequest: testPullRequest()}}
 	provider := repositorySearchProvider{Provider: searcher}
@@ -185,6 +221,18 @@ type cloudRepositorySearcher struct {
 	workspace string
 	query     string
 	limit     int
+}
+
+type healthRepositoryProvider struct {
+	workflowProvider
+	workspace string
+	limit     int
+	err       error
+}
+
+func (p *healthRepositoryProvider) ListRepositories(_ context.Context, workspace string, limit int) ([]domain.Repository, error) {
+	p.workspace, p.limit = workspace, limit
+	return nil, p.err
 }
 
 func (s *cloudRepositorySearcher) SearchRepositories(_ context.Context, workspace, query string, limit int) ([]domain.Repository, error) {
