@@ -48,7 +48,7 @@ func TestSourceTransportExactSourcePipelineLogAndRedaction(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/steps/{step}"):
 			payload = `{"uuid":"{step}","name":"test"}`
 		default:
-			payload = `{"uuid":"{pipeline}","target":{"ref_name":"feature/owned","commit":{"hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}`
+			payload = `{"uuid":"{pipeline}","target":{"type":"pipeline_ref_target","ref_type":"branch","ref_name":"feature/owned","commit":{"hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}`
 		}
 		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(payload))}, nil
 	})}})
@@ -180,7 +180,7 @@ func TestSourceTransportRejectsDifferentSourcePipelineAndPR(t *testing.T) {
 			calls := 0
 			client := NewClient(ClientOptions{TokenSource: staticTokenSource("synthetic-token"), HTTPClient: &http.Client{Transport: sourceRoundTrip(func(r *http.Request) (*http.Response, error) {
 				calls++
-				payload := `{"uuid":"{pipeline}","target":{"ref_name":"other","commit":{"hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}`
+				payload := `{"uuid":"{pipeline}","target":{"type":"pipeline_ref_target","ref_type":"branch","ref_name":"other","commit":{"hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}`
 				if strings.Contains(r.URL.Path, "/branches/") {
 					payload = `{"name":"feature/owned","target":{"hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`
 				}
@@ -205,7 +205,7 @@ func TestSourceTransportReadOperationsNeverFollowPagination(t *testing.T) {
 				calls++
 				require.Equal(t, http.MethodGet, r.Method)
 				require.Equal(t, "api.bitbucket.org", r.URL.Host)
-				pipeline := `{"uuid":"{pipeline}","target":{"ref_name":"feature/owned","commit":{"hash":"` + head + `"}}}`
+				pipeline := `{"uuid":"{pipeline}","target":{"type":"pipeline_ref_target","ref_type":"branch","ref_name":"feature/owned","commit":{"hash":"` + head + `"}}}`
 				payload := pipeline
 				switch {
 				case strings.Contains(r.URL.Path, "/branches/"):
@@ -261,6 +261,44 @@ func TestSourceTransportDoesNotCreateWhenLookupIdentityIsIncomplete(t *testing.T
 			_, err := client.SourceOperation(context.Background(), sourceTestRepository(), "feature/owned", "main", SourceInput{Operation: "pr_create", Title: "change"})
 			require.ErrorContains(t, err, "lookup_incomplete")
 			require.Zero(t, writes)
+		})
+	}
+}
+
+func TestSourceTransportPipelineTargetKinds(t *testing.T) {
+	const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	for _, tc := range []struct {
+		name, operation, target string
+		allowed                 bool
+	}{
+		{"PR get", "pipeline_get", `{"type":"pipeline_pullrequest_target","source":"feature/owned","commit":{"hash":"` + head + `"}}`, true},
+		{"PR list", "pipelines", `{"type":"pipeline_pullrequest_target","source":"feature/owned","commit":{"hash":"` + head + `"}}`, true},
+		{"tag", "pipeline_get", `{"type":"pipeline_ref_target","ref_type":"tag","ref_name":"feature/owned","commit":{"hash":"` + head + `"}}`, false},
+		{"unknown", "pipeline_get", `{"type":"unknown","ref_name":"feature/owned","commit":{"hash":"` + head + `"}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := NewClient(ClientOptions{TokenSource: staticTokenSource("synthetic-token"), HTTPClient: &http.Client{Transport: sourceRoundTrip(func(r *http.Request) (*http.Response, error) {
+				require.Equal(t, http.MethodGet, r.Method)
+				payload := `{"uuid":"{pipeline}","target":` + tc.target + `}`
+				if strings.Contains(r.URL.Path, "/branches/") {
+					payload = `{"name":"feature/owned","target":{"hash":"` + head + `"}}`
+				} else if tc.operation == "pipelines" {
+					require.Empty(t, r.URL.Query().Get("target.ref_name"))
+					payload = `{"values":[` + payload + `]}`
+				}
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(payload))}, nil
+			})}})
+			result, err := client.SourceOperation(context.Background(), sourceTestRepository(), "feature/owned", "main", SourceInput{Operation: tc.operation, PipelineID: "{pipeline}"})
+			if !tc.allowed {
+				require.ErrorContains(t, err, "source_mismatch")
+				return
+			}
+			require.NoError(t, err)
+			if tc.operation == "pipelines" {
+				require.Len(t, result["pipelines"], 1)
+			} else {
+				require.Equal(t, "feature/owned", result["source_branch"])
+			}
 		})
 	}
 }

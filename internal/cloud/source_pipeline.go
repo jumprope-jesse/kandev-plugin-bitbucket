@@ -19,6 +19,9 @@ type sourcePipelinePayload struct {
 	} `json:"state"`
 	Target struct {
 		RefName string `json:"ref_name"`
+		Type    string `json:"type"`
+		RefType string `json:"ref_type"`
+		Source  string `json:"source"`
 		Commit  struct {
 			Hash string `json:"hash"`
 		} `json:"commit"`
@@ -26,7 +29,7 @@ type sourcePipelinePayload struct {
 }
 
 func sourcePipelineView(p sourcePipelinePayload) map[string]any {
-	return map[string]any{"uuid": p.UUID, "build_number": p.BuildNumber, "state": p.State.Name, "result": p.State.Result.Name, "source_branch": p.Target.RefName, "source_head": p.Target.Commit.Hash}
+	return map[string]any{"uuid": p.UUID, "build_number": p.BuildNumber, "state": p.State.Name, "result": p.State.Result.Name, "source_branch": sourcePipelineBranch(p), "source_head": p.Target.Commit.Hash}
 }
 
 func (c *Client) sourcePipeline(ctx context.Context, repository domain.Repository, source string, input SourceInput) (map[string]any, error) {
@@ -50,7 +53,6 @@ func (c *Client) sourcePipeline(ctx context.Context, repository domain.Repositor
 		endpoint := c.sourceEndpoint(repository, "pipelines")
 		query := endpoint.Query()
 		query.Set("pagelen", fmt.Sprint(sourcePageLimit))
-		query.Set("target.ref_name", source)
 		query.Set("target.commit.hash", head)
 		query.Set("sort", "-created_on")
 		endpoint.RawQuery = query.Encode()
@@ -66,7 +68,7 @@ func (c *Client) sourcePipeline(ctx context.Context, repository domain.Repositor
 		}
 		values := []map[string]any{}
 		for _, pipeline := range page.Values {
-			if pipeline.Target.RefName == source && pipeline.Target.Commit.Hash == head {
+			if sourcePipelineBranch(pipeline) == source && pipeline.Target.Commit.Hash == head {
 				values = append(values, sourcePipelineView(pipeline))
 			}
 		}
@@ -79,7 +81,7 @@ func (c *Client) sourcePipeline(ctx context.Context, repository domain.Repositor
 	if err := c.sourceJSON(ctx, http.MethodGet, c.sourceEndpoint(repository, "pipelines", input.PipelineID), nil, &pipeline); err != nil {
 		return nil, err
 	}
-	if pipeline.UUID != input.PipelineID || pipeline.Target.RefName != source || pipeline.Target.Commit.Hash != head {
+	if pipeline.UUID != input.PipelineID || sourcePipelineBranch(pipeline) != source || pipeline.Target.Commit.Hash != head {
 		return nil, fmt.Errorf("bitbucket_pipeline_source_mismatch")
 	}
 	if input.Operation == "pipeline_get" {
@@ -159,4 +161,16 @@ func (c *Client) sourceStatuses(ctx context.Context, repository domain.Repositor
 		values = append(values, map[string]any{"key": status.Key, "name": status.Name, "state": strings.ToUpper(status.State), "description": status.Description})
 	}
 	return map[string]any{"statuses": values, "source_head": head, "truncated": page.Next != ""}, nil
+}
+
+func sourcePipelineBranch(p sourcePipelinePayload) string {
+	switch p.Target.Type {
+	case "pipeline_ref_target":
+		if p.Target.RefType == "branch" {
+			return p.Target.RefName
+		}
+	case "pipeline_pullrequest_target":
+		return p.Target.Source
+	}
+	return ""
 }
