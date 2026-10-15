@@ -193,3 +193,22 @@ func TestSourceToolRejectsRepositoryOrTargetChangeDuringRead(t *testing.T) {
 		})
 	}
 }
+
+type sourceRevokingHost struct {
+	*scopedConnectionHost
+	onSecretRead func()
+}
+
+func (h *sourceRevokingHost) GetSecret(ctx context.Context, key string) (string, bool, error) {
+	if h.onSecretRead != nil {
+		h.onSecretRead()
+	}
+	return h.scopedConnectionHost.GetSecret(ctx, key)
+}
+func TestSourceToolRevocationDuringCredentialResolutionPreventsHTTPRequest(t *testing.T) {
+	workflows, host, resolver, calls := sourceFixture(t)
+	resolver.host = &sourceRevokingHost{scopedConnectionHost: host, onSecretRead: func() { host.state["workspace:ws:"+connectionStateKey]["credential_generation"] = float64(8) }}
+	result := workflows.InvokeSourceTool(context.Background(), sourceToolRequest())
+	require.True(t, result.IsError, result.Text)
+	require.Zero(t, *calls)
+}

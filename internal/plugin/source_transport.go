@@ -223,27 +223,31 @@ func (s sourceTokenSource) validate(ctx context.Context) error {
 	return nil
 }
 func (s sourceTokenSource) AccessToken(ctx context.Context) (string, error) {
-	if err := s.validate(ctx); err != nil {
-		return "", err
-	}
-	token, err := s.source.AccessToken(ctx)
-	if err != nil || strings.TrimSpace(token) == "" {
-		return "", fmt.Errorf("bitbucket_api_credential_unavailable")
-	}
-	return token, nil
+	token, _, err := s.AccessTokenCredential(ctx)
+	return token, err
 }
 
 func (s sourceTokenSource) AccessTokenCredential(ctx context.Context) (string, time.Time, error) {
 	if err := s.validate(ctx); err != nil {
 		return "", time.Time{}, err
 	}
+	var token string
+	var err error
+	expiry := time.Now().Add(5 * time.Minute)
 	if source, ok := s.source.(interface {
 		AccessTokenCredential(context.Context) (string, time.Time, error)
 	}); ok {
-		return source.AccessTokenCredential(ctx)
+		token, expiry, err = source.AccessTokenCredential(ctx)
+	} else {
+		token, err = s.source.AccessToken(ctx)
 	}
-	token, err := s.source.AccessToken(ctx)
-	return token, time.Now().Add(5 * time.Minute), err
+	if err != nil || strings.TrimSpace(token) == "" {
+		return "", time.Time{}, fmt.Errorf("bitbucket_api_credential_unavailable")
+	}
+	if err = s.validate(ctx); err != nil {
+		return "", time.Time{}, err
+	}
+	return token, expiry, nil
 }
 
 // sourceActionFailure preserves machine-readable source diagnostics while
