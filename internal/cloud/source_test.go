@@ -18,6 +18,10 @@ func TestSourceTransportRejectsGitIdentityBeforeNetwork(t *testing.T) {
 		calls++
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
 	})}})
+	gitCredential, gitErr := client.ResolveGitCredential(context.Background())
+	require.NoError(t, gitErr)
+	require.Equal(t, "x-bitbucket-api-token-auth", gitCredential.Username)
+	require.Equal(t, "synthetic-token", gitCredential.Secret)
 	_, err := client.SourceOperation(context.Background(), domain.Repository{ID: "repo", ProviderScope: "https://bitbucket.org", Namespace: "team", Slug: "repo"}, "feature/owned", "main", SourceInput{Operation: "pr_lookup"})
 	require.Error(t, err)
 	require.Zero(t, calls)
