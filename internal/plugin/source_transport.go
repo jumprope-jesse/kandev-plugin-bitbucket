@@ -106,7 +106,7 @@ func (r *ConnectionResolver) sourceOperation(ctx context.Context, action plugins
 	if err != nil {
 		return nil, err
 	}
-	settings, found, err := r.Load(ctx, action.WorkspaceID)
+	settings, found, err := r.loadConnectionRecord(ctx, action.WorkspaceID)
 	if errors.Is(err, errRegisteredEmailRequired) {
 		return nil, fmt.Errorf("bitbucket_registered_email_required")
 	}
@@ -207,7 +207,7 @@ type sourceTokenSource struct {
 }
 
 func (s sourceTokenSource) validate(ctx context.Context) error {
-	settings, found, err := s.resolver.Load(ctx, s.action.WorkspaceID)
+	settings, found, err := s.resolver.loadConnectionRecord(ctx, s.action.WorkspaceID)
 	if err != nil || !found || settings.Disconnected || settings.ConnectionBinding != s.settings.ConnectionBinding || settings.CredentialGeneration != s.settings.CredentialGeneration || settings.AuthMethod != s.settings.AuthMethod || settings.AuthIdentity != s.settings.AuthIdentity {
 		return fmt.Errorf("bitbucket_source_binding_revoked")
 	}

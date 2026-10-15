@@ -53,7 +53,7 @@ func TestSourceToolUsesBoundAPIIdentityAndSessionBranch(t *testing.T) {
 	require.Equal(t, float64(42), result.StructuredContent["number"])
 }
 func TestSourceToolFailsClosedBeforeHTTP(t *testing.T) {
-	for _, tc := range []string{"workspace", "task", "session", "repository", "missing context", "duplicate context", "host", "provider", "repo workspace", "detached", "revoked", "generation absent", "email absent", "Git username", "legacy only", "arbitrary URL", "write through read", "admin op"} {
+	for _, tc := range []string{"workspace", "task", "session", "repository", "missing context", "duplicate context", "host", "provider", "repo workspace", "detached", "revoked", "generation absent", "binding absent", "email absent", "Git username", "legacy only", "arbitrary URL", "write through read", "admin op"} {
 		t.Run(tc, func(t *testing.T) {
 			workflows, host, _, calls := sourceFixture(t)
 			request := sourceToolRequest()
@@ -83,6 +83,8 @@ func TestSourceToolFailsClosedBeforeHTTP(t *testing.T) {
 				delete(host.state, "workspace:ws:"+connectionStateKey)
 			case "generation absent":
 				delete(settings, "credential_generation")
+			case "binding absent":
+				delete(settings, "connection_binding")
 			case "email absent":
 				delete(settings, "auth_identity")
 			case "Git username":
@@ -101,6 +103,9 @@ func TestSourceToolFailsClosedBeforeHTTP(t *testing.T) {
 			require.True(t, result.IsError, result.Text)
 			require.Zero(t, *calls)
 			require.NotContains(t, result.Text, "synthetic-token")
+			if tc == "binding absent" {
+				require.NotContains(t, host.state["workspace:ws:"+connectionStateKey], "connection_binding")
+			}
 		})
 	}
 }
