@@ -181,7 +181,7 @@ func (c *Client) sourcePullRequest(ctx context.Context, repository domain.Reposi
 		if err != nil {
 			return nil, err
 		}
-		if !sourcePRMatches(pr, repository, source, destination) {
+		if pr.ID != input.Number || !sourcePRMatches(pr, repository, source, destination) {
 			return nil, fmt.Errorf("bitbucket_pr_source_mismatch")
 		}
 		return sourcePRView(pr, false), nil
@@ -195,11 +195,14 @@ func (c *Client) sourcePullRequest(ctx context.Context, repository domain.Reposi
 	if err := c.sourceJSON(ctx, http.MethodGet, endpoint, nil, &page); err != nil {
 		return nil, err
 	}
-	if page.Next != "" || len(page.Values) > sourcePageLimit {
+	if page.Values == nil || page.Next != "" || len(page.Values) > sourcePageLimit {
 		return nil, fmt.Errorf("bitbucket_pr_lookup_incomplete")
 	}
 	var matches []pullRequestPayload
 	for _, pr := range page.Values {
+		if pr.ID <= 0 || pr.State == "" || pr.Source.Repository == nil || pr.Source.Repository.UUID == "" || pr.Source.Branch.Name == "" || pr.Destination.Branch.Name == "" {
+			return nil, fmt.Errorf("bitbucket_pr_lookup_incomplete")
+		}
 		if sourcePRMatches(pr, repository, source, destination) && pr.State == "OPEN" {
 			matches = append(matches, pr)
 		}

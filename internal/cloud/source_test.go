@@ -235,3 +235,28 @@ func TestSourceTransportGETHasNoRequestPayload(t *testing.T) {
 	_, err := client.SourceOperation(context.Background(), sourceTestRepository(), "feature/owned", "main", SourceInput{Operation: "pr_lookup"})
 	require.NoError(t, err)
 }
+
+func TestSourceTransportRejectsMismatchedPullRequestNumber(t *testing.T) {
+	client := NewClient(ClientOptions{TokenSource: staticTokenSource("synthetic-token"), HTTPClient: &http.Client{Transport: sourceRoundTrip(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":43,"source":{"branch":{"name":"feature/owned"},"repository":{"uuid":"repo"}},"destination":{"branch":{"name":"main"}}}`))}, nil
+	})}})
+	_, err := client.SourceOperation(context.Background(), sourceTestRepository(), "feature/owned", "main", SourceInput{Operation: "pr_get", Number: 42})
+	require.ErrorContains(t, err, "source_mismatch")
+}
+
+func TestSourceTransportDoesNotCreateWhenLookupIdentityIsIncomplete(t *testing.T) {
+	for _, payload := range []string{`{"values":[{"id":42,"state":"OPEN","source":{"branch":{"name":"feature/owned"}},"destination":{"branch":{"name":"main"}}}]}`, `{}`, `{"values":null}`} {
+		t.Run(payload, func(t *testing.T) {
+			writes := 0
+			client := NewClient(ClientOptions{TokenSource: staticTokenSource("synthetic-token"), HTTPClient: &http.Client{Transport: sourceRoundTrip(func(r *http.Request) (*http.Response, error) {
+				if r.Method == http.MethodPost {
+					writes++
+				}
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(payload))}, nil
+			})}})
+			_, err := client.SourceOperation(context.Background(), sourceTestRepository(), "feature/owned", "main", SourceInput{Operation: "pr_create", Title: "change"})
+			require.ErrorContains(t, err, "lookup_incomplete")
+			require.Zero(t, writes)
+		})
+	}
+}
