@@ -128,7 +128,7 @@ func (r *ConnectionResolver) sourceOperation(ctx context.Context, action plugins
 			return nil, fmt.Errorf("bitbucket_api_credential_unavailable")
 		}
 	}
-	guarded := sourceTokenSource{resolver: r, action: action, settings: settings, source: tokens}
+	guarded := sourceTokenSource{resolver: r, action: action, settings: settings, source: tokens, repository: repository, destination: destination}
 	client := cloud.NewClient(cloud.ClientOptions{TokenSource: guarded, HTTPClient: r.httpClient, Authentication: authentication, APIBase: r.cloudAPIBaseOverride})
 	result, err := client.SourceOperation(ctx, repository, branchName(action.HeadBranch), destination, input)
 	if err != nil {
@@ -200,10 +200,12 @@ func (r *ConnectionResolver) sourceRepository(ctx context.Context, action plugin
 }
 
 type sourceTokenSource struct {
-	resolver *ConnectionResolver
-	action   pluginsdk.VerifiedActionContext
-	settings ConnectionSettings
-	source   cloud.TokenSource
+	repository  domain.Repository
+	destination string
+	resolver    *ConnectionResolver
+	action      pluginsdk.VerifiedActionContext
+	settings    ConnectionSettings
+	source      cloud.TokenSource
 }
 
 func (s sourceTokenSource) validate(ctx context.Context) error {
@@ -211,8 +213,14 @@ func (s sourceTokenSource) validate(ctx context.Context) error {
 	if err != nil || !found || settings.Disconnected || settings.ConnectionBinding != s.settings.ConnectionBinding || settings.CredentialGeneration != s.settings.CredentialGeneration || settings.AuthMethod != s.settings.AuthMethod || settings.AuthIdentity != s.settings.AuthIdentity {
 		return fmt.Errorf("bitbucket_source_binding_revoked")
 	}
-	_, _, err = s.resolver.sourceRepository(ctx, s.action)
-	return err
+	repository, destination, err := s.resolver.sourceRepository(ctx, s.action)
+	if err != nil {
+		return err
+	}
+	if repository.ID != s.repository.ID || repository.ProviderScope != s.repository.ProviderScope || repository.Namespace != s.repository.Namespace || repository.Slug != s.repository.Slug || destination != s.destination {
+		return fmt.Errorf("bitbucket_source_scope_denied")
+	}
+	return nil
 }
 func (s sourceTokenSource) AccessToken(ctx context.Context) (string, error) {
 	if err := s.validate(ctx); err != nil {

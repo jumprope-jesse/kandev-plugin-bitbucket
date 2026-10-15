@@ -244,7 +244,8 @@ writes are never retried. Independent external PR writers can still race.
 
 Cloud uses fixed REST v2 routes with no redirects. The existing workspace
 connection binding and credential generation are checked before credential use
-and before returning the result. API-token operations read only that generation's token vault key; no legacy
+and before returning the result. The repository identity and permitted base
+branch must still match the captured operation scope at both boundaries. API-token operations read only that generation's token vault key; no legacy
 token, host-account, Root-account or Git-helper credential fallback occurs.
 The source transport reads connection metadata without creating legacy binding
 epochs or migrating credential records.

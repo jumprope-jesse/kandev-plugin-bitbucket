@@ -169,3 +169,27 @@ func TestSourceActionKeepsIdentityAndRoutingFailuresDistinct(t *testing.T) {
 		})
 	}
 }
+
+func TestSourceToolRejectsRepositoryOrTargetChangeDuringRead(t *testing.T) {
+	for _, change := range []string{"repository", "target"} {
+		t.Run(change, func(t *testing.T) {
+			workflows, host, resolver, calls := sourceFixture(t)
+			original := resolver.httpClient.Transport
+			if original == nil {
+				original = http.DefaultTransport
+			}
+			resolver.httpClient.Transport = sourceTransportFunc(func(r *http.Request) (*http.Response, error) {
+				response, err := original.RoundTrip(r)
+				if change == "repository" {
+					host.repositories.repositories[0].ProviderRepositoryID = "replacement-repo"
+				} else {
+					host.tasks.task.Repositories[0].BaseBranch = "release"
+				}
+				return response, err
+			})
+			result := workflows.InvokeSourceTool(context.Background(), sourceToolRequest())
+			require.True(t, result.IsError, result.Text)
+			require.Equal(t, 1, *calls)
+		})
+	}
+}
