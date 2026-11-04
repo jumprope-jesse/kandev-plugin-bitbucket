@@ -10,7 +10,7 @@ service or an integration built into the Kandev host.
 
 ## Capabilities
 
-- Bitbucket Cloud: API-token or OAuth 2.0 connections.
+- Bitbucket Cloud: API-token, repository/project/workspace access-token, or OAuth 2.0 connections.
 - Bitbucket Data Center: personal, project, repository, or OAuth credentials.
 - Native Kandev repository provider, task-menu actions, and review panel.
 - Native Create PR transport after Kandev pushes the task branch, with exact
@@ -212,3 +212,5 @@ resolves the latest GitHub Release containing the required
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Cloud scoped access tokens use `access_token`: Bearer authentication for the REST API and `x-token-auth` for transient Git credentials. They do not require an account email or an OAuth client registration. Select API token for Atlassian account API tokens instead; that mode keeps email-based Basic authentication. Credentials remain encrypted in the workspace connection, and existing scope checks and generation fencing apply to all modes.

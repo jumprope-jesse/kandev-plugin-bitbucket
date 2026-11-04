@@ -30,6 +30,7 @@ var english = {
   dataCenterUrl: "Data Center URL",
   authentication: "Authentication",
   apiToken: "API token",
+  cloudAccessToken: "Repository, project or workspace access token",
   oauth: "OAuth 2.0",
   personalAccessToken: "Personal access token",
   projectAccessToken: "Project access token",
@@ -1835,6 +1836,7 @@ function ConnectionHealth({
           null,
           product === "cloud" ? [
             h(ui.SelectItem, { value: "api_token" }, t("apiToken")),
+            h(ui.SelectItem, { value: "access_token" }, t("cloudAccessToken")),
             h(ui.SelectItem, { value: "oauth" }, t("oauth"))
           ] : [
             h(
