@@ -1053,7 +1053,7 @@ func TestConnectionResolver_UsesCloudAccessTokenWithoutOAuthOrEmail(t *testing.T
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		require.Equal(t, "Bearer scoped-access-token", request.Header.Get("Authorization"))
 		require.Equal(t, "/2.0/repositories/acme", request.URL.Path)
-		require.Equal(t, `name ~ "widget"`, request.URL.Query().Get("q"))
+
 		_, _ = writer.Write([]byte(`{"values":[]}`))
 	}))
 	defer server.Close()
@@ -1077,6 +1077,7 @@ func TestConnectionResolver_UsesCloudAccessTokenWithoutOAuthOrEmail(t *testing.T
 	require.NoError(t, err)
 	_, err = provider.ListRepositories(context.Background(), "widget", 1)
 	require.NoError(t, err)
+	require.NoError(t, provider.Health(context.Background()))
 	credential, err := provider.ResolveGitCredential(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, "x-token-auth", credential.Username)

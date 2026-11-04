@@ -95,7 +95,7 @@ func cloudAuthentication(settings ConnectionSettings) (cloud.Authentication, err
 	case "oauth":
 		return cloud.Authentication{Mode: cloud.AuthenticationOAuth}, nil
 	case "access_token":
-		return cloud.Authentication{Mode: cloud.AuthenticationAccessToken}, nil
+		return cloud.Authentication{Mode: cloud.AuthenticationAccessToken, Workspace: settings.CloudWorkspace}, nil
 	case "api_token":
 		return cloud.Authentication{Mode: cloud.AuthenticationAPIToken, Email: settings.AuthIdentity}, nil
 	default:

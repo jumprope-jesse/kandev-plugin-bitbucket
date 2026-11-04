@@ -55,8 +55,9 @@ const (
 // Authentication contains non-secret Cloud authentication data.
 // Email is required only for API-token Basic authentication.
 type Authentication struct {
-	Mode  AuthenticationMode
-	Email string
+	Mode      AuthenticationMode
+	Email     string
+	Workspace string
 }
 
 // ClientOptions configures a Cloud client. APIBase exists for hermetic tests.

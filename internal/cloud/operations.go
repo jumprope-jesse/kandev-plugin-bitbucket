@@ -180,6 +180,10 @@ func (c *Client) ApplyReviewAction(ctx context.Context, pullRequest domain.PullR
 	return c.MutatePullRequest(ctx, pullRequest.Repository, pullRequest.Number, action)
 }
 func (c *Client) Health(ctx context.Context) error {
+	if c.authentication.Mode == AuthenticationAccessToken {
+		_, err := c.ListRepositories(ctx, c.authentication.Workspace, 1)
+		return err
+	}
 	endpoint := *c.apiBase
 	endpoint.Path = path.Join(endpoint.Path, "user")
 	var value map[string]any
