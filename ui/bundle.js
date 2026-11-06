@@ -847,21 +847,25 @@ function changeRequestDetailActions(detail, t = translateEnglish) {
   const can = (capability) => detail.capabilities.includes(capability);
   const actions = [];
   if (can("approve")) {
-    actions.push(
-      detail.viewerApproved ? {
-        id: "unapprove",
-        label: t("removeApproval"),
-        pendingLabel: t("removingApproval"),
-        placement: "header",
-        tone: "secondary"
-      } : {
-        id: "approve",
-        label: t("approve"),
-        pendingLabel: t("approving"),
-        placement: "header",
-        tone: "success"
-      }
-    );
+    const approveAction = {
+      id: "approve",
+      label: t("approve"),
+      pendingLabel: t("approving"),
+      placement: "header",
+      tone: "success"
+    };
+    const unapproveAction = {
+      id: "unapprove",
+      label: t("removeApproval"),
+      pendingLabel: t("removingApproval"),
+      placement: "header",
+      tone: "secondary"
+    };
+    if (detail.viewerApproved === void 0) {
+      actions.push(approveAction, unapproveAction);
+    } else {
+      actions.push(detail.viewerApproved ? unapproveAction : approveAction);
+    }
   }
   if (can("merge")) {
     actions.push({
