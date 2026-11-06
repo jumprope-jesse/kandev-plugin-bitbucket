@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0] - 2026-11-06
+
+### Changed
+
+- chore: migrate Bitbucket to public plugin SDK 0.1.0 (#19) (815f86c)
+
+
 ## [0.4.0] - 2026-10-05
 
 ### Changed
