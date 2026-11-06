@@ -106,7 +106,8 @@ func (c *Client) GetReviewProjected(ctx context.Context, repository domain.Repos
 		}
 	}
 	viewerID := ""
-	if projection.Viewer {
+	// Scoped access tokens do not require access to a personal account.
+	if projection.Viewer && c.authentication.Mode != AuthenticationAccessToken {
 		viewerID, err = c.currentUserID(ctx)
 		if err != nil {
 			return domain.Review{}, err
