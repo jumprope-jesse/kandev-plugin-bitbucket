@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0] - 2026-11-07
+
+### Changed
+
+- fix: support Bitbucket Cloud scoped access tokens (#18) (0936729)
+
+
 ## [0.5.0] - 2026-11-06
 
 ### Changed
