@@ -728,6 +728,15 @@ describe("Bitbucket view models", () => {
       ],
     })!;
 
+    expect(base.viewerApproved).toBeUndefined();
+    expect(changeRequestDetailActions(base).map(({ id }) => id)).toEqual([
+      "approve",
+      "unapprove",
+      "merge",
+      "decline",
+      "comment",
+      "reply",
+    ]);
     expect(
       changeRequestDetailActions({ ...base, viewerApproved: false }).map(
         ({ id }) => id,
